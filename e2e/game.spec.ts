@@ -45,6 +45,8 @@ test("title, real 3D canvas, help and keyboard navigation load without errors", 
 });
 
 test("training accepts movement, jump, charged feint, all attacks and pause", async ({ page }) => {
+  // This full input sequence includes four long recovery animations and image readback.
+  test.setTimeout(120_000);
   const errors = await load(page);
   await start(page, "training");
   const before = await page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters[0].x);
@@ -72,7 +74,6 @@ test("training accepts movement, jump, charged feint, all attacks and pause", as
     await page.keyboard.up(key);
     await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].mode === "windup");
   }
-  await page.screenshot({ path: "test-results/training-desktop.png" });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "ひと休み。" })).toBeVisible();
   const paused = await page.evaluate(() => window.__BRAMBLE__!.snapshot().elapsed);
@@ -82,6 +83,7 @@ test("training accepts movement, jump, charged feint, all attacks and pause", as
   await page.locator('[data-action="resume"]').click();
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
   expect(errors).toEqual([]);
+  await page.screenshot({ path: "test-results/training-desktop.png" });
 });
 
 test("rumble shows four different fighters and CPU combat progresses", async ({ page }) => {

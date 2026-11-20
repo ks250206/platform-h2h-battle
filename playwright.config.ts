@@ -12,7 +12,9 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
     headless: true,
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    // Continuous screencast readbacks stall software WebGL on CI. Keep DOM/action
+    // traces and the explicit screenshots below instead of recording every frame.
+    trace: { mode: "retain-on-failure", screenshots: false, snapshots: true },
     launchOptions: {
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
       args: [
