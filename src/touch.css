@@ -166,3 +166,42 @@
     animation: none;
   }
 }
+
+@media (pointer: coarse) and (max-height: 570px) {
+  #interface .fighter-cards {
+    top: 76px;
+    bottom: auto;
+    left: 20px;
+    right: 20px;
+    align-items: flex-start;
+  }
+  #interface .fighter-card {
+    width: 140px;
+    padding: 7px 10px;
+  }
+  #interface .fighter-card-top {
+    margin-bottom: 4px;
+  }
+  #interface .fighter-damage {
+    font-size: 25px;
+  }
+  #interface .fighter-foot,
+  #interface .fighter-species,
+  #interface .fighter-avatar,
+  #interface .stamina-value {
+    display: none;
+  }
+  #interface .stamina-label {
+    margin-top: 6px;
+  }
+  #interface[data-mode="rumble"] .fighter-card {
+    width: 110px;
+  }
+  #interface[data-mode="rumble"] .fighter-main {
+    flex-direction: row;
+    align-items: center;
+  }
+  #interface[data-mode="rumble"] .fighter-damage {
+    margin-left: auto;
+  }
+}

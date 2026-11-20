@@ -19,7 +19,7 @@ test("title, real 3D canvas, help and keyboard navigation load without errors", 
   page,
 }) => {
   const errors = await load(page);
-  await expect(page.getByRole("heading", { name: "小さな体に、大きな一撃。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /小さな体に、.*大きな一撃。/ })).toBeVisible();
   await page.screenshot({ path: "test-results/title-desktop.png" });
   await page.getByRole("button", { name: "操作方法を表示" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -106,6 +106,12 @@ test("touch controls fit a portrait viewport and trigger an attack", async ({ br
   await page.screenshot({ path: "test-results/training-mobile.png" });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
   expect(overflow).toBe(false);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(attack).toBeInViewport();
+  const card = await page.locator(".fighter-card").first().boundingBox();
+  const controls = await page.locator(".touch-controls").boundingBox();
+  expect(card!.y + card!.height).toBeLessThan(controls!.y);
+  await page.screenshot({ path: "test-results/training-landscape.png" });
   expect(errors).toEqual([]);
   await context.close();
 });

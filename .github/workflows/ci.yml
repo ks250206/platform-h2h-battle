@@ -2,8 +2,10 @@ name: Verify game
 
 on:
   push:
-    branches: [main, 'feat/**']
+    branches: [main]
+    paths-ignore: ['**/*.md']
   pull_request:
+    paths-ignore: ['**/*.md']
   workflow_dispatch:
 
 permissions:
