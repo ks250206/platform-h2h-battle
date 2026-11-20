@@ -3,11 +3,12 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
-  timeout: 45_000,
+  // Software WebGL on CI is slower than a GPU; exercise the same production build.
+  timeout: 90_000,
   expect: { timeout: 15_000 },
   workers: 1,
   use: {
-    baseURL: "http://127.0.0.1:5176",
+    baseURL: "http://127.0.0.1:5176/platform-h2h-battle/",
     viewport: { width: 1440, height: 900 },
     headless: true,
     screenshot: "only-on-failure",
@@ -23,9 +24,10 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "pnpm exec vp dev --host 127.0.0.1 --port 5176 --strictPort",
-    url: "http://127.0.0.1:5176",
-    reuseExistingServer: !process.env.CI,
+    command:
+      "pnpm build && pnpm exec vp preview --host 127.0.0.1 --port 5176 --strictPort --base /platform-h2h-battle/",
+    url: "http://127.0.0.1:5176/platform-h2h-battle/",
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 });

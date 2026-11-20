@@ -17,6 +17,19 @@ import type { FighterMesh } from "./meshes";
 const TAU = Math.PI * 2;
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
 
+/** Only affects rendering quality. Simulation, input, UI and test timing stay unchanged. */
+function hasSoftwareRenderer(): boolean {
+  const probe = document.createElement("canvas");
+  const gl = probe.getContext("webgl2");
+  if (!gl) return false;
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  const name = info
+    ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL))
+    : String(gl.getParameter(gl.RENDERER));
+  gl.getExtension("WEBGL_lose_context")?.loseContext();
+  return /swiftshader|llvmpipe|softpipe|software/i.test(name);
+}
+
 interface TileView {
   root: Container3D;
   top: Mesh3D;
@@ -79,18 +92,27 @@ export class ArenaRenderer {
   private height = 720;
   private time = 0;
   private cameraOffset = 0;
+  private cameraHeightOffset = 0;
   private lastElapsed = 0;
   private destroyed = false;
+  private readonly software: boolean;
+  private qualityScale = 1;
+  private baseResolution = 1;
+  private previousRenderAt = 0;
+  private sampleFrameTime = 0;
+  private sampleFrameCount = 0;
 
-  private constructor(app: Application, host: HTMLElement) {
+  private constructor(app: Application, host: HTMLElement, software: boolean) {
     this.app = app;
     this.host = host;
+    this.software = software;
     this.canvas = app.canvas;
     this.canvas.setAttribute("aria-label", "浮島で大剣を振るう動物たちの3Dバトル");
     this.canvas.style.display = "block";
     this.canvas.style.width = "100%";
     this.canvas.style.height = "100%";
     this.canvas.style.touchAction = "none";
+    this.canvas.dataset.renderBackend = software ? "software" : "hardware";
     host.appendChild(this.canvas);
     const sky = document.createElement("canvas");
     sky.width = 2;
@@ -105,19 +127,15 @@ export class ArenaRenderer {
     this.skyTexture = Texture.from(sky);
     this.background = new Sprite(this.skyTexture);
     app.stage.addChild(this.background);
-    const floatTargets =
-      app.renderer.type !== RendererType.WEBGL ||
-      Boolean((app.renderer as WebGLRenderer).context.extensions.colorBufferFloat);
     this.view = new View3D({
       width: host.clientWidth || 1280,
       height: host.clientHeight || 720,
       composite: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 1.5),
-      toneMapping: "aces",
-      exposure: 1.12,
-      environment: floatTargets
-        ? { skyColor: 0xc4e1d9, groundColor: 0x3b5862, intensity: 0.7 }
-        : null,
+      resolution: 1,
+      toneMapping: "none",
+      exposure: 1,
+      // Matte low-poly art needs no HDR cubemap generation or per-pixel IBL reflection.
+      environment: null,
       cull: "cpu",
     });
     this.view.eventMode = "none";
@@ -127,17 +145,15 @@ export class ArenaRenderer {
     this.view.camera.mode = "orthographic";
     this.view.camera.near = 0.1;
     this.view.camera.far = 200;
-    const sun = new DirectionalLight({ color: 0xffe9c0, intensity: 2.8, castShadow: false });
+    const sun = new DirectionalLight({ color: 0xffe9c0, intensity: 2.2, castShadow: false });
     sun.position.set(-10, 22, 14);
     this.view.root.addChild(sun);
     sun.lookAt({ x: 0, y: 0, z: 0 });
-    const rim = new DirectionalLight({ color: 0x8bd6dc, intensity: 1.15, castShadow: false });
+    const rim = new DirectionalLight({ color: 0x8bd6dc, intensity: 0.65, castShadow: false });
     rim.position.set(12, 7, -12);
     this.view.root.addChild(rim);
     rim.lookAt({ x: 0, y: 1, z: 0 });
-    this.view.root.addChild(
-      new AmbientLight({ color: 0xb4cdd1, intensity: floatTargets ? 0.35 : 1.1 }),
-    );
+    this.view.root.addChild(new AmbientLight({ color: 0xb4cdd1, intensity: 0.7 }));
     this.buildArena();
     this.buildScenery();
     this.scene.addChild(this.zone);
@@ -180,15 +196,16 @@ export class ArenaRenderer {
 
   static async create(host: HTMLElement): Promise<ArenaRenderer> {
     const app = new Application();
+    const software = hasSoftwareRenderer();
     try {
       await app.init({
         preference: "webgl",
         width: host.clientWidth || 1280,
         height: host.clientHeight || 720,
         background: 0x132b34,
-        antialias: true,
+        antialias: !software,
         autoDensity: true,
-        resolution: Math.min(window.devicePixelRatio || 1, 1.75),
+        resolution: Math.min(window.devicePixelRatio || 1, software ? 1 : 1.75),
         autoStart: false,
         powerPreference: "high-performance",
       });
@@ -202,7 +219,7 @@ export class ArenaRenderer {
         throw new Error("3D描画に対応したブラウザーで開いてください。");
       }
       app.ticker.stop();
-      return new ArenaRenderer(app, host);
+      return new ArenaRenderer(app, host, software);
     } catch (error) {
       if (app.renderer) app.destroy({ removeView: true }, { children: true });
       throw error;
@@ -221,14 +238,12 @@ export class ArenaRenderer {
         const border = Math.abs(row) === 4 || Math.abs(col) === 4;
         const tint = border
           ? (row + col) % 2
-            ? 0xd6d5b5
-            : 0xc7cfb3
+            ? 0xc9c8a4
+            : 0xbbc5a6
           : (row + col) % 2
-            ? 0xaac8b5
-            : 0xb8cfbb;
-        const top = a.box(root, tint, 0, -0.09, 0, 1.91, 0.18, 1.91);
-        a.box(root, 0x648b82, 0, -0.28, 0, 1.86, 0.23, 1.86);
-        a.box(root, 0x3e6564, 0, -0.51, 0, 1.66, 0.24, 1.66);
+            ? 0x86ad9a
+            : 0xa4c1a8;
+        const top = a.mesh(root, a.tile, a.flatMaterial(tint));
         const outline = a.mesh(root, a.ring, a.material(0xf7b36e, 0.8, 0.2), 0, 0.025, 0, 0.75);
         outline.rotation.x = Math.PI / 2;
         outline.visible = false;
@@ -342,7 +357,7 @@ export class ArenaRenderer {
         state.arena.warningRing &&
         Math.max(Math.abs(tile.x), Math.abs(tile.z)) >= state.arena.halfSize - 2;
       const unsafe = safe.active && Math.hypot(tile.x - safe.x, tile.z - safe.z) > safe.radius;
-      tile.top.material = a.material(
+      tile.top.material = a.flatMaterial(
         warning
           ? Math.sin(this.time * 7) > 0
             ? 0xdca36f
@@ -410,18 +425,29 @@ export class ArenaRenderer {
     const point = this.view.worldToScreen({ x: f.x, y: Math.max(f.y, -1) + 2.65, z: f.z });
     const labelVisible = f.mode !== "dead" && point !== null;
     view.label.visible = labelVisible;
-    view.stamina.visible = labelVisible && state.phase !== "menu";
+    view.stamina.visible = labelVisible;
     if (point) {
       view.label.position.set(point.x, point.y);
       view.label.text = f.human ? "YOU" : `${f.name}  ${Math.round(f.damage)}%`;
       view.label.style.fill = f.outsideTime > 0.5 ? 0xffad93 : f.human ? 0xffe2ac : 0xe8f0ed;
       view.stamina
         .clear()
-        .roundRect(point.x - 19, point.y + 5, 38, 3, 1.5)
-        .fill({ color: 0x183239, alpha: 0.7 });
-      view.stamina
-        .roundRect(point.x - 19, point.y + 5, Math.max(0.1, (38 * f.stamina) / 100), 3, 1.5)
-        .fill({ color: f.stamina < 25 ? 0xf3b167 : 0xbfe3a1 });
+        .roundRect(
+          point.x - view.label.width / 2 - 6,
+          point.y - view.label.height - 4,
+          view.label.width + 12,
+          view.label.height + 8,
+          4,
+        )
+        .fill({ color: 0x173039, alpha: 0.88 });
+      if (state.phase !== "menu")
+        view.stamina
+          .roundRect(point.x - 19, point.y + 5, 38, 3, 1.5)
+          .fill({ color: 0x183239, alpha: 0.7 });
+      if (state.phase !== "menu")
+        view.stamina
+          .roundRect(point.x - 19, point.y + 5, Math.max(0.1, (38 * f.stamina) / 100), 3, 1.5)
+          .fill({ color: f.stamina < 25 ? 0xf3b167 : 0xbfe3a1 });
     }
   }
 
@@ -542,12 +568,15 @@ export class ArenaRenderer {
 
   render(state: GameState, dt: number): void {
     if (this.destroyed) return;
+    this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
     const menuOffset = state.phase === "menu" && this.width >= 900 ? -4.2 : 0;
+    const menuHeightOffset = state.phase === "menu" && this.width < 650 ? -8 : 0;
     this.cameraOffset += (menuOffset - this.cameraOffset) * Math.min(1, dt * 4);
-    this.view.camera.position.set(this.cameraOffset, 24, 22);
-    this.view.camera.lookAt({ x: this.cameraOffset, y: 0, z: 0 });
+    this.cameraHeightOffset += (menuHeightOffset - this.cameraHeightOffset) * Math.min(1, dt * 4);
+    this.view.camera.position.set(this.cameraOffset, 20 + this.cameraHeightOffset, 25);
+    this.view.camera.lookAt({ x: this.cameraOffset, y: this.cameraHeightOffset, z: 0 });
     for (const floater of this.floaters) {
       floater.root.position.set(
         floater.x,
@@ -612,10 +641,40 @@ export class ArenaRenderer {
     this.view.width = this.width;
     this.view.height = this.height;
     const aspect = this.width / this.height;
+    const pixelBudget = this.software ? 360_000 : 2_000_000;
+    this.baseResolution = Math.min(
+      window.devicePixelRatio || 1,
+      1.5,
+      Math.sqrt(pixelBudget / (this.width * this.height)),
+    );
+    this.setSceneResolution();
     // The whole platform remains visible in portrait; desktop preserves room for the HUD.
     this.view.camera.orthographicSize = Math.max(11.3, 9.2 * aspect);
-    this.view.camera.position.set(this.cameraOffset, 24, 22);
-    this.view.camera.lookAt({ x: this.cameraOffset, y: 0, z: 0 });
+    this.view.camera.position.set(this.cameraOffset, 20 + this.cameraHeightOffset, 25);
+    this.view.camera.lookAt({ x: this.cameraOffset, y: this.cameraHeightOffset, z: 0 });
+  }
+
+  private adjustResolution(state: GameState): void {
+    const now = performance.now();
+    const elapsed = this.previousRenderAt ? now - this.previousRenderAt : 0;
+    this.previousRenderAt = now;
+    if (state.phase === "paused" || document.hidden || elapsed <= 0 || elapsed > 2000) return;
+    this.sampleFrameTime += elapsed;
+    this.sampleFrameCount++;
+    if (this.sampleFrameCount < 24) return;
+    const average = this.sampleFrameTime / this.sampleFrameCount;
+    const minimum = this.software ? 0.65 : 0.6;
+    if (average > 45 && this.qualityScale > minimum) {
+      this.qualityScale = Math.max(minimum, this.qualityScale * 0.85);
+      this.setSceneResolution();
+    }
+    this.sampleFrameCount = 0;
+    this.sampleFrameTime = 0;
+  }
+
+  private setSceneResolution(): void {
+    this.view.resolution = this.baseResolution * this.qualityScale;
+    this.canvas.dataset.sceneResolution = this.view.resolution.toFixed(3);
   }
 
   private destroyFighter(view: FighterView): void {

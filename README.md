@@ -2,11 +2,15 @@
 
 **Little paws. Heavy swords. — 小さな体に、大きな一撃。**
 
+## [ブラウザーでプレイ →](https://ks250206.github.io/platform-h2h-battle/)
+
+GitHub Pagesで公開準備中です。上記は公開予定URLです。
+
 ローポリの動物たちが大剣で戦う、見下ろし3Dプラットフォーム対戦アクションです。ため攻撃を見せて回避を誘い、キャンセルから次の手を選ぶ。蓄積した%が大きい相手ほど遠くへ吹っ飛び、最後まで浮島に残ったプレイヤーが勝ちます。
 
 現在は **1人でCPUと戦うオフラインの試作**です。オンライン対戦、複数人のローカル対戦、キャラクター選択は未実装です。
 
-## 起動
+## ローカルで起動
 
 Node.js **26.13.1**、pnpm **12.21.0**を使用します。Nodeの指定は `.node-version`、pnpmの指定は `package.json` にあります。
 
@@ -130,7 +134,7 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-Playwrightは開発サーバーを起動し、タイトル・操作ガイド・入力・CPU戦・モバイル画面を検証します。既存のChromiumを使う場合は `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` に実行ファイルのパスを設定できます。スクリーンショットと失敗時トレースは `test-results/` に生成します。
+Playwrightは本番ビルドをGitHub Pagesと同じサブパスで配信し、タイトル・操作ガイド・入力・CPU戦・モバイル画面を検証します。既存のChromiumを使う場合は `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` に実行ファイルのパスを設定できます。スクリーンショットと失敗時トレースは `test-results/` に生成します。
 
 ### 主なファイル
 
@@ -148,6 +152,12 @@ Playwrightは開発サーバーを起動し、タイトル・操作ガイド・�
 | `tests/` / `e2e/`    | 戦闘ロジック / ブラウザーの検証                  |
 
 ゲーム状態は描画から独立しています。バランス調整はまず `ATTACKS` と `RULES` から行い、具体的な読み合いを稽古と一騎打ちで確認する構成です。
+
+### GitHub Pagesへの公開
+
+公開先は [ks250206.github.io/platform-h2h-battle](https://ks250206.github.io/platform-h2h-battle/) です。[Publish GitHub Pages](.github/workflows/pages.yml) ワークフローが `pnpm build` の成果物 `dist/` を配信します。初回のみ、リポジトリの **Settings → Pages → Source** を **GitHub Actions** に設定してください。以後は `main` の検証ワークフロー成功後に、そのコミットを自動公開します。Actionsから手動実行もできます。ローカルの `pnpm build` だけでは公開されません。
+
+リポジトリのAbout欄に設定する説明・URL・トピックは [公開用メタデータ](docs/repository-metadata.md) にまとめています。
 
 ## ライセンス
 

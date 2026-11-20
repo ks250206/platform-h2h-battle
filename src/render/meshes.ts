@@ -2,12 +2,14 @@ import {
   Container3D,
   CubeGeometry,
   CylinderGeometry,
+  FlatMaterial,
   Geometry3D,
-  Material3D,
+  PhongMaterial,
   Mesh3D,
   SphereGeometry,
   TorusGeometry,
 } from "@pixi/3d";
+import type { BaseMaterial3D } from "@pixi/3d";
 import type { Fighter } from "../game/types";
 
 const TAU = Math.PI * 2;
@@ -38,20 +40,42 @@ export class MeshLibrary {
   readonly disc = makeDisc();
   readonly arc = makeArc();
   readonly blade = makeBlade();
-  private readonly materials = new Map<string, Material3D>();
+  readonly tile = makeTile();
+  private readonly materials = new Map<string, BaseMaterial3D>();
 
-  material(color: number, alpha = 1, glow = 0): Material3D {
-    const key = `${color}/${alpha}/${glow}`;
+  material(color: number, alpha = 1, glow = 0): BaseMaterial3D {
+    const key = `phong/${color}/${alpha}/${glow}`;
     let result = this.materials.get(key);
     if (!result) {
-      result = new Material3D({
+      // Rings, shadows and sparks are authored colors, so lighting them adds no useful detail.
+      result =
+        alpha < 1 || glow > 0
+          ? new FlatMaterial({
+              baseColor: color,
+              doubleSided: true,
+              ...(alpha < 1 ? { alpha, alphaMode: "blend" as const } : {}),
+            })
+          : new PhongMaterial({
+              baseColor: color,
+              specularStrength: 0,
+              flatShading: true,
+              doubleSided: false,
+            });
+      this.materials.set(key, result);
+    }
+    return result;
+  }
+
+  /** Baked face shades keep large matte surfaces cheap and their depth legible. */
+  flatMaterial(color: number, alpha = 1, vertexColors = true): BaseMaterial3D {
+    const key = `flat/${color}/${alpha}/${vertexColors}`;
+    let result = this.materials.get(key);
+    if (!result) {
+      result = new FlatMaterial({
         baseColor: color,
-        roughness: 0.78,
-        metallic: 0,
-        flatShading: true,
+        vertexColors,
+        doubleSided: false,
         ...(alpha < 1 ? { alpha, alphaMode: "blend" as const } : {}),
-        doubleSided: true,
-        ...(glow > 0 ? { emissive: { color, strength: glow } } : {}),
       });
       this.materials.set(key, result);
     }
@@ -61,7 +85,7 @@ export class MeshLibrary {
   mesh(
     parent: Container3D,
     geometry: Geometry3D,
-    material: Material3D,
+    material: BaseMaterial3D,
     x = 0,
     y = 0,
     z = 0,
@@ -114,10 +138,59 @@ export class MeshLibrary {
       this.disc,
       this.arc,
       this.blade,
+      this.tile,
     ])
       geometry.destroy(true);
     this.materials.clear();
   }
+}
+
+/** One beveled slab replaces three overlapping boxes per tile (81 versus 243 meshes). */
+function makeTile(): Geometry3D {
+  const positions: number[] = [],
+    normals: number[] = [],
+    colors: number[] = [],
+    indices: number[] = [];
+  const quad = (points: number[][], normal: number[], shade: number) => {
+    const first = positions.length / 3;
+    for (const p of points) {
+      positions.push(...p);
+      normals.push(...normal);
+      colors.push(shade, shade, shade, 1);
+    }
+    indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
+  };
+  const widths = [0.91, 0.97, 0.94, 0.84, 0.8];
+  const heights = [0, -0.08, -0.36, -0.48, -0.78];
+  const corners = (r: number, y: number) => [
+    [-r, y, -r],
+    [-r, y, r],
+    [r, y, r],
+    [r, y, -r],
+  ];
+  quad(corners(widths[0]!, heights[0]!), [0, 1, 0], 1);
+  for (let layer = 0; layer < widths.length - 1; layer++) {
+    const upper = corners(widths[layer]!, heights[layer]!);
+    const lower = corners(widths[layer + 1]!, heights[layer + 1]!);
+    for (let side = 0; side < 4; side++) {
+      const next = (side + 1) % 4;
+      const normal = [
+        [-1, 0, 0],
+        [0, 0, 1],
+        [1, 0, 0],
+        [0, 0, -1],
+      ][side]!;
+      const shade = [0.84, 0.64, 0.54, 0.46][layer]! * [0.9, 1, 0.83, 0.76][side]!;
+      quad([upper[side]!, lower[side]!, lower[next]!, upper[next]!], normal, shade);
+    }
+  }
+  quad(corners(widths.at(-1)!, heights.at(-1)!).reverse(), [0, -1, 0], 0.35);
+  return new Geometry3D({
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    colors: new Float32Array(colors),
+    indices: new Uint16Array(indices),
+  });
 }
 
 function makeDisc(): Geometry3D {

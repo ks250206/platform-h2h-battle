@@ -2,17 +2,30 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function load(page: Page) {
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/");
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+    console.error("Browser error:", error.message);
+  });
+  const started = Date.now();
+  await page.goto("./");
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
   await expect(page.locator("#arena canvas")).toBeVisible();
+  console.info(`3D ready in ${Date.now() - started}ms`);
+  console.info(
+    await page.locator("#arena canvas").evaluate((canvas) => ({
+      backend: (canvas as HTMLCanvasElement).dataset.renderBackend,
+      resolution: (canvas as HTMLCanvasElement).dataset.sceneResolution,
+    })),
+  );
   return errors;
 }
 
 async function start(page: Page, mode: string) {
+  const started = Date.now();
   await page.locator('[data-mode="' + mode + '"]').click();
   await page.locator('[data-action="start"]').click();
   await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "playing");
+  console.info(`${mode} countdown completed in ${Date.now() - started}ms`);
 }
 
 test("title, real 3D canvas, help and keyboard navigation load without errors", async ({
