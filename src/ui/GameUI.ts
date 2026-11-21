@@ -395,7 +395,7 @@ function matchOptionsMarkup(): string {
               </div>
               <div class="player-rows"></div>
               <p class="join-hint" aria-live="polite"></p>
-              <p class="match-options-note" hidden>稽古は残機が無制限・時間制限なし・ギミックなし。CPU の相手は動きません。</p>
+              <p class="match-options-note" hidden>稽古は残機が無制限・時間制限なし・ギミックなし。稽古設定で相手の行動・記録再生を変更できます。</p>
             </div>
           </section>`;
 }
@@ -1560,7 +1560,14 @@ export class GameUI {
       setText(this.query(".pause-description"), ladderLabel || "次の一撃を、じっくり考えよう。");
       const restart = this.query(".pause-screen [data-action='restart']");
       restart.hidden = Boolean(ladder);
-      setText(restart, state.set ? "セットを最初から" : "はじめから");
+      setText(
+        restart,
+        state.mode === "training"
+          ? "稽古をリセット"
+          : state.set
+            ? "セットを最初から"
+            : "はじめから",
+      );
       setText(
         this.query(".pause-screen [data-action='menu']"),
         ladder ? "ラダーを終了" : "タイトルへ戻る",

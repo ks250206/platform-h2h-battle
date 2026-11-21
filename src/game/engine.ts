@@ -10,6 +10,12 @@ import {
   sanitizeMatchOptions,
   type MatchOptions,
 } from "./match";
+import {
+  TrainingSession,
+  TRAINING_RESPAWN,
+  trainingDamage,
+  type TrainingSettings,
+} from "./training";
 import { CpuController } from "./ai";
 import { emptyPlayerStats, MatchStats } from "./matchStats";
 import { effectiveRules, timeLimitFor, type StageInfo, type TimeRule } from "./rules";
@@ -39,7 +45,7 @@ import {
   ZONE_KO_REASON,
 } from "./safeZone";
 import { ATTACKS, INPUT_BUFFER_TICKS, RULES, UKEMI } from "./tuning";
-import { advanceRoll, cpuTechOpportunity, rollDirection } from "./ukemi";
+import { advanceRoll, armedTech, cpuTechOpportunity, rollDirection } from "./ukemi";
 import {
   angleDelta,
   attackContains,
@@ -177,6 +183,7 @@ function pressedActions(input: PlayerInput): { action: BufferedAction; attack: A
 
 export class BattleEngine {
   state: GameState;
+  training: TrainingSession | null = null;
   private cpu: CpuController;
   private randomState: number;
   private effectId = 0;
@@ -255,6 +262,8 @@ export class BattleEngine {
     if (options) this.options = sanitizeMatchOptions({ ...this.options, ...options });
     if (stage !== undefined) this.stageOverride = stage;
     else if (options?.stage !== undefined) this.stageOverride = null;
+    this.training?.stop();
+    this.training = mode === "training" ? new TrainingSession() : null;
     this.resetGame(mode, createSetMatch(effectiveSetFormat(mode, this.options.setFormat)));
   }
 
@@ -267,7 +276,7 @@ export class BattleEngine {
     return true;
   }
 
-  private resetGame(mode: MatchMode, set: SetMatch | null): void {
+  private resetGame(mode: MatchMode, set: SetMatch | null, keepFrame = false): void {
     this.state = this.createState(mode, this.state.seed, set);
     this.cpu = new CpuController(this.state, () => this.random());
     this.matchStats = new MatchStats(this.state.playerStats);
@@ -275,13 +284,66 @@ export class BattleEngine {
     this.nextBomb = RULES.bombStart;
     this.effectId = 0;
     this.bombId = 0;
-    this.timeRemainder = 0;
     this.inputs.clear();
+    if (!keepFrame) {
+      this.pending.clear();
+      this.timeRemainder = 0;
+    }
+  }
+
+  stopTraining(): void {
+    if (!this.training) return;
+    this.training.stop();
     this.pending.clear();
+    this.inputs.clear();
+    this.clearBuffers();
+  }
+
+  configureTraining(settings: Partial<TrainingSettings>): void {
+    if (!this.training) return;
+    this.stopTraining();
+    Object.assign(this.training.settings, settings);
+    if (this.training.settings.infinite) {
+      for (const f of this.state.fighters) {
+        f.stamina = RULES.maxStamina;
+        f.staminaDelay = 0;
+      }
+    }
+  }
+
+  setTrainingDamage(slot: 0 | 1, value: unknown): void {
+    if (!this.training) return;
+    this.stopTraining();
+    const damage = trainingDamage(value);
+    if (damage === null) return;
+    this.training.damage[slot] = this.state.fighters[slot].damage = damage;
+  }
+
+  resetTraining(): void {
+    if (!this.training) return;
+    this.training.stop();
+    this.resetPracticeField(false);
+  }
+
+  private resetPracticeField(keepFrame: boolean): void {
+    this.resetGame("training", null, keepFrame);
+    this.state.fighters.forEach((f, i) => {
+      f.damage = this.training!.damage[i];
+    });
+    this.state.countdown = 0;
+    this.state.phase = "playing";
+  }
+
+  beginTraining(action: "play" | "record"): boolean {
+    if (!this.training || (action === "play" && !this.training.ticks)) return false;
+    this.resetTraining();
+    this.training[action]();
+    return true;
   }
 
   pause(): void {
     if (this.state.phase === "playing" || this.state.phase === "countdown") {
+      this.stopTraining();
       this.pending.clear();
       this.clearBuffers();
       this.state.pausedFrom = this.state.phase;
@@ -305,6 +367,7 @@ export class BattleEngine {
     const mode: MatchMode = typeof modeOrOptions === "string" ? modeOrOptions : "duel";
     const options = typeof modeOrOptions === "string" ? maybeOptions : modeOrOptions;
     this.start(mode, options);
+    this.training = null;
     this.state.phase = "menu";
     this.state.set = null;
     if (STAGES[this.state.arena.stageId].solid) {
@@ -356,7 +419,22 @@ export class BattleEngine {
     }
     this.timeRemainder += Math.min(dt, 0.1);
     while (this.timeRemainder >= RULES.fixedStep - 1e-8) {
+      const session = this.training;
+      if (session?.transport === "playing" && session.cursor === session.ticks) {
+        // Rebuild both fighters and the RNG at the loop seam, preserving this frame’s
+        // remaining fixed ticks and the live player input for this tick.
+        this.resetPracticeField(true);
+        session.play();
+      }
       this.tick(RULES.fixedStep, this.pending);
+      if (
+        session?.transport === "playing" &&
+        session.cursor === session.ticks &&
+        !session.settings.loop
+      ) {
+        session.stop();
+        this.state.fighters[1].inputBuffer = null;
+      }
       for (const f of humans) {
         this.pending.set(f.id, {
           ...(given[f.id] ?? emptyInput()),
@@ -379,7 +457,8 @@ export class BattleEngine {
       if (state.countdown <= 0) {
         state.phase = "playing";
         // The practice partner stands still unless a second player has taken it.
-        const stillPartner = state.fighters.some((f) => !f.human);
+        const stillPartner =
+          this.training?.settings.behavior === "still" && state.fighters.some((f) => !f.human);
         this.announce(
           state.mode !== "training"
             ? "FIGHT"
@@ -397,13 +476,22 @@ export class BattleEngine {
     this.updateArena(dt);
     this.updateRespawns(dt);
     this.inputs.clear();
+    const replay = this.training?.sample(playerInputs.get(0) ?? emptyInput());
     for (const f of state.fighters) {
       if ((f.mode as Fighter["mode"]) === "dead") continue;
-      this.inputs.set(f.id, f.human ? (playerInputs.get(f.id) ?? emptyInput()) : this.ai(f, dt));
+      this.inputs.set(
+        f.id,
+        f.id === 1 && replay
+          ? replay
+          : f.human
+            ? (playerInputs.get(f.id) ?? emptyInput())
+            : this.ai(f, dt),
+      );
     }
     for (const f of state.fighters) {
       if ((f.mode as Fighter["mode"]) === "dead") continue;
       const input = this.inputs.get(f.id)!;
+      const useBuffer = f.human || (f.id === 1 && !!replay);
       f.diInput = { ...input.move };
       this.updateZone(f, dt);
       if ((f.mode as Fighter["mode"]) === "dead") continue;
@@ -413,7 +501,7 @@ export class BattleEngine {
       if (f.hitstop > 0) {
         f.hitstop = Math.max(0, f.hitstop - dt);
         if (f.hitstop > 0) {
-          if (f.human) this.holdPress(f, input);
+          if (useBuffer) this.holdPress(f, input);
           continue;
         }
         this.applyLaunch(f);
@@ -424,11 +512,15 @@ export class BattleEngine {
       }
       this.updateMode(f, input, dt);
       if (f.mode === "dead") continue;
-      if (!f.human && state.mode !== "training" && cpuTechOpportunity(state, f, dt)) {
+      if (
+        !useBuffer &&
+        (!this.training || this.training.settings.behavior === "cpu") &&
+        cpuTechOpportunity(state, f, dt)
+      ) {
         input.step = this.random() < UKEMI.cpuChance[f.aiLevel];
         if (input.step) this.holdPress(f, input);
       }
-      this.handleInput(f, f.human ? this.bufferedInput(f, input) : input, dt);
+      this.handleInput(f, useBuffer ? this.bufferedInput(f, input) : input, dt);
       this.physics(f, input, dt);
     }
     this.separateBodies();
@@ -445,6 +537,7 @@ export class BattleEngine {
   }
 
   private spend(f: Fighter, cost: number): boolean {
+    if (this.training?.settings.infinite) return true;
     if (f.stamina + 1e-6 < cost) {
       // A shared centre message cannot say whose stamina ran out, so only a lone human gets it.
       if (f.human && this.state.fighters.filter((o) => o.human).length === 1)
@@ -489,14 +582,6 @@ export class BattleEngine {
     }
   }
 
-  private hasArmedTech(f: Fighter): boolean {
-    return (
-      (f.tumbling || f.pendingLaunch !== null) &&
-      f.inputBuffer?.pressedIn === "hitstun" &&
-      f.inputBuffer.action === "step"
-    );
-  }
-
   /**
    * One fixed tick older. Launched step presses use the tech window; other presses use six ticks. A jump or
    * grab freed by a landing gets one tick more (`landingGrace`, see `graceLanding`).
@@ -504,7 +589,7 @@ export class BattleEngine {
   private ageBuffer(f: Fighter): void {
     if (!f.inputBuffer) return;
     f.inputBuffer.age++;
-    const limit = this.hasArmedTech(f)
+    const limit = armedTech(f)
       ? UKEMI.windowTicks
       : INPUT_BUFFER_TICKS + (f.inputBuffer.landingGrace ? 1 : 0);
     if (f.inputBuffer.age > limit) f.inputBuffer = null;
@@ -534,7 +619,7 @@ export class BattleEngine {
   /** Only a fresh step can replace an armed tech during hitstun. */
   private holdPress(f: Fighter, input: PlayerInput): void {
     const [press] = pressedActions(input);
-    if (!press || (press.action !== "step" && this.hasArmedTech(f))) return;
+    if (!press || (press.action !== "step" && armedTech(f))) return;
     f.inputBuffer = { ...press, age: 0, pressedIn: f.mode, landingGrace: false };
   }
 
@@ -829,7 +914,7 @@ export class BattleEngine {
       this.effect("land", f, 0xbed9cc, 0.3);
       return;
     }
-    const tech = this.hasArmedTech(f);
+    const tech = armedTech(f);
     this.interruptBuffer(f);
     f.vx = f.vz = 0;
     if (tech) {
@@ -1302,8 +1387,9 @@ export class BattleEngine {
     if (state.mode === "training") {
       for (let i = 0; i < state.fighters.length; i++) {
         const f = state.fighters[i];
-        if (f.mode === "dead" && state.elapsed - (f.eliminatedAt ?? 0) > 1.5) {
+        if (f.mode === "dead" && state.elapsed - (f.eliminatedAt ?? 0) + 1e-8 >= TRAINING_RESPAWN) {
           state.fighters[i] = makeFighter(f.id, 2, this.options);
+          state.fighters[i].damage = this.training?.damage[i] ?? 0;
         }
       }
       return;
@@ -1349,6 +1435,7 @@ export class BattleEngine {
   }
 
   private ai(f: Fighter, dt: number): PlayerInput {
+    if (this.training) return this.training.dummy(this.state, () => this.cpu.decide(f, dt));
     return this.cpu.decide(f, dt);
   }
 

@@ -46,29 +46,38 @@ export function isInvulnerable(f: Fighter, ahead = 0): boolean {
   return stepTime >= RULES.stepInvulStart && stepTime < RULES.stepInvulEnd;
 }
 
+/** Target-origin volume, in attack-local space. Horizontal bounds already include
+ * fighterRadius; vertical bounds compare the fighters' actual foot heights. */
+export function attackVolume(a: Pick<Fighter, "attack" | "mode" | "grounded">) {
+  if (!a.attack || a.mode !== "active") return null;
+  const definition = ATTACKS[a.attack];
+  const sweep = a.attack === "sweep";
+  const rising = a.attack === "rising";
+  const down = a.attack === "overhead" && !a.grounded;
+  return {
+    minY: rising ? -1.5 : down ? -2.5 : -1.35,
+    maxY: rising ? 3.2 : down ? 1.1 : 1.35,
+    minAhead: sweep ? -0.12 : 0.1 - RULES.fighterRadius,
+    maxAhead: definition.reach + RULES.fighterRadius,
+    halfWidth: definition.width + RULES.fighterRadius,
+    sweepCos: sweep ? Math.cos(Math.PI * 0.44) : null,
+  };
+}
+
 export function attackContains(a: Fighter, b: Pick<Fighter, "mode" | "x" | "y" | "z">): boolean {
-  if (!a.attack || a.mode !== "active" || b.mode === "dead") return false;
-  const attack = ATTACKS[a.attack];
+  const v = attackVolume(a);
+  if (!v || b.mode === "dead") return false;
   const dx = b.x - a.x,
     dz = b.z - a.z;
   const f = forward(a);
   const ahead = dx * f.x + dz * f.z;
-  const side = Math.abs(dx * f.z - dz * f.x);
   const vertical = b.y - a.y;
-  const r = RULES.fighterRadius;
-  if (a.attack === "rising") {
-    if (vertical < -1.5 || vertical > 3.2) return false;
-  } else if (a.attack === "overhead" && !a.grounded) {
-    if (vertical < -2.5 || vertical > 1.1) return false;
-  } else if (Math.abs(vertical) > 1.35) return false;
-  if (a.attack === "sweep") {
-    return (
-      ahead >= -0.12 &&
-      Math.hypot(dx, dz) <= attack.reach + r &&
-      ahead >= Math.cos(Math.PI * 0.44) * Math.hypot(dx, dz) - r
-    );
+  if (vertical < v.minY || vertical > v.maxY || ahead < v.minAhead) return false;
+  if (v.sweepCos !== null) {
+    const distance = Math.hypot(dx, dz);
+    return distance <= v.maxAhead && ahead >= v.sweepCos * distance - RULES.fighterRadius;
   }
-  return ahead >= 0.1 - r && ahead <= attack.reach + r && side <= attack.width + r;
+  return ahead <= v.maxAhead && Math.abs(dx * f.z - dz * f.x) <= v.halfWidth;
 }
 
 function pointSegmentDistance(p: Vec2, a: Vec2, b: Vec2): number {

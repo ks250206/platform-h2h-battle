@@ -28,3 +28,11 @@ export function advanceRoll(state: GameState, f: Fighter, dt: number): void {
     f.z = to.z;
   }
 }
+
+export function armedTech(f: Fighter): boolean {
+  return (
+    (f.tumbling || f.pendingLaunch !== null) &&
+    f.inputBuffer?.pressedIn === "hitstun" &&
+    f.inputBuffer.action === "step"
+  );
+}

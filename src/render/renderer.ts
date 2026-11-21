@@ -11,6 +11,7 @@ import {
 } from "@pixi/3d";
 import type { Pass3D, ShadowQuality } from "@pixi/3d";
 import { FxaaEffect, SsaoEffect } from "@pixi/3d/extras";
+import { drawTrainingDebug } from "./trainingDebug";
 import { Application, Container, Graphics, RendererType, Sprite, Text, Texture } from "pixi.js";
 import type { WebGLRenderer } from "pixi.js";
 import { canStandAt } from "../game/combat";
@@ -205,6 +206,8 @@ export class ArenaRenderer {
   private readonly view: View3D;
   private readonly scene = new Container3D();
   private readonly scenery = new Container3D();
+  private previousTrainingState: GameState | null = null;
+  private readonly trainingDebug = new Graphics();
   private readonly labels = new Container();
   private readonly assets = new MeshLibrary();
   private readonly stageShapes = new StageShapes();
@@ -326,7 +329,7 @@ export class ArenaRenderer {
     });
     this.view.eventMode = "none";
     this.labels.eventMode = "none";
-    app.stage.addChild(this.view, this.labels);
+    app.stage.addChild(this.view, this.trainingDebug, this.labels);
     this.view.root.addChild(this.scenery, this.scene);
     this.view.camera.mode = "perspective";
     this.view.camera.fov = CAMERA_FOV;
@@ -908,8 +911,20 @@ export class ArenaRenderer {
     }
   }
 
-  render(state: GameState, dt: number): void {
+  render(state: GameState, dt: number, showHitboxes = false): void {
     if (this.destroyed) return;
+    if (this.previousTrainingState && this.previousTrainingState !== state) {
+      for (const view of this.fighters.values()) {
+        view.motion = new FighterMotion();
+        view.trail.clear();
+      }
+      for (const impact of this.impacts) impact.root.destroy({ children: true });
+      this.impacts.length = 0;
+      for (const effect of this.effects.values()) effect.root.destroy({ children: true });
+      this.effects.clear();
+      this.shake = 0;
+    }
+    this.previousTrainingState = state.mode === "training" && state.phase !== "menu" ? state : null;
     this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
@@ -972,6 +987,10 @@ export class ArenaRenderer {
     }
     for (const effect of state.effects) this.updateEffect(effect);
     this.updateImpacts(visualDelta);
+    this.trainingDebug.visible =
+      state.mode === "training" && state.phase !== "menu" && showHitboxes;
+    if (this.trainingDebug.visible)
+      drawTrainingDebug(this.trainingDebug, state.fighters, (p) => this.view.worldToScreen(p));
     this.app.render();
   }
 

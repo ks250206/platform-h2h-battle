@@ -9,6 +9,7 @@ import { humanSlots, padIndex, type MatchOptions } from "./game/match";
 import { LadderSession } from "./game/ladder";
 import { PadHub } from "./game/pads";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
+import { TrainingUI } from "./ui/trainingUi";
 import { GameUI } from "./ui/GameUI";
 import { PadMenu } from "./ui/padMenu";
 import { emptyInput } from "./game/types";
@@ -131,6 +132,7 @@ const updateUI = () => {
     ladderAttempt = null;
   }
   ui.update(state, ladder?.progress);
+  trainingUI.update();
 };
 const playLadderAttempt = () => {
   const attempt = ladder?.startAttempt();
@@ -165,7 +167,10 @@ const ui = new GameUI(overlay, {
   onRestart: () => {
     if (ladder) return;
     sound.unlock();
-    if (engine.state.set) {
+    if (engine.training) {
+      engine.resetTraining();
+      prepareGame();
+    } else if (engine.state.set) {
       engine.start(engine.state.mode);
       prepareGame();
     } else startMatch(selectedMode, matchOptions);
@@ -202,6 +207,7 @@ const ui = new GameUI(overlay, {
     supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
   },
 });
+const trainingUI = new TrainingUI(overlay, engine, () => input?.reset());
 updateUI();
 pads.subscribe((connected) => {
   ui.setPads(connected);
@@ -220,6 +226,7 @@ pads.subscribe((connected) => {
 });
 const padMenu = new PadMenu(overlay, pads, {
   phase: () => engine.state.phase,
+  openTraining: () => trainingUI.open(),
   titleButton: (index, button) => ui.padTitleButton(index, button),
 });
 
@@ -261,7 +268,7 @@ async function boot() {
       const control = input.sample(engine.state);
       if (!manualStepping) {
         engine.update(dt, control);
-        renderer.render(engine.state, dt);
+        renderer.render(engine.state, dt, engine.training?.settings.hitboxes);
       }
       sound.update(engine.state);
       if (now - lastUI > 33) {
@@ -294,7 +301,7 @@ async function boot() {
             },
             step: (dt: number, control: Partial<PlayerInput> = {}) => {
               engine.update(dt, { ...emptyInput(), ...control });
-              renderer!.render(engine.state, dt);
+              renderer!.render(engine.state, dt, engine.training?.settings.hitboxes);
             },
           }
         : inspect,
@@ -328,6 +335,7 @@ window.addEventListener(
     cancelAnimationFrame(animation);
     input?.destroy();
     padMenu.destroy();
+    trainingUI.destroy();
     ui.destroy();
     sound.destroy();
     renderer?.destroy();

@@ -12,6 +12,8 @@ import { cycleTarget, resolveTarget } from "./lockOn";
 import { humanSlots, padIndex, type ControlDevice } from "./match";
 import {
   anyPressed,
+  isDown,
+  readStick,
   freshPadMemory,
   readPad,
   rumbleFor,
@@ -107,6 +109,41 @@ function devicesOf(state: GameState): Map<number, ControlDevice> {
   );
 }
 
+/** Controls down at a training/menu handoff stay released until the physical button
+ * or stick returns to neutral. Other controls remain available immediately. */
+export class TrainingPadRelease {
+  private readonly buttons: Set<number>;
+  private readonly sticks: Set<number>;
+
+  constructor(pad: PadSnapshot) {
+    this.buttons = new Set(pad.buttons.flatMap((_, i) => (isDown(pad, i) ? [i] : [])));
+    this.sticks = new Set(
+      [0, 2].filter((i) => {
+        const stick = readStick(pad.axes, i);
+        return stick.x !== 0 || stick.y !== 0;
+      }),
+    );
+  }
+
+  filter(pad: PadSnapshot): PadSnapshot {
+    const buttons = pad.buttons.map((button, i) => {
+      if (!isDown(pad, i)) this.buttons.delete(i);
+      return this.buttons.has(i) ? { pressed: false, value: 0 } : button;
+    });
+    const axes = [...pad.axes];
+    for (const i of this.sticks) {
+      const stick = readStick(axes, i);
+      if (!stick.x && !stick.y) this.sticks.delete(i);
+      else axes[i] = axes[i + 1] = 0;
+    }
+    return { axes, buttons };
+  }
+
+  get ready() {
+    return !this.buttons.size && !this.sticks.size;
+  }
+}
+
 /**
  * Every human's input for a frame: the keyboard with the mouse (or the touch controls) for at
  * most one player, and one gamepad each for the others. Each player keeps their own lock-on.
@@ -128,6 +165,7 @@ export class BattleInput {
   private readonly abort = new AbortController();
   // ---- the pads
   private padPrevious: (PadSnapshot | null)[] = [];
+  private trainingPadRelease = new Map<number, TrainingPadRelease>();
   private padMemory: PadMemory[] = [];
   /** Pads seen connected during the running match, so a disconnect is reported once. */
   private padsSeen = new Set<number>();
@@ -427,7 +465,14 @@ export class BattleInput {
     const active =
       (state.phase === "playing" || state.phase === "countdown") &&
       !document.querySelector("dialog[open]");
-    if (active && !this.active) this.takeOverPads();
+    if (active && !this.active) {
+      this.takeOverPads();
+      this.trainingPadRelease.clear();
+      if (state.mode === "training")
+        this.pads.current.forEach((pad, index) => {
+          if (pad) this.trainingPadRelease.set(index, new TrainingPadRelease(pad));
+        });
+    }
     this.active = active;
     if (!active) {
       this.clearKeyboardPresses();
@@ -435,8 +480,14 @@ export class BattleInput {
     }
     // Every connected pad is read once a frame, whether it plays or not.
     const commands = new Map<number, PadCommands>();
-    this.pads.current.forEach((current, index) => {
-      if (!current) return;
+    this.pads.current.forEach((raw, index) => {
+      if (!raw) {
+        this.trainingPadRelease.delete(index);
+        return;
+      }
+      const release = this.trainingPadRelease.get(index);
+      const current = release ? release.filter(raw) : raw;
+      if (release?.ready) this.trainingPadRelease.delete(index);
       const previous = this.padPrevious[index] ?? null;
       const result = readPad(current, previous, this.padMemory[index] ?? freshPadMemory());
       if (anyPressed(current, previous)) this.hooks.onGesture();
@@ -520,6 +571,7 @@ export class BattleInput {
     this.previousPhase = state.phase;
   }
   reset(): void {
+    this.active = false;
     this.held.clear();
     this.clearKeyboardPresses();
     this.mouse = null;

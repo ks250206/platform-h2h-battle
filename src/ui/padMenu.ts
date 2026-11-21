@@ -19,6 +19,7 @@ export type TitleButton = "a" | "start" | "b" | "y";
 
 export interface PadMenuHooks {
   phase: () => Phase;
+  openTraining?: () => void;
   /**
    * The title's shortcuts, asked before a press is used to navigate: A or Start joins, B leaves,
    * Y opens the look picker of that pad's fighter. True when the press did that and should do
@@ -168,6 +169,8 @@ export class PadMenu {
       this.repeat = current.map((pad) => heldNav(menuDirection(pad)));
     }
     if (!layer) {
+      if (current.some((pad, i) => justPressed(pad, this.previous[i], BUTTON.UP)))
+        this.hooks.openTraining?.();
       this.previous = current.slice();
       return;
     }

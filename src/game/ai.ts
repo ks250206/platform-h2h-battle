@@ -120,7 +120,6 @@ export class CpuController {
 
   private choose(f: Fighter, dt: number): PlayerInput {
     const input = emptyInput();
-    if (this.state.mode === "training") return input;
     const level = AI_LEVELS[f.aiLevel];
     const target = selectTarget(f, this.state.fighters);
     // A stage with pits or bridges (`gaps`) is walked along its floor (navigation.ts) and every

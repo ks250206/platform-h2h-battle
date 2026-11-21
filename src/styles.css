@@ -1915,7 +1915,7 @@ kbd {
   margin-top: 23px;
 }
 /* Graphics settings: the help dialog's language, docked to the side so the arena stays in view. */
-.settings-dialog {
+:is(.settings-dialog, .training-dialog) {
   width: 400px;
   max-width: calc(100vw - 32px);
   max-height: calc(100dvh - 48px);
@@ -1930,7 +1930,7 @@ kbd {
   overscroll-behavior: contain;
   scrollbar-color: var(--line-strong) transparent;
 }
-.settings-dialog::backdrop {
+:is(.settings-dialog, .training-dialog)::backdrop {
   background: color-mix(in srgb, var(--ink) 12%, transparent);
 }
 [data-settings-open] .pause-screen {
@@ -2884,7 +2884,7 @@ kbd {
   .help-callout strong {
     font-size: 11px;
   }
-  .settings-dialog {
+  :is(.settings-dialog, .training-dialog) {
     margin: auto;
     padding: 20px 20px 18px;
     max-height: calc(100dvh - 30px);
@@ -3092,7 +3092,7 @@ kbd {
   .modal-panel h2 {
     margin-top: 12px;
   }
-  .settings-dialog {
+  :is(.settings-dialog, .training-dialog) {
     max-height: calc(100dvh - 24px);
     padding-top: 16px;
   }
@@ -3154,4 +3154,96 @@ kbd {
       0 0 0 3px color-mix(in srgb, var(--fighter-color) 35%, transparent),
       var(--shadow);
   }
+}
+
+.training-hud {
+  pointer-events: auto;
+  position: absolute;
+  top: max(100px, 15%);
+  left: max(12px, 3%);
+  padding: 5px 8px;
+  max-width: min(380px, 94vw);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.training-hud button,
+.training-dialog button {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.training-state pre {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  font: inherit;
+}
+.training-dialog {
+  pointer-events: auto;
+  overscroll-behavior: contain;
+}
+.training-dialog fieldset {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+.training-dialog legend {
+  font-size: 13px;
+  font-weight: bold;
+}
+.training-dialog label {
+  display: block;
+  margin: 4px 0;
+  font-size: 13px;
+}
+.training-dialog p,
+.training-dialog small {
+  font-size: 12px;
+  line-height: 1.55;
+}
+.training-dialog input[type="number"] {
+  width: 5em;
+  padding: 4px;
+  border: 1px solid var(--line);
+}
+.training-damage,
+.training-footer {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.training-footer {
+  justify-content: space-between;
+}
+@media (max-width: 700px) {
+  .training-hud {
+    top: 160px;
+    left: 8px;
+    font-size: 10px;
+  }
+  .training-state {
+    max-height: 26dvh;
+    overflow: auto;
+  }
+}
+#interface:has(.training-dialog[open]) .pause-screen {
+  visibility: hidden;
+}
+
+@media (max-height: 570px) {
+  .training-hud {
+    top: 73px;
+  }
+  .training-state {
+    max-height: 34dvh;
+    overflow: auto;
+  }
+}
+[data-mode="training"] .pause-panel {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
