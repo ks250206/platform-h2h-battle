@@ -60,8 +60,8 @@ function hudBand(
   touch: boolean,
   portrait: boolean,
 ): { top: number; bottom: number } {
-  // Short touch screens move the fighter cards to the top; the touch controls hug the corners.
-  if (touch && height <= 570) return { top: 150, bottom: 70 };
+  // Short landscape touch screens move the fighter cards to the top; touch controls hug corners.
+  if (touch && !portrait && height <= 570) return { top: 150, bottom: 70 };
   // Otherwise cards sit at the bottom, above the touch controls on touch screens. In portrait the
   // cards are the slim two-row kind (styles.css), so the controls and cards need less.
   const bottom = touch

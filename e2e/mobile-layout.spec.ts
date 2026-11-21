@@ -113,7 +113,7 @@ for (const size of PHONES) {
     await expect(done).toBeInViewport({ ratio: 1 });
     await expect(panel).toHaveAttribute("role", "dialog");
     await expect(panel).toHaveAttribute("aria-modal", "true");
-    // Keyboard modal check: Shift+Tab stays inside the sheet and KeyF does not toggle fullscreen.
+    // Keyboard modal check: Shift+Tab stays inside the sheet, KeyF and KeyV are suppressed.
     await done.focus();
     await page.keyboard.press("Shift+Tab");
     expect(
@@ -123,6 +123,9 @@ for (const size of PHONES) {
     ).toBe(true);
     await page.keyboard.press("f");
     expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+    const cameraBefore = await page.locator(".camera-button").getAttribute("aria-pressed");
+    await page.keyboard.press("v");
+    expect(await page.locator(".camera-button").getAttribute("aria-pressed")).toBe(cameraBefore);
     await panel.locator('[data-stocks="2"]').tap();
     await panel.locator('[data-gimmick="wind"]').tap();
     await expect
@@ -292,7 +295,7 @@ test("portrait rumble keeps knockdown visible and keeps lower outside warnings i
   await context.close();
 });
 
-test("portrait tablet gamepad-only HUD keeps fighter cards clear of the pad legend", async ({
+test("portrait tablet gamepad-only HUD keeps fighter cards clear of the pad legend and top actions clear of Rumble heading", async ({
   browser,
 }) => {
   const context = await browser.newContext({
@@ -321,17 +324,78 @@ test("portrait tablet gamepad-only HUD keeps fighter cards clear of the pad lege
   });
   await page.goto("./");
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await page.locator('button[data-mode="rumble"]').tap();
   await page.locator('.player-row[data-slot="0"] .player-device').selectOption("pad1");
   await page.locator('[data-action="start"]').tap();
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const heading = await box(page.locator(".match-heading"));
+  const actions = await box(page.locator(".top-actions"));
+  expect(heading.x + heading.width).toBeLessThanOrEqual(actions.x);
+
   const legend = page.locator(".pad-legend");
   await expect(legend).toBeVisible();
   const legendBox = await box(legend);
   const cards = page.locator(".fighter-card");
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 4; i++) {
     const card = await box(cards.nth(i));
     expect(card.y + card.height).toBeLessThanOrEqual(legendBox.y);
   }
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
+test("compact 320x568 in-match Rumble and Training keep slim cards clear of heading and touch controls", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await phone(browser, 320, 568);
+  // Rumble at 320x568: 2x2 slim cards sit below match-heading and above touch controls.
+  await page.locator('button[data-mode="rumble"]').tap();
+  await page.locator('[data-action="start"]').tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const rumbleHeading = await box(page.locator(".match-heading"));
+  const rumbleControls = await box(page.locator(".touch-controls"));
+  const rumbleCards = page.locator(".fighter-card");
+  await expect(rumbleCards).toHaveCount(4);
+  for (let i = 0; i < 4; i++) {
+    const card = await box(rumbleCards.nth(i));
+    expect(card.y).toBeGreaterThanOrEqual(rumbleHeading.y + rumbleHeading.height);
+    expect(card.y + card.height).toBeLessThanOrEqual(rumbleControls.y);
+  }
+
+  // Return to title and check Training at 320x568: air tokens stay visible and cards clear training pills.
+  await page.locator(".pause-button").tap();
+  const menuButton = page.locator('.pause-panel [data-action="menu"]');
+  await menuButton.scrollIntoViewIfNeeded();
+  await menuButton.tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "menu");
+  await page.locator('button[data-mode="training"]').tap();
+  await page.locator('[data-action="start"]').tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
+  const trainHeading = await box(page.locator(".match-heading"));
+  const trainHud = await box(page.locator(".training-hud"));
+  const trainControls = await box(page.locator(".touch-controls"));
+  expect(trainHud.y).toBeGreaterThanOrEqual(trainHeading.y + trainHeading.height);
+  const trainCards = page.locator(".fighter-card");
+  await expect(trainCards).toHaveCount(2);
+  for (let i = 0; i < 2; i++) {
+    const card = await box(trainCards.nth(i));
+    expect(card.y).toBeGreaterThanOrEqual(trainHud.y + trainHud.height);
+    expect(card.y + card.height).toBeLessThanOrEqual(trainControls.y);
+    await expect(trainCards.nth(i).locator(".air-tokens")).toBeVisible();
+  }
+  await noHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
+test("landscape 844x390 Rumble keeps top-actions clear of match-heading", async ({ browser }) => {
+  const { context, page, errors } = await phone(browser, 844, 390);
+  await page.locator('button[data-mode="rumble"]').tap();
+  await page.locator('[data-action="start"]').tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const heading = await box(page.locator(".match-heading"));
+  const actions = await box(page.locator(".top-actions"));
+  expect(heading.x + heading.width).toBeLessThanOrEqual(actions.x);
   expect(errors).toEqual([]);
   await context.close();
 });

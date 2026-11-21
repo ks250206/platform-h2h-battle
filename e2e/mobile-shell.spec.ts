@@ -115,46 +115,50 @@ test("mobile fullscreen works in Chromium and the installed-app assets resolve u
   expect(errors).toEqual([]);
 });
 
-test("instructions stay zoomable, zoom recovery unlocks pinch-out to 1x, and touch controls work afterward", async ({
+test("instructions stay zoomable, reset and pinch-out recovery both return to 1x, and touch controls work afterward", async ({
   page,
   context,
 }) => {
   const errors = await load(page);
   const cdp = await context.newCDPSession(page);
+  const notice = page.locator(".zoom-notice");
 
-  // Start Training, open Help from Pause, and magnify instructional text via a real pinch gesture.
+  const zoomViaHelp = async () => {
+    await page.locator(".pause-button").tap();
+    await page.locator('.pause-panel [data-action="help"]').tap();
+    await expect(page.locator("dialog.help-dialog")).toBeVisible();
+    await cdp.send("Input.synthesizePinchGesture", {
+      x: 195,
+      y: 400,
+      scaleFactor: 1.45,
+      relativeSpeed: 800,
+      gestureSourceType: "touch",
+    });
+    await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 1)).toBeGreaterThan(1.2);
+    await expect(page.locator("html")).toHaveAttribute("data-zoomed", "");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog.help-dialog")).toBeHidden();
+    await page.locator('.pause-panel [data-action="resume"]').dispatchEvent("click");
+    await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "playing");
+    await expect(notice).toBeVisible();
+  };
+
+  // Start Training and exercise reset-button recovery first.
   await page.locator('button[data-mode="training"]').tap();
   await page.locator('[data-action="start"]').tap();
   await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "playing");
-  await page.locator(".pause-button").tap();
-  await page.locator('.pause-panel [data-action="help"]').tap();
-  await expect(page.locator("dialog.help-dialog")).toBeVisible();
-  await cdp.send("Input.synthesizePinchGesture", {
-    x: 195,
-    y: 400,
-    scaleFactor: 1.45,
-    relativeSpeed: 800,
-    gestureSourceType: "touch",
-  });
-  await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 1)).toBeGreaterThan(1.2);
-  await expect(page.locator("html")).toHaveAttribute("data-zoomed", "");
-
-  // Close Help and return to play while still enlarged: zoom recovery banner is visible.
-  await page.keyboard.press("Escape");
-  await expect(page.locator("dialog.help-dialog")).toBeHidden();
-  await page.locator('.pause-panel [data-action="resume"]').dispatchEvent("click");
-  await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "playing");
-  const notice = page.locator(".zoom-notice");
-  await expect(notice).toBeVisible();
-
-  // Trigger reset button (locks maximum-scale=1 briefly then restores zoomable viewport meta).
+  await zoomViaHelp();
   await notice.locator("button").dispatchEvent("click");
+  await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 0)).toBeCloseTo(1, 2);
   await expect
     .poll(() => page.locator('meta[name="viewport"]').getAttribute("content"))
     .toBe("width=device-width, initial-scale=1, viewport-fit=cover");
+  await expect(page.locator("html")).not.toHaveAttribute("data-zoomed", "");
+  await expect(notice).toBeHidden();
 
-  // Even where Chromium ignores viewport-meta clamping, data-zoomed unlocks real 2-finger pinch-out
-  // directly over the live arena surface.
+  // Exercise manual 2-finger pinch-out recovery separately without pressing reset.
+  await zoomViaHelp();
+  expect(await page.evaluate(() => visualViewport?.scale ?? 1)).toBeGreaterThan(1.2);
   await cdp.send("Input.synthesizePinchGesture", {
     x: 195,
     y: 420,

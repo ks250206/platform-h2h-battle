@@ -376,6 +376,12 @@ describe("phone rules bottom sheet", () => {
       expect(forwardTab.defaultPrevented).toBe(true);
       expect(document.activeElement).toBe(done);
 
+      // Global KeyV shortcut must not toggle the camera setting while the rules sheet is open.
+      const cameraButton = $<HTMLButtonElement>(".camera-button");
+      const cameraBefore = cameraButton.getAttribute("aria-pressed");
+      done.dispatchEvent(new KeyboardEvent("keydown", { key: "v", code: "KeyV", bubbles: true }));
+      expect(cameraButton.getAttribute("aria-pressed")).toBe(cameraBefore);
+
       // 完了 closes, restores inert state & ARIA, and hands focus back to the toggle.
       done.click();
       expect(isOpen()).toBe(false);

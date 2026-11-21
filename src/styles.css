@@ -2665,16 +2665,21 @@ kbd {
     display: none;
   }
 }
+/* On tablets and phones (<= 900px), the pause menu holds settings, controls and fullscreen so
+   the in-match top bar stays clear of the centered match heading (Rumble / BO3). */
+@media (max-width: 900px) {
+  #interface[data-phase]:not([data-phase="menu"]) :is(.settings-button, .help-button) {
+    display: none;
+  }
+}
 @media (max-width: 700px) {
   .topbar {
     top: var(--hud-t);
     left: max(16px, var(--safe-l));
     right: max(16px, var(--safe-r));
   }
-  /* Four icons at most on a phone: the camera only matters in a match, and during one the pause
-     menu has the settings and the controls (the full-screen button is touch.css's / Task A's). */
-  #interface[data-phase="menu"] .camera-button,
-  #interface[data-phase]:not([data-phase="menu"]) :is(.settings-button, .help-button) {
+  /* Four icons at most on a phone title: the camera only matters during a match. */
+  #interface[data-phase="menu"] .camera-button {
     display: none;
   }
   .wordmark {
@@ -3432,6 +3437,16 @@ kbd {
   .fighter-cards,
   .game-hud.has-pads:not(.no-keyboard) .fighter-cards {
     bottom: calc(var(--touch-block-h, 150px) + 8px);
+  }
+  /* Rumble adds the target-switch pill above the action pad; keep row 2 cards clear of it. */
+  [data-mode="rumble"] .game-hud:not(.no-keyboard) .fighter-cards {
+    bottom: calc(
+      max(
+          var(--touch-block-h, 150px),
+          var(--touch-bottom, 12px) + var(--pad, 44px) + var(--util-h, 42px) + 52px
+        ) +
+        8px
+    );
   }
   .game-hud.no-keyboard .fighter-cards {
     bottom: max(66px, calc(var(--safe-b) + 50px));

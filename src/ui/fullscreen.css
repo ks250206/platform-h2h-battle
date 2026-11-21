@@ -1,4 +1,4 @@
-@media (max-width: 700px) {
+@media (max-width: 1024px) {
   #interface:not([data-phase="menu"]) .fullscreen-button {
     display: none;
   }

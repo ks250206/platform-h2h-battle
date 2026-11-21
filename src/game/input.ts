@@ -333,7 +333,7 @@ export class BattleInput {
   }
 
   private keyDown = (event: KeyboardEvent): void => {
-    if (document.querySelector("dialog[open]")) return;
+    if (document.querySelector("dialog[open], .match-options.rules-open")) return;
     if (
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLTextAreaElement ||
