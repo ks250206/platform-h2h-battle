@@ -502,7 +502,6 @@ h1 > span {
 }
 .arena-status.warning {
   color: var(--danger-text);
-  font-weight: 700;
   border-color: var(--danger);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent),
@@ -600,12 +599,15 @@ h1 > span {
   margin-bottom: 8px;
 }
 .fighter-tag {
-  /* A chip in the fighter's colour; ink text reads on all four of them (yellow included). */
+  /* A chip in the fighter's colour; ink text reads on all four of them (yellow included).
+     The chip is drawn with shadows so it takes no extra room in the narrow rumble cards. */
   color: var(--ink);
   background: var(--fighter-color);
-  padding: 2px 7px 1px;
-  margin: -2px 0 -1px -2px;
   border-radius: 999px;
+  box-shadow:
+    -5px 0 0 1px var(--fighter-color),
+    5px 0 0 1px var(--fighter-color);
+  white-space: nowrap;
   font-size: 9px;
   letter-spacing: 0.13em;
   font-weight: 700;
@@ -698,7 +700,6 @@ h1 > span {
 }
 .low-stamina .stamina-value {
   color: var(--danger-text);
-  font-weight: 700;
 }
 .fighter-foot {
   justify-content: space-between;
@@ -754,7 +755,6 @@ h1 > span {
   display: flex;
   justify-content: space-between;
   font-size: 9px;
-  font-weight: 700;
   color: var(--danger-text);
   margin-bottom: 5px;
 }
@@ -779,7 +779,6 @@ h1 > span {
 .charging .fighter-status {
   /* A sun badge drawn with a spread shadow, so the label does not move when it appears. */
   color: var(--ink);
-  font-weight: 700;
   background: var(--sun);
   border-radius: 2px;
   box-shadow: 0 0 0 3px var(--sun);
@@ -1037,7 +1036,6 @@ kbd {
 }
 .help-tips > div > span {
   color: var(--violet);
-  font-weight: 700;
   font-size: 9px;
   padding-top: 2px;
 }
@@ -1107,7 +1105,6 @@ kbd {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--violet);
-  font-weight: 700;
   letter-spacing: 0.04em;
 }
 .setting-hint {
