@@ -8,6 +8,7 @@ import {
   normalize,
 } from "./combat";
 import { clearWalk, routeDirection } from "./navigation";
+import { zoneWalkingGoal } from "./safeZone";
 import {
   canStandAtStage,
   conveyorVelocityAt,
@@ -151,7 +152,7 @@ export class CpuController {
     const dir = normalize(toEnemy);
     input.aim = dir;
     const zone = this.state.arena.safeZone;
-    const outside = zone.active && Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius - 0.5;
+    const zoneGoal = zoneWalkingGoal(zone, f, f.aiLevel);
     const edge =
       !gaps &&
       Math.max(Math.abs(f.x), Math.abs(f.z)) >
@@ -226,11 +227,10 @@ export class CpuController {
       return input;
     }
     const punish = level.punishRecovery && (enemy?.mode === "recovery" || stepRead);
-    if (outside || edge)
-      input.move = gaps
-        ? this.walkToward(f, zone)
-        : normalize({ x: zone.x - f.x, z: zone.z - f.z });
-    else if (distance > 2.4 || punish) input.move = gaps ? this.walkToward(f, goal) : dir;
+    if (zoneGoal || edge) {
+      const zoneTarget = zoneGoal ?? (zone.active ? zone : { x: 0, z: 0 });
+      input.move = this.walkToward(f, zoneTarget);
+    } else if (distance > 2.4 || punish) input.move = gaps ? this.walkToward(f, goal) : dir;
     else if (unsteady) input.move = this.towardFooting(f);
     else if (distance < 1.5 || f.stamina < 28) input.move = { x: -dir.x, z: -dir.z };
     else input.move = { x: dir.z * 0.5, z: -dir.x * 0.5 };
@@ -256,7 +256,7 @@ export class CpuController {
     if (
       distance < 3.3 &&
       f.stamina >= level.attackStamina &&
-      !outside &&
+      !zoneGoal &&
       !unsteady &&
       !(careful && this.beltCarriesOff(f, 1.6))
     ) {
@@ -460,8 +460,8 @@ export class CpuController {
     const belt = this.beltAt(f.x, f.z);
     const calm = zone.active ? zone : { x: 0, z: 0 };
     let move: Vec2 = { x: 0, z: 0 };
-    if (zone.active && Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius - 0.5)
-      move = this.walkToward(f, zone);
+    const zoneGoal = zoneWalkingGoal(zone, f, f.aiLevel);
+    if (zoneGoal) move = this.walkToward(f, zoneGoal);
     else if (belt.x !== 0 || belt.z !== 0) move = this.walkToward(f, calm);
     else if (gaps && !this.footing(f, this.footingMargin())) move = this.towardFooting(f);
     else if (!gaps && Math.max(Math.abs(f.x), Math.abs(f.z)) > this.footingHalfSize() - 0.8)

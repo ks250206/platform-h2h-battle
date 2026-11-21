@@ -8,6 +8,7 @@ import {
   type GimmickConstraints,
   type StageInfo,
 } from "./rules";
+import type { ZoneCircle } from "./safeZone";
 import { RULES } from "./tuning";
 import type { Vec2 } from "./types";
 
@@ -84,12 +85,6 @@ export interface StageDefinition {
    * every drop. Empty on a solid stage, where anywhere inside the rim will do.
    */
   respawns: readonly Vec2[];
-  /**
-   * How the safe zone moves: `drift` wanders inside the rim, `orbit` circles the pit along the
-   * ring, `tour` goes out along each bridge in turn. Its radius runs from `startRadius` down by
-   * `shrink` over 100 seconds.
-   */
-  safeZone: { path: "drift" | "orbit" | "tour"; startRadius: number; shrink: number };
 }
 
 const TILE = RULES.tileSize;
@@ -99,17 +94,6 @@ const GRID = 4;
 export const CONVEYOR_SPEED = 2.2;
 /** Width of the plank bridges; the tiles beside them are 2 wide. */
 export const BRIDGE_WIDTH = 1.6;
-/** Radius of the circle the ruins' safe zone travels on: over the ring all the way round. */
-const ORBIT_RADIUS = 5;
-/** The bridges' safe zone goes out along +X, +Z, -X, -Z in turn, at most this far. */
-const TOUR_ARMS: readonly Vec2[] = [
-  { x: 1, z: 0 },
-  { x: 0, z: 1 },
-  { x: -1, z: 0 },
-  { x: 0, z: -1 },
-];
-const TOUR_REACH = 6.2;
-
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 const gridTile = (
@@ -244,20 +228,19 @@ export const STAGES: Record<StageId, StageDefinition> = {
     tagline: "終わりゆく足場",
     summary: "穴のない広い足場。外周から崩れ、最後は中央の小さな足場で決着がつく。",
     gimmicks: {
-      collapse: { state: "on", note: "外周が3回崩れる" },
-      safeZone: { state: "on", note: "足場の上を漂いながら縮む" },
+      collapse: { state: "on", note: "外周が2回崩れる" },
+      safeZone: { state: "on", note: "予告した場所へ大きく移動する" },
       bombs: { state: "on", note: "予告のあとに落ちる" },
       wind: { state: "on", note: "ときどき弱く吹く" },
       conveyor: { state: "off", note: "なし" },
     },
-    gimmickNote: "崩落・安全地帯・爆撃・風がすべて起きる。外周は3回崩れ、6×6の足場まで狭くなる。",
+    gimmickNote: "崩落・安全地帯・爆撃・風がすべて起きる。外周は2回崩れ、5×5タイルの足場まで狭くなる。",
     halfSize: RULES.arenaHalfSize,
     minHalfSize: RULES.minHalfSize,
     solid: true,
     tiles: gardenTiles(),
     spawnRadius: 3.5,
     respawns: [],
-    safeZone: { path: "drift", startRadius: 8.4, shrink: 5.7 },
   },
   ruins: {
     id: "ruins",
@@ -281,7 +264,6 @@ export const STAGES: Record<StageId, StageDefinition> = {
     tiles: ruinsTiles(),
     spawnRadius: 6,
     respawns: ruinsRespawns(),
-    safeZone: { path: "orbit", startRadius: 10.4, shrink: 7.2 },
   },
   bridges: {
     id: "bridges",
@@ -305,7 +287,6 @@ export const STAGES: Record<StageId, StageDefinition> = {
     tiles: bridgesTiles(),
     spawnRadius: 7,
     respawns: bridgesRespawns(),
-    safeZone: { path: "tour", startRadius: 8.4, shrink: 5.7 },
   },
   factory: {
     id: "factory",
@@ -317,7 +298,7 @@ export const STAGES: Record<StageId, StageDefinition> = {
       "矢印の向きへ流れるコンベアの工場。環状ベルトは中央を一周し、外側の2本は場外へ流れ出る。",
     gimmicks: {
       collapse: { state: "limited", note: "2回まで崩れる" },
-      safeZone: { state: "on", note: "足場の上を漂いながら縮む" },
+      safeZone: { state: "on", note: "予告した場所へ大きく移動する" },
       bombs: { state: "on", note: "予告のあとに落ちる" },
       wind: { state: "off", note: "吹かない" },
       conveyor: { state: "on", note: "地上の全員を同じ速さで運ぶ" },
@@ -330,7 +311,6 @@ export const STAGES: Record<StageId, StageDefinition> = {
     tiles: factoryTiles(),
     spawnRadius: 6,
     respawns: [],
-    safeZone: { path: "drift", startRadius: 8.4, shrink: 5.7 },
   },
 };
 
@@ -542,42 +522,6 @@ export function spawnPoints(stageId: StageId, fighterCount: number): SpawnPoint[
   });
 }
 
-export interface SafeZoneCircle extends Vec2 {
-  radius: number;
-}
-
-/**
- * The safe zone `elapsed` seconds into a match (it only applies once `RULES.safeZoneStart` has
- * passed). Its centre is always over floor that can be stood on: it drifts inside the rim of a
- * solid stage, circles the pit of the ruins, and travels the bridges out to each island in turn.
- */
-export function safeZoneAt(stageId: StageId, elapsed: number, halfSize: number): SafeZoneCircle {
-  const { path, startRadius, shrink } = STAGES[stageId].safeZone;
-  const progress = clamp((elapsed - RULES.safeZoneStart) / 100, 0, 1);
-  if (path === "orbit") {
-    const angle = Math.max(0, elapsed - RULES.safeZoneStart) * 0.08;
-    return {
-      x: Math.sin(angle) * ORBIT_RADIUS,
-      z: Math.cos(angle) * ORBIT_RADIUS,
-      radius: startRadius - progress * shrink,
-    };
-  }
-  const radius = Math.min(halfSize * 0.94, startRadius - progress * shrink);
-  if (path === "tour") {
-    // Out along one arm and back to the plaza, then the next; further out as the zone shrinks.
-    const phase = Math.max(0, elapsed - RULES.safeZoneStart) * 0.1;
-    const arm = TOUR_ARMS[Math.floor(phase / Math.PI) % TOUR_ARMS.length]!;
-    const out = Math.sin(phase % Math.PI) * progress * TOUR_REACH;
-    return { x: arm.x * out, z: arm.z * out, radius };
-  }
-  const margin = Math.max(0, halfSize - radius - 0.12);
-  return {
-    x: Math.sin(elapsed * 0.055) * margin,
-    z: Math.cos(elapsed * 0.07) * margin,
-    radius,
-  };
-}
-
 /** How much floor a returning fighter gets around its landing spot. */
 const RESPAWN_MARGIN = 0.7;
 /** The room it still gets when no spot with the full margin is inside the safe zone. */
@@ -596,7 +540,7 @@ const RESPAWN_FALLBACK_MARGIN = 0.4;
 export function respawnCandidates(
   stageId: StageId,
   halfSize: number,
-  zone: SafeZoneCircle | null,
+  zone: ZoneCircle | null,
 ): Vec2[] {
   const stage = STAGES[stageId];
   const centre = zone ? { x: zone.x, z: zone.z } : { x: 0, z: 0 };

@@ -39,6 +39,7 @@ export class MeshLibrary {
     radialSegments: 4,
     tubularSegments: 64,
   });
+  readonly dashedRing = makeDashedRing();
   readonly disc = makeDisc();
   readonly tile = makeTile();
   private readonly materials = new Map<string, BaseMaterial3D>();
@@ -163,6 +164,7 @@ export class MeshLibrary {
       this.cylinder,
       this.cone,
       this.ring,
+      this.dashedRing,
       this.disc,
       this.tile,
     ])
@@ -232,6 +234,30 @@ function makeDisc(): Geometry3D {
     positions.push(Math.sin((i / 40) * TAU), 0, Math.cos((i / 40) * TAU));
     normals.push(0, 1, 0);
     if (i < 40) indices.push(0, i + 1, i + 2);
+  }
+  return new Geometry3D({
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    indices: new Uint16Array(indices),
+  });
+}
+
+/** Twenty separate floor markings drawn as a single destination mesh. */
+function makeDashedRing(): Geometry3D {
+  const positions: number[] = [],
+    normals: number[] = [],
+    indices: number[] = [];
+  const count = 20;
+  for (let i = 0; i < count; i++) {
+    for (const offset of [0, 0.62]) {
+      const angle = (TAU * (i + offset)) / count;
+      for (const radius of [0.98, 1.02]) {
+        positions.push(radius * Math.sin(angle), 0, radius * Math.cos(angle));
+        normals.push(0, 1, 0);
+      }
+    }
+    const base = 4 * i;
+    indices.push(base, base + 1, base + 3, base, base + 3, base + 2);
   }
   return new Geometry3D({
     positions: new Float32Array(positions),

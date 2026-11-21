@@ -1,3 +1,4 @@
+import { safeZoneAt } from "../src/game/safeZone";
 import { describe, expect, test } from "vite-plus/test";
 import { BattleEngine, canStandAt, matchTimeLimit } from "../src/game/engine";
 import { DEFAULT_MATCH_OPTIONS, sanitizeMatchOptions, type AiLevel } from "../src/game/match";
@@ -14,7 +15,6 @@ import {
   isTileSupported,
   nearestWalkablePoint,
   respawnCandidates,
-  safeZoneAt,
   spawnPoints,
   STAGE_IDS,
   STAGE_LIST,
@@ -129,7 +129,7 @@ describe("the stage catalogue", () => {
     expect(STAGES.ruins.gimmicks.collapse.state).toBe("limited");
     expect(STAGES.bridges.gimmicks.collapse.state).toBe("off");
     expect(STAGES.factory.gimmicks.collapse.state).toBe("limited");
-    expect(collapseSteps("garden")).toEqual([9, 7, 5, 3]);
+    expect(collapseSteps("garden")).toEqual([9, 7, 5]);
     expect(collapseSteps("ruins")).toEqual([9, 7]);
     expect(collapseSteps("bridges")).toEqual([9]);
     expect(collapseSteps("factory")).toEqual([9, 7, 5]);
@@ -139,9 +139,6 @@ describe("the stage catalogue", () => {
     ]);
     expect(STAGE_IDS.filter(hasConveyors)).toEqual(["factory"]);
     for (const stage of STAGE_LIST) {
-      // A stage that collapses less than the garden, or not at all, says so.
-      const full = stage.minHalfSize === RULES.minHalfSize;
-      expect(stage.gimmicks.collapse.state === "on").toBe(full);
       expect(stage.gimmicks.collapse.state === "off").toBe(stage.minHalfSize === stage.halfSize);
     }
   });
@@ -244,18 +241,10 @@ describe("what is drawn is what holds a fighter", () => {
         return [Math.sin(theta) * 3.5, Math.cos(theta) * 3.5];
       }),
     );
-    // The old safe zone and the old respawn candidates.
+    // Returning fighters have a ring of candidates on the surviving floor.
     for (const elapsed of [18, 31, 55, 77.5, 118, 149, 260]) {
-      for (const halfSize of [9, 7, 5, 3]) {
-        const progress = Math.max(0, Math.min(1, (elapsed - RULES.safeZoneStart) / 100));
-        const radius = Math.min(halfSize * 0.94, 8.4 - progress * 5.7);
-        const margin = Math.max(0, halfSize - radius - 0.12);
-        const zone = safeZoneAt("garden", elapsed, halfSize);
-        expect(zone).toEqual({
-          x: Math.sin(elapsed * 0.055) * margin,
-          z: Math.cos(elapsed * 0.07) * margin,
-          radius,
-        });
+      for (const halfSize of collapseSteps("garden")) {
+        const zone = safeZoneAt("garden", elapsed, 270);
         const limit = Math.max(0, halfSize - 1);
         const clamp = (v: number) => Math.max(-limit, Math.min(limit, v));
         const reach = zone.radius * 0.55;
@@ -286,7 +275,7 @@ describe("what is drawn is what holds a fighter", () => {
       wind ||= engine.state.arena.windActive;
       for (const bomb of engine.state.bombs) bombs.push({ x: bomb.x, z: bomb.z });
     }
-    expect([...sizes]).toEqual([9, 7, 5, 3]);
+    expect([...sizes]).toEqual([9, 7, 5]);
     expect(wind).toBe(true);
     expect(bombs.length).toBeGreaterThan(0);
   });
@@ -683,7 +672,7 @@ describe("spawns and respawns are always on floor", () => {
       expect(calm.length).toBeGreaterThan(0);
       for (const p of calm) expect(hasClearance(id, p.x, p.z, halfSize, 0.5)).toBe(true);
       for (let elapsed = RULES.safeZoneStart; elapsed <= 340; elapsed += 1.5) {
-        const zone = safeZoneAt(id, elapsed, halfSize);
+        const zone = safeZoneAt(id, elapsed, 270);
         const candidates = respawnCandidates(id, halfSize, zone);
         expect(candidates.length, `${id} ${halfSize} ${elapsed}`).toBeGreaterThan(0);
         for (const p of candidates) {
@@ -817,8 +806,8 @@ describe("the safe zone and the collapse always leave floor to stand on", () => 
     const solid = STAGES[id].solid;
     for (const halfSize of collapseSteps(id)) {
       for (let elapsed = RULES.safeZoneStart; elapsed <= 400; elapsed += 0.5) {
-        const zone = safeZoneAt(id, elapsed, halfSize);
-        expect(zone.radius).toBeGreaterThan(2.5);
+        const zone = safeZoneAt(id, elapsed, 270);
+        expect(zone.radius).toBeGreaterThanOrEqual(solid ? 2.25 : 2.5);
         expect(canStandAtStage(id, zone.x, zone.z, halfSize), `${id} ${halfSize} ${elapsed}`).toBe(
           true,
         );
@@ -837,16 +826,16 @@ describe("the safe zone and the collapse always leave floor to stand on", () => 
   test("the ruins' zone circles the pit and the bridges' zone travels the bridges", () => {
     const quadrants = new Set<string>();
     for (let elapsed = RULES.safeZoneStart; elapsed <= 200; elapsed += 0.5) {
-      const zone = safeZoneAt("ruins", elapsed, 7);
+      const zone = safeZoneAt("ruins", elapsed, 270);
       // Over the ring, never over the hole.
       expect(Math.max(Math.abs(zone.x), Math.abs(zone.z))).toBeGreaterThanOrEqual(3.5);
-      expect(Math.hypot(zone.x, zone.z)).toBeCloseTo(5, 6);
+      expect(Math.max(Math.abs(zone.x), Math.abs(zone.z))).toBeCloseTo(5, 6);
       quadrants.add(`${Math.sign(Math.round(zone.x))},${Math.sign(Math.round(zone.z))}`);
     }
     expect(quadrants.size).toBe(8);
     const visited = new Set<string>();
     for (let elapsed = RULES.safeZoneStart; elapsed <= 320; elapsed += 0.5) {
-      const zone = safeZoneAt("bridges", elapsed, 9);
+      const zone = safeZoneAt("bridges", elapsed, 270);
       // Always on the cross of bridges, plaza and islands' middles.
       expect(Math.min(Math.abs(zone.x), Math.abs(zone.z))).toBe(0);
       if (Math.hypot(zone.x, zone.z) > 5.2)

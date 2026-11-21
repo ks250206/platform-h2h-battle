@@ -14,14 +14,22 @@ import { CpuController } from "./ai";
 import { effectiveRules, timeLimitFor, type StageInfo, type TimeRule } from "./rules";
 import {
   conveyorVelocityAt,
+  hasClearance,
   hasConveyors,
   nearestWalkablePoint,
   respawnCandidates,
-  safeZoneAt,
   spawnPoints,
   stageInfoFor,
   STAGES,
 } from "./stages";
+import {
+  announcedZoneIn,
+  INACTIVE_ZONE,
+  RESPAWN_LOOKAHEAD,
+  RESPAWN_STARTUP,
+  safeZoneAt,
+  ZONE_KO_REASON,
+} from "./safeZone";
 import { ATTACKS, INPUT_BUFFER_TICKS, RULES, UKEMI } from "./tuning";
 import { advanceRoll, cpuTechOpportunity, rollDirection } from "./ukemi";
 import {
@@ -200,7 +208,7 @@ export class BattleEngine {
         tileSize: RULES.tileSize,
         warningRing: false,
         nextCollapse: RULES.collapseStart,
-        safeZone: { x: 0, z: 0, radius: 10.8, active: false },
+        safeZone: { ...INACTIVE_ZONE },
         wind: { x: 0, z: 0 },
         windActive: false,
       },
@@ -1056,14 +1064,7 @@ export class BattleEngine {
       arena.warningRing = false;
       this.announce("外周の足場が崩れた", 2);
     }
-    const zone = arena.safeZone;
-    zone.active = safeZone && elapsed >= RULES.safeZoneStart;
-    if (zone.active) {
-      const placed = safeZoneAt(arena.stageId, elapsed, arena.halfSize);
-      zone.radius = placed.radius;
-      zone.x = placed.x;
-      zone.z = placed.z;
-    }
+    arena.safeZone = safeZoneAt(arena.stageId, elapsed, safeZone ? rules.timeLimit : null);
     arena.windActive = wind && elapsed >= 24 && Math.floor(elapsed / 12) % 3 === 2;
     arena.wind = arena.windActive
       ? { x: Math.sin(elapsed * 0.1) * 0.35, z: Math.cos(elapsed * 0.1) * 0.25 }
@@ -1103,10 +1104,13 @@ export class BattleEngine {
       return;
     }
     if (Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius) {
-      f.outsideTime = Math.min(RULES.outsideLimit, f.outsideTime + dt);
-      f.damage += RULES.outsideDamage * dt;
-      if (f.outsideTime >= RULES.outsideLimit - 1e-6)
-        this.eliminate(f, "エリア外ゲージが5秒に到達");
+      const exposure = Math.min(dt, RULES.outsideLimit - f.outsideTime);
+      f.outsideTime += exposure;
+      f.damage += RULES.outsideDamage * exposure;
+      if (f.outsideTime >= RULES.outsideLimit - 1e-9) {
+        f.outsideTime = RULES.outsideLimit;
+        this.eliminate(f, ZONE_KO_REASON);
+      }
     } else {
       f.outsideTime = Math.max(0, f.outsideTime - RULES.outsideRecovery * dt);
     }
@@ -1190,25 +1194,61 @@ export class BattleEngine {
     } satisfies Partial<Fighter>);
   }
 
+  /** Floor half size remaining after an announced outer collapse. */
+  private footingHalfSize(): number {
+    const { arena } = this.state;
+    return arena.warningRing
+      ? Math.max(STAGES[arena.stageId].minHalfSize, arena.halfSize - RULES.tileSize)
+      : arena.halfSize;
+  }
+
   /**
    * Inside the safe zone when it is active, else near the middle of the stage; always over floor
    * with a margin, never over a pit or a gap (`respawnCandidates` in stages.ts). Fixed candidates
    * (no RNG): the one farthest from living opponents that is clear of pending bombs.
    */
   private respawnPoint(f: Fighter): Vec2 {
-    const { safeZone: zone, halfSize, stageId } = this.state.arena;
-    const onFloor = respawnCandidates(stageId, halfSize, zone.active ? zone : null);
-    const clear = onFloor.filter(
+    const { safeZone: zone, stageId } = this.state.arena;
+    const floor = this.footingHalfSize();
+    const candidates = respawnCandidates(stageId, floor, zone.active ? zone : null);
+    const landing = announcedZoneIn(zone, RESPAWN_LOOKAHEAD);
+    if (
+      zone.active &&
+      (landing.x !== zone.x || landing.z !== zone.z || landing.radius !== zone.radius)
+    ) {
+      candidates.push(...respawnCandidates(stageId, floor, landing));
+    }
+    const clear = candidates.filter(
       (p) =>
         !this.state.bombs.some(
           (b) => !b.exploded && Math.hypot(p.x - b.x, p.z - b.z) <= b.radius + 0.3,
         ),
     );
+    const available = clear.length > 0 ? clear : candidates;
+    const safeAtLanding = zone.active
+      ? available.filter((p) => {
+          // Belts begin carrying the fighter only after touching down.
+          const belt = conveyorVelocityAt(stageId, p.x, p.z, floor);
+          const x = p.x + belt.x * RESPAWN_STARTUP;
+          const z = p.z + belt.z * RESPAWN_STARTUP;
+          return (
+            Math.hypot(p.x - landing.x, p.z - landing.z) <= landing.radius - 0.15 &&
+            Math.hypot(x - landing.x, z - landing.z) <= landing.radius - 0.15 &&
+            hasClearance(stageId, x, z, floor, 0.3)
+          );
+        })
+      : available;
+    const landingPool = safeAtLanding.length > 0 ? safeAtLanding : available;
+    // Exposure starts during the drop. Prefer the overlap when both circles have clear floor.
+    const safeThroughout = zone.active
+      ? landingPool.filter((p) => Math.hypot(p.x - zone.x, p.z - zone.z) <= zone.radius)
+      : landingPool;
+    const pool = safeThroughout.length > 0 ? safeThroughout : landingPool;
     const opponents = this.state.fighters.filter((o) => o.id !== f.id && o.mode !== "dead");
     const room = (p: Vec2) =>
       Math.min(...opponents.map((o) => Math.hypot(o.x - p.x, o.z - p.z)), Infinity);
-    let best = (clear.length > 0 ? clear : onFloor)[0];
-    for (const p of clear) if (room(p) > room(best) + 1e-9) best = p;
+    let best = pool[0];
+    for (const p of pool) if (room(p) > room(best) + 1e-9) best = p;
     return best;
   }
 

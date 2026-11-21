@@ -223,6 +223,9 @@ export class ArenaRenderer {
     phase: number;
   }[] = [];
   private readonly zone = new Container3D();
+  private readonly destination: Mesh3D;
+  private readonly zonePath: Mesh3D;
+  private readonly zoneArrow: Mesh3D;
   private readonly zoneRing: Mesh3D;
   private readonly zoneCore: Mesh3D;
   private readonly zoneMarker: Text;
@@ -369,6 +372,10 @@ export class ArenaRenderer {
       -0.005,
       0,
     );
+    const routeInk = this.assets.material(PALETTE.zone.label, 1, 0.3);
+    this.destination = this.assets.mesh(this.scene, this.assets.dashedRing, routeInk);
+    this.zonePath = this.assets.mesh(this.scene, this.assets.cube, routeInk);
+    this.zoneArrow = this.assets.mesh(this.scene, this.stageShapes.chevron, routeInk);
     this.zoneMarker = new Text({
       text: "SAFE ZONE",
       style: {
@@ -538,10 +545,26 @@ export class ArenaRenderer {
     const safe = state.arena.safeZone;
     this.showStage(state).update(state, this.time, this.beltTime, this.shadowsActive, reset);
     this.zone.visible = safe.active;
-    this.zoneMarker.visible = safe.active;
     this.zone.position.set(safe.x, 0.045, safe.z);
     this.zoneRing.scale.set(safe.radius);
     this.zoneCore.scale.set(safe.radius, 1, safe.radius);
+    const target = safe.destination;
+    this.destination.visible = this.zonePath.visible = safe.active && target !== null;
+    this.zoneArrow.visible = false;
+    if (target) {
+      this.destination.position.set(target.x, 0.075, target.z);
+      this.destination.scale.set(target.radius, 1, target.radius);
+      const dx = target.x - safe.x;
+      const dz = target.z - safe.z;
+      const length = Math.hypot(dx, dz);
+      this.zonePath.position.set((target.x + safe.x) / 2, 0.08, (target.z + safe.z) / 2);
+      this.zonePath.scale.set(0.07, 0.02, length);
+      this.zonePath.rotation.y = Math.atan2(dx, dz);
+      this.zoneArrow.visible = safe.active && length > 0.3;
+      this.zoneArrow.position.set(safe.x + dx * 0.7, 0.1, safe.z + dz * 0.7);
+      this.zoneArrow.scale.set(Math.min(1, length));
+      this.zoneArrow.rotation.y = this.zonePath.rotation.y;
+    }
     // Label the far edge of the ring, the one leaning away from the camera.
     const far = safe.radius - 0.4;
     const marker = this.view.worldToScreen({
@@ -549,6 +572,7 @@ export class ArenaRenderer {
       y: 0.1,
       z: safe.z + CAMERA_FORWARD.z * far,
     });
+    this.zoneMarker.visible = safe.active && marker !== null;
     if (marker) this.zoneMarker.position.set(marker.x, marker.y);
     for (const [i, line] of this.windLines.entries()) {
       line.visible = state.arena.windActive;
