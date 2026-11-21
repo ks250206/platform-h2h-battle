@@ -110,9 +110,20 @@ test("training accepts movement, jump, charged feint, all attacks and pause", as
     return f.mode === "idle" && f.stamina >= 35 && f.grounded;
   });
   await record();
-  await page.keyboard.press("KeyJ");
-  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].mode === "windup");
-  await page.keyboard.press("KeyQ");
+  // Tap the attack and press cancel from inside the page, on the first frame that shows the
+  // wind-up: a round trip through the test runner can outlast the 0.43 s wind-up on a slow machine.
+  await page.evaluate(() => {
+    const press = (code: string) => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true }));
+    };
+    const cancelOnWindup = () => {
+      if (window.__BRAMBLE__!.snapshot().fighters[0].mode === "windup") press("KeyQ");
+      else requestAnimationFrame(cancelOnWindup);
+    };
+    press("KeyJ");
+    requestAnimationFrame(cancelOnWindup);
+  });
   await idleAgain();
   const modes = await recorded();
   expect(modes).toContain("windup");
