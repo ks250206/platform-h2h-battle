@@ -1,6 +1,10 @@
 import { Container3D, CylinderGeometry, Geometry3D } from "@pixi/3d";
 import type { Mesh3D } from "@pixi/3d";
+import { PALETTES, shade } from "../game/characters";
+import { SLOT_SHAPE_POINTS, SLOT_SHAPES, slotShape } from "../game/identity";
+import type { SlotShape } from "../game/identity";
 import type { Fighter, Species } from "../game/types";
+import { addAccessory, SKULL } from "./accessories";
 import type { MeshLibrary } from "./meshes";
 import type { MotionFrame } from "./motion";
 import { PALETTE } from "./palette";
@@ -19,12 +23,33 @@ export class RigAssets {
   readonly blade = makeBlade();
   /** A chevron lying on the floor, pointing along +Z. */
   readonly chevron = makeChevron();
+  /** The slot shapes as flat unit polygons facing +Z: the markers over and under a fighter. */
+  readonly shapes = Object.fromEntries(
+    SLOT_SHAPES.map((shape) => [shape, makeShape(shape)]),
+  ) as Record<SlotShape, Geometry3D>;
 
   destroy(): void {
     this.limb.destroy(true);
     this.blade.destroy(true);
     this.chevron.destroy(true);
+    for (const shape of SLOT_SHAPES) this.shapes[shape].destroy(true);
   }
+}
+
+/** One slot shape as a triangle fan about its centre (every outline is star-shaped around it). */
+function makeShape(shape: SlotShape): Geometry3D {
+  const outline = SLOT_SHAPE_POINTS[shape];
+  const positions = [0, 0, 0];
+  const indices: number[] = [];
+  outline.forEach(([x, y], i) => {
+    positions.push(x, y, 0);
+    indices.push(0, i + 1, ((i + 1) % outline.length) + 1);
+  });
+  return new Geometry3D({
+    positions: new Float32Array(positions),
+    normals: new Float32Array(positions.map((_, i) => (i % 3 === 2 ? 1 : 0))),
+    indices: new Uint16Array(indices),
+  });
 }
 
 /**
@@ -109,6 +134,8 @@ interface LimbNodes {
   end: Container3D;
 }
 export interface FighterRig {
+  /** What the rig was built to look like (`rigIdentity`): a fighter that differs needs a new one. */
+  identity: string;
   /** World position and facing. */
   root: Container3D;
   /** Squash and stretch, anchored at the feet. */
@@ -125,30 +152,67 @@ export interface FighterRig {
   tail: Container3D[];
   ears: Container3D[];
   scarf: Container3D[];
+  /** What the fighter wears on its head, or null. Decoration only. */
+  accessory: Container3D | null;
   chargeHalo: Mesh3D;
-  pointer: Mesh3D;
+  /**
+   * The slot's shape floating over a human's head. It lives in the scene and always faces the
+   * camera, so it reads the same whichever way the fighter turns or tumbles.
+   */
+  pointer: Container3D;
   /** Floor markers live in the scene, not under the fighter, so jumps leave them behind. */
   shadow: Mesh3D;
   footRing: Mesh3D;
   heading: Mesh3D;
+  /** The slot's shape on the floor ring, on the side nearest the camera. Every fighter has one. */
+  badge: Container3D;
+  /** Unit ground vector from a fighter toward the camera, where the badge sits. */
+  toCamera: { x: number; z: number };
+}
+
+/** Where the camera is, for the markers that face it. */
+export interface RigCamera {
+  /** The facing (0 is +Z) that looks straight at the camera. */
+  yaw: number;
+  /** The camera's elevation above the ground, in radians. */
+  pitch: number;
+}
+
+/**
+ * Everything about a fighter that decides which meshes its rig is made of. Two fighters with the
+ * same animal, colours and accessory still differ by slot: the slot gives the marker its shape.
+ */
+export function rigIdentity(f: Pick<Fighter, "id" | "species" | "palette" | "accessory">): string {
+  return `${f.id}:${f.species}/${f.palette}/${f.accessory}`;
 }
 
 const { cream: CREAM, dark: DARK, leather: LEATHER, gold: GOLD, steel: STEEL } = PALETTE.fighter;
 const { fuller: FULLER, iron: IRON } = PALETTE.fighter;
 
+const MARKER_INK = PALETTE.fighter.markerInk;
+
 const TRAITS: Record<Species, { fur: number | null; bulk: number; head: number }> = {
-  // The fox's coat is its team colour, a shade deeper so the scarf still reads.
+  // The fox's coat follows its palette: the team colour a shade deeper so the scarf still reads.
   fox: { fur: null, bulk: 1, head: 1 },
   rabbit: { fur: PALETTE.fighter.fur.rabbit, bulk: 0.93, head: 0.97 },
   bear: { fur: PALETTE.fighter.fur.bear, bulk: 1.16, head: 1.05 },
   raccoon: { fur: PALETTE.fighter.fur.raccoon, bulk: 1.03, head: 1 },
 };
 
-function shade(color: number, factor: number): number {
-  const r = Math.min(255, Math.round(((color >> 16) & 255) * factor));
-  const g = Math.min(255, Math.round(((color >> 8) & 255) * factor));
-  const b = Math.min(255, Math.round((color & 255) * factor));
-  return (r << 16) | (g << 8) | b;
+/**
+ * A slot shape with a dark rim, built in the XY plane facing +Z. Unlit, so it is a pure
+ * silhouette in every light and at every resolution.
+ */
+function marker(
+  a: MeshLibrary,
+  g: RigAssets,
+  into: Container3D,
+  shape: SlotShape,
+  color: number,
+  size: number,
+): void {
+  a.mesh(into, g.shapes[shape], a.material(MARKER_INK, 1, 0.3), 0, 0, -0.014, size * 1.34);
+  a.mesh(into, g.shapes[shape], a.material(color, 1, 0.3), 0, 0, 0, size);
 }
 
 /** A jointed, low-poly animal with a two-handed greatsword. Every part is a real 3D mesh. */
@@ -159,10 +223,11 @@ export function createFighterRig(
   f: Fighter,
   /** Colour of the marker over a human's head; the coral default suits a lone player. */
   pointerColor: number = PALETTE.fighter.pointer,
+  camera: RigCamera = { yaw: 0, pitch: 0 },
 ): FighterRig {
   const trait = TRAITS[f.species];
   const team = f.color;
-  const fur = trait.fur ?? shade(team, 0.88);
+  const fur = trait.fur ?? PALETTES[f.palette].foxFur;
   const b = trait.bulk;
   const node = (into: Container3D, x = 0, y = 0, z = 0): Container3D => {
     const child = new Container3D();
@@ -211,7 +276,7 @@ export function createFighterRig(
   const head = node(body);
   const skull = node(head, 0, 0.27, 0.02);
   skull.scale.set(0.76 * trait.head);
-  a.ball(skull, fur, 0, 0, 0, 0.48, 0.44, 0.42);
+  a.ball(skull, fur, 0, 0, 0, SKULL.x, SKULL.y, SKULL.z);
   const ears: Container3D[] = [];
   const ear = (side: number, x: number, y: number, tilt: number): Container3D => {
     const base = node(skull, side * x, y, -0.02);
@@ -260,6 +325,8 @@ export function createFighterRig(
     a.box(skull, DARK, side * 0.19, 0.14, 0.4, 0.13, 0.03, 0.03).rotation.z = side * -0.32;
   }
   a.ball(skull, DARK, 0, -0.11, f.species === "fox" ? 0.545 : 0.5, 0.07, 0.048, 0.045);
+  // Worn on the head and fitted to this animal's ears; it never touches the arms or the sword.
+  const accessory = addAccessory(a, skull, f.species, f.accessory, team);
 
   // --- Limbs --------------------------------------------------------------------------
   const arms = [0, 1].map(() => {
@@ -330,18 +397,14 @@ export function createFighterRig(
     0.85,
   );
   chargeHalo.visible = false;
-  const pointer = a.mesh(
-    root,
-    a.cone,
-    a.material(pointerColor, 1, 0.35),
-    0,
-    2.6,
-    0,
-    0.15,
-    0.24,
-    0.15,
-  );
-  pointer.rotation.z = Math.PI;
+  // The slot's shape, twice: over a human's head and on everyone's floor ring. Both face the
+  // camera, so two fighters in the same animal and colours are still told apart by shape.
+  const shape = slotShape(f.id);
+  const pointer = node(parent);
+  pointer.rotation.y = camera.yaw;
+  const pointerFace = node(pointer);
+  pointerFace.rotation.x = -camera.pitch;
+  marker(a, g, pointerFace, shape, pointerColor, 0.15);
   pointer.visible = f.human;
   const shadow = a.mesh(
     parent,
@@ -358,8 +421,14 @@ export function createFighterRig(
   const ringColor = team;
   const footRing = a.mesh(parent, a.ring, a.material(ringColor, 0.9, 0.25), 0, 0.035, 0, 0.69);
   const heading = a.mesh(parent, g.chevron, a.material(ringColor, 0.95, 0.3), 0, 0.04, 0);
+  const badge = node(parent);
+  badge.rotation.y = camera.yaw;
+  const badgeFace = node(badge, 0, 0.062, 0);
+  badgeFace.rotation.x = -Math.PI / 2;
+  marker(a, g, badgeFace, shape, ringColor, 0.13);
 
   return {
+    identity: rigIdentity(f),
     root,
     squash,
     pivot,
@@ -373,11 +442,14 @@ export function createFighterRig(
     tail,
     ears,
     scarf,
+    accessory,
     chargeHalo,
     pointer,
     shadow,
     footRing,
     heading,
+    badge,
+    toCamera: { x: Math.sin(camera.yaw), z: Math.cos(camera.yaw) },
   };
 }
 
@@ -428,18 +500,26 @@ export function applyFrame(rig: FighterRig, frame: MotionFrame, f: Fighter, time
 
   rig.chargeHalo.visible = f.mode === "charge";
   rig.chargeHalo.scale.set(0.75 + Math.min(1, f.charge) * 0.22 + Math.sin(time * 11) * 0.03);
-  rig.pointer.position.y = 2.6 + Math.sin(time * 3) * 0.06;
+  rig.pointer.visible = f.human && f.mode !== "dead";
+  rig.pointer.position.set(
+    frame.origin.x,
+    frame.origin.y + 2.62 + Math.sin(time * 3) * 0.06,
+    frame.origin.z,
+  );
   const shrinking = 1 / (1 + Math.max(0, f.y) * 0.1);
   const marked = f.mode !== "dead" && f.y >= -0.2;
   rig.shadow.visible = marked;
   rig.footRing.visible = marked;
   rig.heading.visible = marked;
+  rig.badge.visible = marked;
   rig.shadow.position.set(f.x, 0.026, f.z);
   rig.shadow.scale.set(0.65 * shrinking, 1, 0.47 * shrinking);
   rig.footRing.position.set(f.x, 0.04, f.z);
   // The chevron sits just outside the ring and shows where the next swing will go.
   rig.heading.position.set(f.x + Math.sin(f.facing) * 0.66, 0.045, f.z + Math.cos(f.facing) * 0.66);
   rig.heading.rotation.y = f.facing;
+  // The badge keeps its place on the ring whichever way the fighter faces.
+  rig.badge.position.set(f.x + rig.toCamera.x * 0.71, 0, f.z + rig.toCamera.z * 0.71);
 }
 
 export function destroyFighterRig(rig: FighterRig): void {
@@ -447,4 +527,6 @@ export function destroyFighterRig(rig: FighterRig): void {
   rig.shadow.destroy();
   rig.footRing.destroy();
   rig.heading.destroy();
+  rig.pointer.destroy({ children: true });
+  rig.badge.destroy({ children: true });
 }

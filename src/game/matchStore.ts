@@ -2,6 +2,7 @@
 // settings one. Importable in node (tests): nothing touches `localStorage` at import time, every
 // access to it is guarded, and the storage can be injected.
 
+import { withLoadout, type Loadout } from "./characters";
 import {
   DEFAULT_MATCH_OPTIONS,
   MAX_FIGHTERS,
@@ -119,7 +120,16 @@ export function playableOptions(
       substitutes.push({ slot: 0, device: options.controls[0], by: "keyboard" });
     substitutes.sort((a, b) => a.slot - b.slot);
   }
-  return { options: { ...options, controls, overrides: { ...options.overrides } }, substitutes };
+  return {
+    options: {
+      ...options,
+      controls,
+      overrides: { ...options.overrides },
+      // A slot keeps its look whoever ends up playing it.
+      loadouts: options.loadouts.map((loadout) => ({ ...loadout })),
+    },
+    substitutes,
+  };
 }
 
 export const MATCH_STORAGE_KEY = "bramble.match.v1";
@@ -140,6 +150,7 @@ const copy = (options: MatchOptions): MatchOptions => ({
   ...options,
   controls: { ...options.controls },
   overrides: { ...options.overrides },
+  loadouts: options.loadouts.map((loadout) => ({ ...loadout })),
 });
 
 /** The saved options, every corrupt or missing field replaced by its default. */
@@ -166,8 +177,16 @@ export function saveMatchOptions(
 export interface MatchStore {
   /** A copy of the current options; changing it does not change the store. */
   get(): MatchOptions;
-  /** Merges `patch` (a `controls` or `overrides` patch replaces that map), sanitizes and saves. */
+  /**
+   * Merges `patch` (a `controls`, `overrides` or `loadouts` patch replaces that whole field),
+   * sanitizes and saves.
+   */
   set(patch: Partial<MatchOptions>): void;
+  /**
+   * Changes the look of one slot (animal, colours, accessory) and nothing else: who plays the
+   * slot, the other slots and the CPU strengths stay exactly as they are.
+   */
+  setLoadout(slot: number, patch: Partial<Loadout>): void;
   /** Puts a device (null: a CPU) on a slot, swapping with the slot that had it (`assignDevice`). */
   assign(slot: number, device: ControlDevice | null, fighterCount: number): void;
   /** Pad `index` joins on the first CPU slot; returns that slot, or null (`joinPad`). */
@@ -190,6 +209,10 @@ export function createMatchStore(storage: MatchStorage | null = browserStorage()
   return {
     get: () => copy(current),
     set,
+    setLoadout(slot, patch) {
+      const loadouts = withLoadout(current.loadouts, slot, patch);
+      if (JSON.stringify(loadouts) !== JSON.stringify(current.loadouts)) set({ loadouts });
+    },
     assign(slot, device, fighterCount) {
       const controls = assignDevice(current.controls, slot, device, fighterCount);
       if (JSON.stringify(controls) !== JSON.stringify(current.controls)) set({ controls });

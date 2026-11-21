@@ -2,6 +2,25 @@ import type { Fighter, GameState, MatchMode, Phase } from "../game/types";
 import { RULES } from "../game/tuning";
 import { effectiveSamples, FPS_LIMITS, MSAA_SAMPLES, RESOLUTION_OPTIONS } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, SettingsStore, ShadowLevel } from "../game/settings";
+import {
+  ACCESSORIES,
+  ACCESSORY_IDS,
+  CHARACTERS,
+  cssColor,
+  PALETTE_IDS,
+  PALETTES,
+  sameLoadout,
+  SPECIES_IDS,
+} from "../game/characters";
+import type { AccessoryId, Loadout, PaletteId, Species } from "../game/characters";
+import {
+  countHumans,
+  fighterTag,
+  fighterTitle,
+  SLOT_SHAPE_LABELS,
+  SLOT_SHAPE_POINTS,
+  slotShape,
+} from "../game/identity";
 import { AI_LEVEL_IDS, humanSlots, padIndex, STOCK_CHOICES } from "../game/match";
 import type { AiLevel, ControlDevice, MatchOptions } from "../game/match";
 import { playableOptions, type MatchStore } from "../game/matchStore";
@@ -17,7 +36,11 @@ export interface GameUICallbacks {
   onRestart: () => void;
   onMenu: () => void;
   onSound: (enabled: boolean) => void;
-  /** The remembered 対戦設定 (who plays what, lives and CPU strength). */
+  /** The title's mode or match options changed: the line-up of fighters behind the menu follows. */
+  onPreview: (mode: MatchMode, options: MatchOptions) => void;
+  /** The slot whose look is being chosen, for a close-up of its fighter; null when done. */
+  onSpotlight: (slot: number | null) => void;
+  /** The remembered 対戦設定 (who plays what, their looks, lives and CPU strength). */
   match: MatchStore;
   graphics: GraphicsSettingsBinding;
 }
@@ -100,6 +123,7 @@ const icons = {
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 8.5A1.5 1.5 0 0 1 5 7h2.2l1.6-2.2h6.4L16.8 7H19a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-9Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="1.6"/><path d="m3 3 18 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   pause:
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 19 1-4.2L16.6 4.2a1.6 1.6 0 0 1 2.3 0l.9.9a1.6 1.6 0 0 1 0 2.3L9.2 18 5 19Zm9.6-12.8 3.2 3.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   paw: '<svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true"><ellipse cx="9" cy="8" rx="3" ry="4" transform="rotate(-24 9 8)"/><ellipse cx="23" cy="8" rx="3" ry="4" transform="rotate(24 23 8)"/><ellipse cx="3.8" cy="16" rx="2.8" ry="3.5" transform="rotate(-30 3.8 16)"/><ellipse cx="28.2" cy="16" rx="2.8" ry="3.5" transform="rotate(30 28.2 16)"/><path d="M7 25c0-4 5-12 9-12s9 8 9 12c0 5-5 3-9 3s-9 2-9-3Z"/></svg>',
 };
 
@@ -121,9 +145,37 @@ const modes: Record<MatchMode, { label: string; en: string; detail: string; numb
 
 const levelLabels: Record<AiLevel, string> = { easy: "よわい", normal: "ふつう", hard: "つよい" };
 
-/** The fighters each mode puts on the island, by slot (slot 0 is always a player). */
-const FIGHTER_NAMES = ["コハク", "シロ", "モカ", "スミ"] as const;
 const fighterCount = (mode: MatchMode) => (mode === "rumble" ? 4 : 2);
+
+/**
+ * A slot's shape as an inline SVG, from the same outline the 3D markers use. It says which slot a
+ * fighter is without relying on colour, and adds no text to the tag it sits in.
+ */
+function glyph(slot: number): string {
+  const points = SLOT_SHAPE_POINTS[slotShape(slot)]
+    .map(([x, y]) => `${x.toFixed(2)},${(-y).toFixed(2)}`)
+    .join(" ");
+  return `<svg class="slot-glyph" viewBox="-1.3 -1.3 2.6 2.6" aria-hidden="true"><polygon points="${points}"/></svg>`;
+}
+
+const accessoryIcon = (paths: string) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const accessoryIcons: Record<AccessoryId, string> = {
+  none: accessoryIcon('<circle cx="12" cy="12" r="7.5"/><path d="m6.7 17.3 10.6-10.6"/>'),
+  headband: accessoryIcon(
+    '<path d="M3.5 10.4c5.5-2 11-2 16.5 0v3.2c-5.5-2-11-2-16.5 0Zm16.5 1.6 2.2 4.2M20 12l-.5 5.2"/>',
+  ),
+  crown: accessoryIcon('<path d="M5 17.5h14l1.5-9-4.6 3.7L12 6.3l-3.9 5.9L3.5 8.5Z"/>'),
+  goggles: accessoryIcon(
+    '<circle cx="7.6" cy="12" r="3.7"/><circle cx="16.4" cy="12" r="3.7"/><path d="M11.3 12h1.4M3.9 12H2m20 0h-1.9"/>',
+  ),
+  beret: accessoryIcon(
+    '<path d="M3.5 14.6c0-4.3 4-7.2 9-7.2 4.6 0 8 2.3 8 5.2 0 2.7-3.6 4.4-8.5 4.4-4.6 0-8.5-.8-8.5-2.4Zm9-7.2.8-2.4"/>',
+  ),
+  flower: accessoryIcon(
+    '<circle cx="12" cy="12" r="2"/><circle cx="12" cy="7.2" r="2.6"/><circle cx="16.6" cy="10.5" r="2.6"/><circle cx="14.8" cy="15.9" r="2.6"/><circle cx="9.2" cy="15.9" r="2.6"/><circle cx="7.4" cy="10.5" r="2.6"/>',
+  ),
+};
 
 /** On a phone or tablet the keyboard player's slot is played with the touch controls. */
 const touchOnly = (): boolean =>
@@ -134,10 +186,43 @@ const touchOnly = (): boolean =>
 const deviceLabel = (device: ControlDevice) =>
   device === "keyboard" ? (touchOnly() ? "タッチ" : "キーボード") : `パッド${device.slice(3)}`;
 
-/** One row per fighter slot: who plays it, and how strong it is when a CPU does. */
+/**
+ * One row per fighter slot: its character (a button that opens the look picker), who plays it,
+ * and how strong it is when a CPU does. The name, colour and labels follow the slot's loadout.
+ */
 function playerRowMarkup(id: number): string {
-  const name = FIGHTER_NAMES[id];
-  return `<div class="player-row" data-slot="${id}"><span class="player-name" data-fighter="${id}"><i aria-hidden="true"></i>${name}</span><select class="player-device" data-slot-device="${id}" aria-label="${name}の操作"></select><span class="player-badge" hidden></span><select class="player-level" data-slot-level="${id}" data-override="${id}" aria-label="${name}の強さ" hidden>${(["auto", ...AI_LEVEL_IDS] as const).map((level) => `<option value="${level}">${level === "auto" ? "おまかせ" : levelLabels[level]}</option>`).join("")}</select><span class="player-still" hidden>動かない</span></div>`;
+  return `<div class="player-row" data-slot="${id}"><button type="button" class="player-character" data-customize="${id}" title="見た目を変える">${glyph(id)}<span class="player-character-name"></span><span class="player-character-edit">${icons.edit}</span></button><select class="player-device" data-slot-device="${id}"></select><span class="player-badge" hidden></span><select class="player-level" data-slot-level="${id}" data-override="${id}" hidden>${(["auto", ...AI_LEVEL_IDS] as const).map((level) => `<option value="${level}">${level === "auto" ? "おまかせ" : levelLabels[level]}</option>`).join("")}</select><span class="player-still" hidden>動かない</span></div>`;
+}
+
+/**
+ * The look picker: animal, colours and accessory of one slot, docked beside the arena so the
+ * fighter itself is the preview. Every choice shows at once; 決定 keeps them, キャンセル puts
+ * back what was there when the picker opened.
+ */
+function characterDialogMarkup(): string {
+  const option = (attribute: string, value: string, content: string, extra = "") =>
+    `<button type="button" data-${attribute}="${value}" aria-pressed="false"${extra}>${content}</button>`;
+  return `
+      <dialog class="character-dialog" aria-labelledby="character-title">
+        <div class="help-head flex items-center justify-between"><div><div class="eyebrow">CHARACTER</div><h2 id="character-title">見た目をえらぶ</h2></div><button class="icon-button" data-action="cancel-character" aria-label="変更を取り消して閉じる">×</button></div>
+        <div class="character-slots" role="group" aria-label="見た目を変える枠" data-pad-tabs></div>
+        <p class="character-summary" aria-live="polite"></p>
+        <section class="character-section" aria-labelledby="character-species-title">
+          <h3 id="character-species-title">ANIMAL / 動物</h3>
+          <div class="character-options character-species" role="group" aria-labelledby="character-species-title">${SPECIES_IDS.map((id) => option("species", id, `<strong>${CHARACTERS[id].name}</strong><small>${CHARACTERS[id].animal}</small>`)).join("")}</div>
+        </section>
+        <section class="character-section" aria-labelledby="character-palette-title">
+          <h3 id="character-palette-title">COLOR / カラー</h3>
+          <div class="character-options character-palettes" role="group" aria-labelledby="character-palette-title">${PALETTE_IDS.map((id) => option("palette", id, `<i aria-hidden="true"></i><span>${PALETTES[id].label}</span>`, ` style="--swatch: ${cssColor(PALETTES[id].color)}"`)).join("")}</div>
+        </section>
+        <section class="character-section" aria-labelledby="character-accessory-title">
+          <h3 id="character-accessory-title">ACCESSORY / アクセサリ</h3>
+          <div class="character-options character-accessories" role="group" aria-labelledby="character-accessory-title">${ACCESSORY_IDS.map((id) => option("accessory", id, `${accessoryIcons[id]}<span>${ACCESSORIES[id].label}</span>`)).join("")}</div>
+        </section>
+        <p class="character-note"><strong>見た目だけの変更です。</strong>動物・色・アクセサリで、速さ・攻撃・スタミナ・当たり判定は変わりません。同じ動物や同じ色を何人で選んでもかまいません。</p>
+        <p class="character-pad-hint" hidden><span class="pad-key">A</span>えらぶ<span class="hint-dot"></span><span class="pad-key">B</span>キャンセル<span class="hint-dot"></span><kbd>Start</kbd>決定<span class="hint-dot"></span><kbd>LB</kbd><kbd>RB</kbd>枠の切り替え</p>
+        <div class="character-foot"><button class="text-button" data-action="revert-character">元に戻す</button><button class="secondary-button" data-action="cancel-character" data-pad-back>キャンセル</button><button class="primary-button" data-action="confirm-character" data-pad-start>決定 ${icons.arrow}</button></div>
+      </dialog>`;
 }
 
 function matchOptionsMarkup(): string {
@@ -185,7 +270,7 @@ function escapeHtml(value: string): string {
   );
 }
 
-const hex = (color: number) => `#${color.toString(16).padStart(6, "0")}`;
+const hex = cssColor;
 
 function setText(element: HTMLElement, value: string): void {
   if (element.textContent !== value) element.textContent = value;
@@ -209,8 +294,16 @@ interface FighterCard {
   lock: HTMLElement;
   /** What the life display last drew, so it is rebuilt only when it changes. */
   lifeKey: string;
-  /** Who the card was drawn for (player number, CPU); a change rebuilds it. */
+  /** Who the card was drawn for (tag and look); a change rebuilds it. */
   identity: string;
+}
+
+/** A player of the running match, for the lock-on chips. */
+interface PlayerMark {
+  number: number;
+  color: string;
+  /** The fighter's slot: its shape goes on the chip, beside the player number. */
+  slot: number;
 }
 
 /** DOM HUD stays independent of the deterministic combat and the Pixi scene. */
@@ -224,6 +317,11 @@ export class GameUI {
   private readonly pausePanel: HTMLElement;
   private readonly dialog: HTMLDialogElement;
   private readonly settingsDialog: HTMLDialogElement;
+  private readonly characterDialog: HTMLDialogElement;
+  /** The slot whose look is being chosen, and every slot's look as it was when the picker opened. */
+  private customizing: { slot: number; before: Loadout[] } | null = null;
+  /** The title's tag of each slot of the selected mode (YOU, P1…, CPU 0n). */
+  private slotTags: string[] = [];
   private readonly fpsCounter: HTMLElement;
   private readonly graphics: GraphicsSettingsBinding;
   private readonly match: MatchStore;
@@ -231,8 +329,8 @@ export class GameUI {
   private connectedPads: number[] = [];
   private locks: PlayerLock[] = [];
   private lockKey = "";
-  /** The running match's players by fighter id: player number and colour. */
-  private players = new Map<number, { number: number; color: string }>();
+  /** The running match's players by fighter id: player number, colour and slot shape. */
+  private players = new Map<number, PlayerMark>();
   private keyboardFighter: number | null = null;
   private readonly cards = new Map<number, FighterCard>();
   private currentPhase: Phase = "menu";
@@ -308,7 +406,7 @@ export class GameUI {
       </section>
 
       <section class="result-screen modal-scrim" role="dialog" aria-modal="true" aria-label="対戦結果" hidden>
-        <div class="modal-panel result-panel"><div class="result-paw">${icons.paw}</div><div class="eyebrow result-eyebrow">LAST PAWS STANDING</div><h2 class="result-title">勝負あり。</h2><p class="result-subtitle"></p><div class="result-stats"><div><strong data-stat="hits">0</strong><span>HITS</span></div><div><strong data-stat="clashes">0</strong><span>CLASHES</span></div><div><strong data-stat="time">0:00</strong><span>TIME</span></div></div><button class="primary-button" data-action="restart">もう一度、勝負 ${icons.arrow}</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel result-panel"><div class="result-paw">${icons.paw}</div><div class="eyebrow result-eyebrow">LAST PAWS STANDING</div><h2 class="result-title">勝負あり。</h2><p class="result-winner" hidden></p><p class="result-subtitle"></p><div class="result-stats"><div><strong data-stat="hits">0</strong><span>HITS</span></div><div><strong data-stat="clashes">0</strong><span>CLASHES</span></div><div><strong data-stat="time">0:00</strong><span>TIME</span></div></div><button class="primary-button" data-action="restart">もう一度、勝負 ${icons.arrow}</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
       </section>
 
       <dialog class="help-dialog" aria-labelledby="help-title">
@@ -322,6 +420,12 @@ export class GameUI {
           <div class="help-callout"><span class="callout-icon">${icons.sword}</span><div><strong>長押しでためる。<kbd>Q</kbd> でフェイント。</strong><p>ため中はキャンセルやステップに移れる。振りかぶり中は向きをゆっくり直せて、Qで止めることもできるが、スタミナは戻らず、遅く止めるほど隙が残る。斬りかかった剣は向きが固まり、最後まで振り抜く。</p></div></div>
           <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>光る円の内側が安全地帯。</strong>外では%とゲージが増加。5秒分たまるとアウト、内側ではゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
           <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。</p>
+          <section class="character-help" aria-labelledby="character-help-title">
+            <h3 id="character-help-title">CHARACTER / キャラクターと見た目</h3>
+            <p>タイトルの「対戦設定」で、各枠の名前のボタン（パッドは <kbd>Y</kbd>）を押すと、動物（コハク・シロ・モカ・スミ）、カラー、アクセサリを選べます。人間の枠も CPU の枠も同じように選べ、同じ動物・同じ色を何人で選んでもかまいません。選ぶたびに浮島のキャラクターがその姿に変わり、「決定」（パッドは <kbd>Start</kbd>）で確定、「キャンセル」（<kbd>Esc</kbd> / パッドは <kbd>B</kbd>）で開く前の姿に戻せます。選んだ姿は再戦でも次回の起動でも覚えています。</p>
+            <p><strong>見た目による性能差はありません。</strong>どの動物・色・アクセサリでも、移動、攻撃の速さと威力、吹っ飛び方、スタミナ、当たり判定はまったく同じです。操作する端末や CPU の強さも見た目とは別々に決められます。</p>
+            <p>同じ姿どうしでも、頭上と HUD のタグ（<kbd>YOU</kbd> / <kbd>P1</kbd>〜<kbd>P4</kbd> / <kbd>CPU</kbd>）と、枠ごとに決まった形（${[0, 1, 2, 3].map((slot) => `<span class="help-shape">${glyph(slot)}${SLOT_SHAPE_LABELS[slotShape(slot)]}</span>`).join("")}）で見分けられます。形は頭上のタグ、足もとの輪、HUD のカード、ロックオン表示で共通です。</p>
+          </section>
           <section class="pad-help" aria-labelledby="pad-help-title">
             <h3 id="pad-help-title">GAMEPAD / パッド</h3>
             <p class="pad-help-lead">パッドは4台まで、何人でも参加できます。キーボードとマウス（タッチ）はひとり分。タイトルでパッドの <kbd>A</kbd> か <kbd>Start</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
@@ -348,6 +452,7 @@ export class GameUI {
         <button class="primary-button help-done" data-action="close-help">準備できた ${icons.arrow}</button>
       </dialog>
       ${settingsDialogMarkup()}
+      ${characterDialogMarkup()}
       <div class="fps-counter" aria-hidden="true" hidden>-- FPS</div>
     `;
     this.menu = this.query(".menu-screen");
@@ -356,11 +461,15 @@ export class GameUI {
     this.pausePanel = this.query(".pause-screen");
     this.dialog = this.query<HTMLDialogElement>(".help-dialog");
     this.settingsDialog = this.query<HTMLDialogElement>(".settings-dialog");
+    this.characterDialog = this.query<HTMLDialogElement>(".character-dialog");
     this.fpsCounter = this.query(".fps-counter");
     host.addEventListener("click", this.handleClick, { signal: this.abort.signal });
-    for (const [dialog, close] of [
-      [this.dialog, () => this.closeHelp()],
-      [this.settingsDialog, () => this.closeSettings()],
+    // Esc on the look picker is "back": it puts the looks back as they were. A click beside it
+    // does nothing, since the fighter being dressed is out there.
+    for (const [dialog, close, dismissible] of [
+      [this.dialog, () => this.closeHelp(), true],
+      [this.settingsDialog, () => this.closeSettings(), true],
+      [this.characterDialog, () => this.closeCharacter(false), false],
     ] as const) {
       dialog.addEventListener("keydown", (event) => event.stopPropagation(), {
         signal: this.abort.signal,
@@ -369,7 +478,7 @@ export class GameUI {
       dialog.addEventListener(
         "click",
         (event) => {
-          if (event.target !== dialog) return;
+          if (!dismissible || event.target !== dialog) return;
           const rect = dialog.getBoundingClientRect();
           if (
             event.clientX < rect.left ||
@@ -425,10 +534,33 @@ export class GameUI {
     const connected = (pad: number) => this.connectedPads.includes(pad);
     const { options: playable, substitutes } = playableOptions(options, count, connected);
     const players = humanSlots(playable, count);
+    const nameOf = (id: number) => CHARACTERS[options.loadouts[id]!.species].name;
+    this.slotTags = Array.from({ length: count }, (_, id) => {
+      const player = players.findIndex((slot) => slot.id === id) + 1;
+      return fighterTag({ id, human: player > 0, player: player || null }, players.length);
+    });
     for (let id = 0; id < count; id++) {
       const row = rows.querySelector<HTMLElement>(`[data-slot="${id}"]`)!;
       const stored = options.controls[id] ?? null;
       const device = row.querySelector<HTMLSelectElement>(".player-device")!;
+      // The slot's character: its name and colour, and labels that still tell two rows with the
+      // same character apart.
+      const loadout = options.loadouts[id]!;
+      const who = `${id + 1}番の枠（${nameOf(id)}）`;
+      row.style.setProperty("--slot-color", cssColor(PALETTES[loadout.palette].color));
+      setText(row.querySelector<HTMLElement>(".player-character-name")!, nameOf(id));
+      const labels: [string, string][] = [
+        [
+          ".player-character",
+          `${who}の見た目を変える。いまは${CHARACTERS[loadout.species].animal}、${PALETTES[loadout.palette].label}、アクセサリ${ACCESSORIES[loadout.accessory].label}`,
+        ],
+        [".player-device", `${who}の操作`],
+        [".player-level", `${who}の強さ`],
+      ];
+      for (const [selector, label] of labels) {
+        const element = row.querySelector<HTMLElement>(selector)!;
+        if (element.getAttribute("aria-label") !== label) element.setAttribute("aria-label", label);
+      }
       // Sensible choices only: the keyboard, the connected pads, and this slot's own pad even
       // while it is away. A CPU slot cannot take slot 0's device (slot 0 would be left empty).
       const choices: { value: string; label: string }[] = [];
@@ -469,10 +601,90 @@ export class GameUI {
     hint.classList.toggle("warning", Boolean(lost));
     const markup = lost
       ? lost.by === "keyboard"
-        ? `${deviceLabel(lost.device)}が未接続のため、${FIGHTER_NAMES[lost.slot]}は${deviceLabel("keyboard")}で操作します`
+        ? `${deviceLabel(lost.device)}が未接続のため、${nameOf(lost.slot)}は${deviceLabel("keyboard")}で操作します`
         : `未接続のパッドの枠は CPU が戦います`
-      : `<span class="pad-key">A</span>パッドのボタンを押して参加<span class="hint-dot"></span><span class="pad-key">B</span>抜ける`;
+      : `<span class="pad-key">A</span>パッドのボタンを押して参加<span class="hint-dot"></span><span class="pad-key">B</span>抜ける<span class="hint-dot"></span><span class="hint-pair"><span class="pad-key">Y</span>見た目</span>`;
     if (hint.innerHTML !== markup) hint.innerHTML = markup;
+    this.syncCharacter();
+    this.callbacks.onPreview(mode, options);
+  }
+
+  /** Reflects the slot being dressed, and its stored look, in the look picker. */
+  private syncCharacter(): void {
+    const look = this.customizing;
+    if (!look) return;
+    const dialog = this.characterDialog;
+    const options = this.match.get();
+    const loadout = options.loadouts[look.slot]!;
+    const character = CHARACTERS[loadout.species];
+    const palette = PALETTES[loadout.palette];
+    dialog.style.setProperty("--slot-color", cssColor(palette.color));
+    // One tab per slot of the mode: shape, tag and current name. Rebuilt only when one changes.
+    const tabs = dialog.querySelector<HTMLElement>(".character-slots")!;
+    const markup = this.slotTags
+      .map((tag, id) => {
+        const other = options.loadouts[id]!;
+        return `<button type="button" data-customize-slot="${id}" aria-pressed="false" style="--slot-color: ${cssColor(PALETTES[other.palette].color)}">${glyph(id)}<span>${tag}</span><small>${CHARACTERS[other.species].name}</small></button>`;
+      })
+      .join("");
+    if (tabs.dataset.markup !== markup) {
+      tabs.dataset.markup = markup;
+      tabs.innerHTML = markup;
+    }
+    const press = (selector: string, attribute: string, value: string, primary = false) => {
+      for (const button of dialog.querySelectorAll<HTMLElement>(selector)) {
+        const on = button.dataset[attribute] === value;
+        button.setAttribute("aria-pressed", String(on));
+        if (primary) button.toggleAttribute("data-pad-primary", on);
+      }
+    };
+    press("[data-customize-slot]", "customizeSlot", String(look.slot));
+    press("[data-species]", "species", loadout.species, true);
+    press("[data-palette]", "palette", loadout.palette);
+    press("[data-accessory]", "accessory", loadout.accessory);
+    setText(
+      dialog.querySelector<HTMLElement>(".character-summary")!,
+      `${this.slotTags[look.slot] ?? ""} ・ ${character.name}（${character.animal}） ・ ${palette.label} ・ ${ACCESSORIES[loadout.accessory].label}`,
+    );
+    const changed = options.loadouts.some((now, id) => !sameLoadout(now, look.before[id]!));
+    dialog.querySelector<HTMLButtonElement>('[data-action="revert-character"]')!.disabled =
+      !changed;
+    dialog.querySelector<HTMLElement>(".character-pad-hint")!.hidden =
+      this.connectedPads.length === 0;
+  }
+
+  /** Opens the look picker on `slot` of the selected mode (title screen only). */
+  private openCharacter(slot: number): void {
+    if (this.currentPhase !== "menu" || this.host.querySelector("dialog[open]")) return;
+    if (!Number.isInteger(slot) || slot < 0 || slot >= fighterCount(this.selectedMode)) return;
+    this.previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    this.customizing = { slot, before: this.match.get().loadouts };
+    this.syncCharacter();
+    this.host.dataset.characterOpen = "";
+    this.characterDialog.showModal();
+    this.characterDialog.querySelector<HTMLElement>("[data-pad-primary]")?.focus();
+    this.callbacks.onSpotlight(slot);
+  }
+
+  /** Another slot's tab: the choices made so far stay; cancelling still undoes them all. */
+  private selectCharacterSlot(slot: number): void {
+    if (!this.customizing || slot < 0 || slot >= fighterCount(this.selectedMode)) return;
+    this.customizing.slot = slot;
+    this.syncCharacter();
+    this.callbacks.onSpotlight(slot);
+  }
+
+  /** Closes the look picker; unless `keep`, every slot goes back to how it looked when it opened. */
+  private closeCharacter(keep: boolean): void {
+    const look = this.customizing;
+    if (!look) return;
+    this.customizing = null;
+    if (!keep) this.match.set({ loadouts: look.before });
+    if (this.characterDialog.open) this.characterDialog.close();
+    delete this.host.dataset.characterOpen;
+    this.callbacks.onSpotlight(null);
+    this.previousFocus?.focus();
   }
 
   /** The connected pads (indices 0-3), for the title's device choices. */
@@ -487,8 +699,16 @@ export class GameUI {
    * Returns true when the press did that.
    */
   padTitleButton(index: number, button: TitleButton): boolean {
-    if (this.dialog.open || this.settingsDialog.open) return false;
+    if (this.host.querySelector("dialog[open]")) return false;
     const count = fighterCount(this.selectedMode);
+    if (button === "y") {
+      // Y opens the look picker on the slot that pad plays (the first slot before it has joined).
+      const controls = this.match.get().controls;
+      let slot = 0;
+      for (let id = 0; id < count; id++) if (controls[id] === `pad${index + 1}`) slot = id;
+      this.openCharacter(slot);
+      return true;
+    }
     const slot = button === "b" ? this.match.leave(index, count) : this.match.join(index, count);
     if (slot === null) return false;
     const row = this.host.querySelector<HTMLElement>(`.player-row[data-slot="${slot}"]`);
@@ -630,7 +850,8 @@ export class GameUI {
           .map((lock) => {
             const player = this.players.get(lock.fighterId);
             if (!several || !player) return '<span class="fighter-lock">LOCK</span>';
-            return `<span class="fighter-lock player-lock" style="--lock-color: ${player.color}">P${player.number} LOCK</span>`;
+            // Number and slot shape: two players in the same colour still have their own chip.
+            return `<span class="fighter-lock player-lock" style="--lock-color: ${player.color}">${glyph(player.slot)}P${player.number} LOCK</span>`;
           })
           .join("");
       }
@@ -651,9 +872,31 @@ export class GameUI {
   private handleClick = (event: MouseEvent): void => {
     // Buttons only: the host itself carries data-mode (the running match's mode).
     const target = (event.target as Element).closest<HTMLElement>(
-      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty]",
+      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty], [data-customize], [data-customize-slot], [data-species], [data-palette], [data-accessory]",
     );
     if (!target) return;
+    if (target.dataset.customize !== undefined) {
+      this.openCharacter(Number(target.dataset.customize));
+      return;
+    }
+    if (target.dataset.customizeSlot !== undefined) {
+      this.selectCharacterSlot(Number(target.dataset.customizeSlot));
+      return;
+    }
+    // A choice in the look picker changes that slot's look and nothing else; the fighter in the
+    // arena follows at once.
+    const look = this.customizing;
+    const choice: Partial<Loadout> | null = target.dataset.species
+      ? { species: target.dataset.species as Species }
+      : target.dataset.palette
+        ? { palette: target.dataset.palette as PaletteId }
+        : target.dataset.accessory
+          ? { accessory: target.dataset.accessory as AccessoryId }
+          : null;
+    if (choice) {
+      if (look) this.match.setLoadout(look.slot, choice);
+      return;
+    }
     const shadow = target.dataset.shadow as ShadowLevel | undefined;
     if (shadow) {
       this.graphics.store.set({ shadows: shadow });
@@ -717,6 +960,15 @@ export class GameUI {
       case "reset-settings":
         this.graphics.store.reset();
         break;
+      case "confirm-character":
+        this.closeCharacter(true);
+        break;
+      case "cancel-character":
+        this.closeCharacter(false);
+        break;
+      case "revert-character":
+        if (look) this.match.set({ loadouts: look.before });
+        break;
       case "sound": {
         this.sound = !this.sound;
         target.innerHTML = this.sound ? icons.sound : icons.mute;
@@ -729,7 +981,7 @@ export class GameUI {
   };
 
   private openHelp(): void {
-    if (this.dialog.open) return;
+    if (this.host.querySelector("dialog[open]")) return;
     this.previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.resumeAfterHelp = this.currentPhase === "playing" || this.currentPhase === "countdown";
@@ -746,7 +998,7 @@ export class GameUI {
   }
 
   private openSettings(): void {
-    if (this.settingsDialog.open || this.dialog.open) return;
+    if (this.host.querySelector("dialog[open]")) return;
     this.previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Opened from the pause panel the match stays paused; during play it pauses and resumes.
@@ -768,8 +1020,12 @@ export class GameUI {
 
   /** The card's tag: YOU alone, P1 / P2 … with several players, CPU 0n for the others. */
   private identity(fighter: Fighter): string {
-    if (!fighter.human) return "CPU " + String(fighter.id).padStart(2, "0");
-    return this.players.size > 1 ? `P${fighter.player ?? 1}` : "YOU";
+    return fighterTag(fighter, this.players.size);
+  }
+
+  /** What a card was drawn for: whose it is and what that fighter looks like. */
+  private cardIdentity(fighter: Fighter): string {
+    return `${this.identity(fighter)}/${fighter.species}/${fighter.palette}/${fighter.accessory}`;
   }
 
   private createCard(fighter: Fighter): FighterCard {
@@ -780,14 +1036,11 @@ export class GameUI {
     card.style.setProperty("--fighter-color", hex(fighter.color));
     card.setAttribute(
       "aria-label",
-      tag === "YOU"
-        ? "あなたの状態"
-        : fighter.human
-          ? `${tag}（${fighter.name}）の状態`
-          : `${fighter.name}の状態`,
+      `${tag === "YOU" ? "あなた" : tag}（${fighter.name}、${SLOT_SHAPE_LABELS[slotShape(fighter.id)]}の印）の状態`,
     );
+    // The slot's shape leads the tag: the same shape floats over the fighter and sits on its ring.
     card.innerHTML = `
-      <div class="fighter-card-top"><span class="fighter-tags"><span class="fighter-tag">${tag}</span><span class="fighter-level"></span></span><span class="fighter-status">READY</span></div>
+      <div class="fighter-card-top"><span class="fighter-tags"><span class="fighter-tag">${glyph(fighter.id)}${tag}</span><span class="fighter-level"></span></span><span class="fighter-status">READY</span></div>
       <span class="fighter-invulnerable" hidden>無敵</span><span class="fighter-locks" hidden></span>
       <div class="fighter-main"><span class="fighter-avatar species-${fighter.species}">${icons.paw}</span><div class="fighter-ident"><span class="fighter-name">${escapeHtml(fighter.name)}</span><span class="fighter-species">${fighter.species.toUpperCase()}</span><span class="fighter-life" role="img"></span></div><strong class="fighter-damage"><span>0</span><small>%</small></strong></div>
       <div class="stamina-label"><span>STAMINA</span><span class="stamina-value">100</span></div><div class="stamina-track" role="meter" aria-label="スタミナ" aria-valuemin="0" aria-valuemax="100"><span></span></div>
@@ -814,13 +1067,15 @@ export class GameUI {
       invulnerable: q(".fighter-invulnerable"),
       lock: q(".fighter-locks"),
       lifeKey: "",
-      identity: this.identity(fighter),
+      identity: this.cardIdentity(fighter),
     };
   }
 
   update(state: GameState): void {
     const changedPhase = this.currentPhase !== state.phase;
     this.currentPhase = state.phase;
+    // The look picker belongs to the title: a match that starts keeps what was chosen so far.
+    if (state.phase !== "menu" && this.customizing) this.closeCharacter(true);
     this.host.dataset.phase = state.phase;
     this.host.dataset.mode = state.mode;
     const inMatch = state.phase !== "menu";
@@ -873,7 +1128,10 @@ export class GameUI {
     this.players = new Map(
       state.fighters
         .filter((fighter) => fighter.human)
-        .map((fighter) => [fighter.id, { number: fighter.player ?? 1, color: hex(fighter.color) }]),
+        .map((fighter) => [
+          fighter.id,
+          { number: fighter.player ?? 1, color: hex(fighter.color), slot: fighter.id },
+        ]),
     );
     this.keyboardFighter = slots.find((slot) => slot.device === "keyboard")?.id ?? null;
     const padPlayers = slots.some((slot) => slot.device !== "keyboard");
@@ -886,7 +1144,7 @@ export class GameUI {
     let rebuilt = false;
     for (const [id, card] of this.cards) {
       const fighter = state.fighters.find((f) => f.id === id);
-      if (!ids.has(id) || !fighter || card.identity !== this.identity(fighter)) {
+      if (!ids.has(id) || !fighter || card.identity !== this.cardIdentity(fighter)) {
         card.element.remove();
         this.cards.delete(id);
       }
@@ -942,6 +1200,17 @@ export class GameUI {
       const humans = state.fighters.filter((fighter) => fighter.human);
       const several = humans.length > 1;
       const tag = winner?.human && several ? `P${winner.player ?? 1}` : null;
+      // Who won, the way the match showed them: slot shape, tag, name and colour.
+      const badge = this.query(".result-winner");
+      badge.hidden = !winner;
+      const badgeMarkup = winner
+        ? `<span class="winner-tag">${glyph(winner.id)}${fighterTag(winner, countHumans(state.fighters))}</span><span class="winner-name">${escapeHtml(winner.name)}</span>`
+        : "";
+      if (badge.dataset.markup !== badgeMarkup) {
+        badge.dataset.markup = badgeMarkup;
+        badge.innerHTML = badgeMarkup;
+        if (winner) badge.style.setProperty("--fighter-color", hex(winner.color));
+      }
       this.query(".result-title").textContent = winner?.human
         ? tag
           ? `${tag} の勝ち。`
@@ -963,7 +1232,7 @@ export class GameUI {
           ? `${who}残機を ${livesLeft} つ残して、足場を守り抜いた。`
           : `${who}最後まで、足場を守り抜いた。`
         : winner
-          ? `${winner.name} の勝利${livesLeft ? `（残機 ${livesLeft}）` : ""}${reason ? ` / ${reason}` : ""}`
+          ? `${fighterTitle(winner, state.fighters)} の勝利${livesLeft ? `（残機 ${livesLeft}）` : ""}${reason ? ` / ${reason}` : ""}`
           : "次の一撃で、決着をつけよう。";
       this.query('[data-stat="hits"]').textContent = String(state.stats.hits);
       this.query('[data-stat="clashes"]').textContent = String(state.stats.clashes);
@@ -996,6 +1265,7 @@ export class GameUI {
     cancelAnimationFrame(this.renderSizeFrame);
     this.dialog.close();
     this.settingsDialog.close();
+    this.characterDialog.close();
     this.host.replaceChildren();
   }
 }
