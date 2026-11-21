@@ -130,6 +130,18 @@ export const RULES = {
 /** `RULES.inputBuffer` in fixed simulation ticks: 6 at 60 Hz. */
 export const INPUT_BUFFER_TICKS = Math.round(RULES.inputBuffer / RULES.fixedStep);
 
+/** Landing recovery on the 60 Hz simulation clock. */
+export const UKEMI = {
+  windowTicks: 10,
+  duration: 16 * RULES.fixedStep,
+  protection: 8 * RULES.fixedStep,
+  rollTime: 12 * RULES.fixedStep,
+  rollSpeed: 9,
+  knockdownDuration: 28 * RULES.fixedStep,
+  knockdownProtection: 5 * RULES.fixedStep,
+  cpuChance: { easy: 0.2, normal: 0.5, hard: 0.8 },
+} as const;
+
 /** How a CPU of each strength plays. `normal` reproduces the original CPU. */
 export interface AiProfile {
   /** Seconds between decisions: `thinkMin + random × thinkRange`. */

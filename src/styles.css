@@ -2596,7 +2596,8 @@ kbd {
   [data-mode="rumble"] .fighter-invulnerable {
     right: 3px;
   }
-  /* The narrow rumble cards drop the status line, except to say a fighter is coming back. */
+  /* Keep landing outcomes, readiness and respawns readable on compact cards. */
+  [data-mode="rumble"] .fighter-status.landing-status,
   [data-mode="rumble"] .respawning .fighter-status {
     display: block;
     font-size: 7px;

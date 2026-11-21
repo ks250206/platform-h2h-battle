@@ -356,6 +356,8 @@ const statusLabels: Record<Fighter["mode"], string> = {
   step: "STEP",
   cancel: "FEINT",
   hitstun: "HIT",
+  ukemi: "UKEMI",
+  knockdown: "DOWN",
   grab: "GRAB",
   grabbed: "CAUGHT",
   throw: "THROW",
@@ -518,7 +520,7 @@ export class GameUI {
         <div class="help-body">
           <p class="help-intro">%が高いほど、遠くへ吹っ飛ぶ。落ちても残機があれば安全地帯の中へ戻り、点滅しているあいだは少しだけ無敵。相手の残機を削りきり、最後まで生き残ろう。</p>
           <div class="help-columns">
-            <section><h3>MOVE / 移動と回避</h3><dl class="key-list"><div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>移動 / 吹っ飛び方向の微調整</dd></div><div><dt><kbd>Tab</kbd> ロックオン　<kbd>E</kbd> / ホイール 相手切替</dt><dd>ロックオン中は相手に向き続ける。Tab で解除するとマウス・矢印キー・右スティックで自由に向ける</dd></div><div><dt><kbd>Space</kbd></dt><dd>ジャンプ（空中ジャンプなし）</dd></div><div><dt><kbd>Shift</kbd> + 移動</dt><dd>向きを変えずにステップ / 空中でも1回</dd></div><div><dt><kbd>V</kbd> / <kbd>Esc</kbd></dt><dd>視点の自動追随の切り替え / 一時停止</dd></div></dl></section>
+            <section><h3>MOVE / 移動と回避</h3><dl class="key-list"><div><dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>移動 / 吹っ飛び方向の微調整</dd></div><div><dt><kbd>Tab</kbd> ロックオン　<kbd>E</kbd> / ホイール 相手切替</dt><dd>ロックオン中は相手に向き続ける。Tab で解除するとマウス・矢印キー・右スティックで自由に向ける</dd></div><div><dt><kbd>Space</kbd></dt><dd>ジャンプ（空中ジャンプなし）</dd></div><div><dt><kbd>Shift</kbd> + 移動</dt><dd>向きを変えずにステップ / 空中でも1回</dd></div><div><dt>受け身</dt><dd>吹き飛ばされて硬直中、着地まで約0.17秒の間に Shift・パッドの B・タッチの「回避」を押す。方向入力で転がり、ニュートラルならその場で立て直す。成功は UKEMI、失敗は DOWN。READY で再行動できる。</dd></div><div><dt><kbd>V</kbd> / <kbd>Esc</kbd></dt><dd>視点の自動追随の切り替え / 一時停止</dd></div></dl></section>
             <section><h3>ATTACK / 大剣の4つの技</h3><dl class="key-list"><div><dt><kbd>J</kbd> 振り下ろし</dt><dd>重い一撃 / 空中ではメテオ</dd></div><div><dt><kbd>I</kbd> 振り上げ</dt><dd>斜め上へ上昇 / 復帰にも</dd></div><div><dt><kbd>K</kbd> 横振り</dt><dd>広い横幅 / 横ステップを狩る</dd></div><div><dt><kbd>L</kbd> 突き</dt><dd>前へ踏み込む / 空中の横復帰</dd></div><div><dt><kbd>U</kbd> つかむ</dt><dd>近距離でつかみ、移動方向に投げる</dd></div></dl></section>
           </div>
           <div class="help-callout"><span class="callout-icon">${icons.sword}</span><div><strong>長押しでためる。<kbd>Q</kbd> でフェイント。</strong><p>ため中はキャンセルやステップに移れる。振りかぶり中は向きをゆっくり直せて、Qで止めることもできるが、スタミナは戻らず、遅く止めるほど隙が残る。斬りかかった剣は向きが固まり、最後まで振り抜く。</p></div></div>
@@ -1414,6 +1416,10 @@ export class GameUI {
       card.element.style.setProperty(
         "--charge",
         String(Math.min(1, fighter.charge / RULES.maxCharge)),
+      );
+      card.status.classList.toggle(
+        "landing-status",
+        ["idle", "ukemi", "knockdown"].includes(fighter.mode),
       );
       setText(card.status, out ? "OUT" : respawning ? "復帰中" : statusLabels[fighter.mode]);
       card.stamina.style.transform = `scaleX(${Math.max(0, Math.min(1, fighter.stamina / RULES.maxStamina))})`;

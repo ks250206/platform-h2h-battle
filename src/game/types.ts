@@ -14,6 +14,8 @@ export type FighterMode =
   | "recovery"
   | "step"
   | "cancel"
+  | "ukemi"
+  | "knockdown"
   | "hitstun"
   | "grab"
   | "grabbed"
@@ -82,6 +84,8 @@ export interface Fighter {
   grabbedId: number | null;
   grabbedBy: number | null;
   throwDirection: Vec2;
+  /** In hitstun from an applied launch, until landing or regaining control. */
+  tumbling: boolean;
   pendingLaunch: { x: number; y: number; z: number } | null;
   diInput: Vec2;
   lastAttacker: number | null;
@@ -93,7 +97,7 @@ export interface Fighter {
   aiIntent: Vec2;
   /**
    * A press made while this fighter could not act on it, held for a few fixed ticks so it fires on
-   * the first tick it becomes legal (see `RULES.inputBuffer`). Humans only; null when empty.
+   * the first tick it becomes legal (see `RULES.inputBuffer`). CPUs use it only for a landing tech.
    */
   inputBuffer: BufferedInput | null;
 }
@@ -107,12 +111,11 @@ export interface BufferedInput {
   attack: AttackId | null;
   /**
    * Fixed simulation ticks since the press (0 on its own tick); it may fire while
-   * `<= INPUT_BUFFER_TICKS` (one more with `landingGrace`).
+   * within its action window (six ticks normally, ten for a tech).
    */
   age: number;
   /**
-   * What the fighter was doing when the button went down. Lets a later rule (a tech roll on a
-   * hitstun landing, say) recognise and take a step that was buffered out of hitstun.
+   * What the fighter was doing when the button went down. A tech claims only a hitstun press.
    */
   pressedIn: FighterMode;
   /**
@@ -153,6 +156,7 @@ export type EffectKind =
   | "step"
   | "charge"
   | "jump"
+  | "ukemi"
   | "land"
   | "ko"
   | "bomb"
@@ -197,6 +201,7 @@ export interface PlayerInput {
   attackPressed: AttackId | null;
   attackHeld: AttackId | null;
   jump: boolean;
+  /** Rising edge from the input device, consumed once. */
   step: boolean;
   cancel: boolean;
   grab: boolean;

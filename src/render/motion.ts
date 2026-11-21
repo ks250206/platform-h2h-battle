@@ -1,4 +1,4 @@
-import { ATTACKS, RULES } from "../game/tuning";
+import { ATTACKS, RULES, UKEMI } from "../game/tuning";
 import type { AttackId, Fighter, FighterMode } from "../game/types";
 import {
   add,
@@ -28,6 +28,7 @@ import {
   attackPose,
   CLASH,
   CROSSES_BODY,
+  getUpPose,
   grabPose,
   grabWhiffPose,
   GUARD,
@@ -358,6 +359,10 @@ export class FighterMotion {
       }
       if (frozen) this.tumbleAngle = Math.max(this.tumbleAngle, 0.34);
       if (f.grounded) this.tumbleAngle += (0.5 - this.tumbleAngle) * (1 - Math.exp(-step * 9));
+    } else if (f.mode === "ukemi") {
+      const d = norm(toBody(f.stepDirection.x, f.stepDirection.z), v3(0, 0, 1));
+      this.tumbleAxis = norm(cross(v3(0, 1, 0), d));
+      this.tumbleAngle = TAU * easeInOut(clamp01(f.modeTime / UKEMI.rollTime));
     } else if (f.mode === "step" && !f.grounded && f.stepDelay <= 0) {
       // An air dodge is one full somersault over the direction of travel.
       const d = norm(toBody(f.stepDirection.x, f.stepDirection.z), v3(0, 0, 1));
@@ -571,6 +576,12 @@ export class FighterMotion {
         result.planted = 0;
         result.legs = f.grounded ? 1 : 0;
         result.carry = 1;
+        return result;
+      }
+      case "ukemi":
+      case "knockdown": {
+        result.pose = this.sided(getUpPose(f.mode === "ukemi", progress));
+        result.planted = result.legs = result.carry = 0;
         return result;
       }
       case "hitstun": {

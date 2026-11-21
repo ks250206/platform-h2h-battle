@@ -714,9 +714,11 @@ describe("an interruption drops presses made before it", () => {
     // Pressed during hitstop: held as usual (it ages out long before the hitstun ends).
     ticks(engine, 1, press({ grab: true }));
     expect(player.inputBuffer).toMatchObject({ action: "grab", pressedIn: "hitstun", age: 0 });
-    // Pressed late in the hitstun: fires on the tick it ends.
+    // The low sweep lands during hitstun: contact claims the new press exactly once.
     pressLateIn(engine, player, "hitstun", 3, press({ step: true }));
-    expect(player.mode).toBe("step");
+    expect(player.mode).toBe("ukemi");
+    expect(player.inputBuffer).toBeNull();
+    expect(engine.state.stats.dodges).toBe(0);
   });
 
   test("being grabbed drops a press buffered before the catch; a press while held still buffers", () => {

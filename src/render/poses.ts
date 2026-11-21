@@ -75,6 +75,42 @@ export const GUARD = make({
   footRYaw: -0.32,
 });
 
+/** Shoulder tucked, sword held across the chest as the feet leave the floor. */
+const TECH_TUCK = make({
+  hip: v3(0.06, -0.23, 0),
+  hipPitch: 0.46,
+  chestPitch: 0.78,
+  chestRoll: 0.32,
+  headPitch: 0.52,
+  footL: v3(0.15, 0.36, 0.24),
+  footR: v3(-0.14, 0.29, 0.18),
+  gripAt: v3(-0.14, 0.74, 0.25),
+  dir: dirYE(82, 12),
+});
+
+/** Down on one hip, bracing against the floor with the free hand. */
+const DOWN = make({
+  hip: v3(-0.14, -0.43, 0),
+  hipRoll: -0.48,
+  chestRoll: -0.62,
+  headRoll: 0.22,
+  footL: v3(0.33, 0, 0.4),
+  footR: v3(-0.26, 0, 0.22),
+  offFree: 1,
+  offHand: v3(0.4, -0.68, 0.04),
+  gripAt: v3(-0.35, 0.34, -0.12),
+  dir: dirYE(-152, -6),
+});
+
+export function getUpPose(success: boolean, progress: number): Pose {
+  const plant = success ? 0.6 : 0.48;
+  return blendPose(
+    success ? TECH_TUCK : DOWN,
+    GUARD,
+    easeInOut(Math.max(0, (progress - plant) / (1 - plant))),
+  );
+}
+
 /** Off duty: the blade resting on the shoulder, free hand on the hip. Title and victory. */
 export const SHOULDER = make({
   hip: v3(0.02, -0.015, 0),

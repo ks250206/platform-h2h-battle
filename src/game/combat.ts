@@ -1,5 +1,5 @@
 import { canStandAtStage } from "./stages";
-import { ATTACKS, RULES } from "./tuning";
+import { ATTACKS, RULES, UKEMI } from "./tuning";
 import type { Fighter, GameState, Vec2 } from "./types";
 
 export const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -32,14 +32,14 @@ export function canStandAt(state: GameState, x: number, z: number): boolean {
   return canStandAtStage(state.arena.stageId, x, z, state.arena.halfSize);
 }
 
-export function isInvulnerable(f: Fighter): boolean {
-  return (
-    f.invulnerable > 0 ||
-    (f.mode === "step" &&
-      f.stepDelay <= 0 &&
-      f.modeTime >= RULES.stepInvulStart &&
-      f.modeTime < RULES.stepInvulEnd)
-  );
+/** Includes a look-ahead for CPUs deciding whether their wind-up will connect. */
+export function isInvulnerable(f: Fighter, ahead = 0): boolean {
+  if (f.invulnerable > ahead) return true;
+  const at = f.modeTime + ahead;
+  if (f.mode === "ukemi") return at + 1e-8 < UKEMI.protection;
+  if (f.mode === "knockdown") return at + 1e-8 < UKEMI.knockdownProtection;
+  const stepTime = at - f.stepDelay;
+  return f.mode === "step" && stepTime >= RULES.stepInvulStart && stepTime < RULES.stepInvulEnd;
 }
 
 export function attackContains(a: Fighter, b: Fighter): boolean {

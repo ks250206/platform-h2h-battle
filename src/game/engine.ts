@@ -10,13 +10,9 @@ import {
   sanitizeMatchOptions,
   type MatchOptions,
 } from "./match";
+import { advanceRoll, cpuTechOpportunity, rollDirection } from "./ukemi";
 import { clearWalk, routeDirection } from "./navigation";
-import {
-  effectiveRules,
-  timeLimitFor,
-  type StageInfo,
-  type TimeRule,
-} from "./rules";
+import { effectiveRules, timeLimitFor, type StageInfo, type TimeRule } from "./rules";
 import {
   canStandAtStage,
   conveyorVelocityAt,
@@ -29,7 +25,7 @@ import {
   stageInfoFor,
   STAGES,
 } from "./stages";
-import { AI_LEVELS, ATTACKS, INPUT_BUFFER_TICKS, RULES, type AiProfile } from "./tuning";
+import { AI_LEVELS, ATTACKS, INPUT_BUFFER_TICKS, RULES, UKEMI, type AiProfile } from "./tuning";
 import {
   angleDelta,
   attackContains,
@@ -71,15 +67,6 @@ export {
  */
 export function matchTimeLimit(stocks: number, time: TimeRule = "standard"): number {
   return timeLimitFor(stocks, time);
-}
-
-/** Will `f` still be untouchable `t` seconds from now (timed invulnerability or a step's window)? */
-function invulnerableAfter(f: Fighter, t: number): boolean {
-  if (f.invulnerable > t) return true;
-  if (f.mode !== "step") return false;
-  // A feint step's clock only starts once its delay has run out.
-  const at = f.modeTime + Math.max(0, t - f.stepDelay);
-  return at >= RULES.stepInvulStart && at < RULES.stepInvulEnd;
 }
 
 /**
@@ -146,6 +133,7 @@ function makeFighter(id: number, count: number, options: MatchOptions): Fighter 
     grabbedId: null,
     grabbedBy: null,
     throwDirection: { x: 0, z: 0 },
+    tumbling: false,
     pendingLaunch: null,
     diInput: { x: 0, z: 0 },
     lastAttacker: null,
@@ -381,7 +369,7 @@ export class BattleEngine {
       if ((f.mode as Fighter["mode"]) === "dead") continue;
       f.invulnerable = Math.max(0, f.invulnerable - dt);
       // The buffer ages every tick, hitstop included, so a press never outlives its window.
-      if (f.human) this.ageBuffer(f);
+      this.ageBuffer(f);
       if (f.hitstop > 0) {
         f.hitstop = Math.max(0, f.hitstop - dt);
         if (f.hitstop > 0) {
@@ -396,6 +384,10 @@ export class BattleEngine {
       }
       this.updateMode(f, input, dt);
       if (f.mode === "dead") continue;
+      if (!f.human && state.mode !== "training" && cpuTechOpportunity(state, f, dt)) {
+        input.step = this.random() < UKEMI.cpuChance[f.aiLevel];
+        if (input.step) this.holdPress(f, input);
+      }
       this.handleInput(f, f.human ? this.bufferedInput(f, input) : input, dt);
       this.physics(f, input, dt);
     }
@@ -406,6 +398,7 @@ export class BattleEngine {
   }
 
   private setMode(f: Fighter, mode: Fighter["mode"], duration = 0): void {
+    f.tumbling = false;
     f.mode = mode;
     f.modeTime = 0;
     f.modeDuration = duration;
@@ -458,13 +451,19 @@ export class BattleEngine {
   }
 
   /**
-   * One fixed tick older; a press past `INPUT_BUFFER_TICKS` is dropped and never fires. A jump or
+   * One fixed tick older. Launched step presses use the tech window; other presses use six ticks. A jump or
    * grab freed by a landing gets one tick more (`landingGrace`, see `graceLanding`).
    */
   private ageBuffer(f: Fighter): void {
     if (!f.inputBuffer) return;
     f.inputBuffer.age++;
-    const limit = INPUT_BUFFER_TICKS + (f.inputBuffer.landingGrace ? 1 : 0);
+    const tech =
+      (f.tumbling || f.pendingLaunch !== null) &&
+      f.inputBuffer.pressedIn === "hitstun" &&
+      f.inputBuffer.action === "step";
+    const limit = tech
+      ? UKEMI.windowTicks
+      : INPUT_BUFFER_TICKS + (f.inputBuffer.landingGrace ? 1 : 0);
     if (f.inputBuffer.age > limit) f.inputBuffer = null;
   }
 
@@ -497,8 +496,7 @@ export class BattleEngine {
 
   /**
    * Removes and returns the buffered press if it is `action` (any action when omitted). The one
-   * place a buffered press is taken, so a later rule (a tech roll, say) can claim or suppress a
-   * buffered step before the generic replay below sees it.
+   * place a buffered press is taken, whether claimed at impact or replayed on recovery.
    */
   private takeBuffered(f: Fighter, action?: BufferedAction): BufferedInput | null {
     const held = f.inputBuffer;
@@ -703,6 +701,7 @@ export class BattleEngine {
     } else if (f.mode === "grab") {
       this.setMode(f, "recovery", RULES.grabRecovery);
     } else {
+      if (f.tumbling) this.takeBuffered(f, "step");
       this.setMode(f, "idle");
       f.attack = null;
       f.charge = 0;
@@ -724,6 +723,9 @@ export class BattleEngine {
       f.grabbedBy = null;
       this.setMode(f, "hitstun", 0.15);
     }
+    // A collapsing tile can disappear before the roll moves, even with wind blowing inland.
+    if ((f.mode === "ukemi" || f.mode === "knockdown") && !canStandAt(this.state, f.x, f.z))
+      f.grounded = false;
     const previousY = f.y;
     const movement = normalize(input.move);
     let speed = 0;
@@ -737,6 +739,7 @@ export class BattleEngine {
       f.x += f.stepDirection.x * RULES.stepSpeed * ease * dt;
       f.z += f.stepDirection.z * RULES.stepSpeed * ease * dt;
     }
+    if (f.mode === "ukemi") advanceRoll(this.state, f, dt);
     if (this.state.arena.windActive && f.grounded && f.mode !== "throw") {
       f.x += this.state.arena.wind.x * dt;
       f.z += this.state.arena.wind.z * dt;
@@ -758,21 +761,42 @@ export class BattleEngine {
     if (!f.grounded) {
       f.vy -= RULES.gravity * this.gravityScale(f) * dt;
       f.y += f.vy * dt;
-      if (previousY >= -0.08 && f.y <= 0 && f.vy <= 0 && canStandAt(this.state, f.x, f.z)) {
-        f.y = 0;
-        f.vy = 0;
-        f.grounded = true;
-        f.airRisingUsed = false;
-        f.airThrustUsed = false;
-        f.airStepUsed = false;
-        this.graceLanding(f);
-        this.effect("land", f, 0xbed9cc, 0.3);
+      if (
+        previousY >= (f.tumbling ? 0 : -0.08) &&
+        f.y <= 0 &&
+        f.vy <= 0 &&
+        canStandAt(this.state, f.x, f.z)
+      ) {
+        this.land(f, input.move);
       }
     } else {
       f.y = 0;
       f.vy = 0;
     }
     if (f.y < -9 || Math.hypot(f.x, f.z) > 26) this.eliminate(f, "場外に落下");
+  }
+
+  /** Ground contact owns both the ordinary air-action reset and the single landing decision. */
+  private land(f: Fighter, move: Vec2): void {
+    f.y = f.vy = 0;
+    f.grounded = true;
+    f.airRisingUsed = f.airThrustUsed = f.airStepUsed = false;
+    const tech = f.tumbling && this.takeBuffered(f, "step")?.pressedIn === "hitstun";
+    if (!f.tumbling || f.invulnerable > 0) {
+      f.tumbling = false;
+      this.graceLanding(f);
+      this.effect("land", f, 0xbed9cc, 0.3);
+      return;
+    }
+    f.vx = f.vz = 0;
+    if (tech) {
+      f.stepDirection = rollDirection(move);
+      this.setMode(f, "ukemi", UKEMI.duration);
+      this.effect("ukemi", f, 0x008eac, UKEMI.duration, 1.35);
+    } else {
+      this.setMode(f, "knockdown", UKEMI.knockdownDuration);
+      this.effect("land", f, 0xbed9cc, 0.35, 1.3);
+    }
   }
 
   private separateBodies(): void {
@@ -973,6 +997,7 @@ export class BattleEngine {
     if (f.grounded) f.y = Math.max(f.y, 0.04);
     f.grounded = false;
     f.pendingLaunch = null;
+    f.tumbling = true;
   }
 
   private breakGrab(f: Fighter): void {
@@ -1676,7 +1701,7 @@ export class BattleEngine {
   private windupWillWhiff(f: Fighter, target: Fighter): boolean {
     if (!f.attack) return false;
     const left = Math.max(0, f.modeDuration - f.modeTime);
-    if (invulnerableAfter(target, left)) return true;
+    if (isInvulnerable(target, left)) return true;
     const aim = Math.atan2(target.x - f.x, target.z - f.z);
     const turn = this.turnRate(f) * left;
     const facing = f.facing + clamp(angleDelta(f.facing, aim), -turn, turn);

@@ -861,17 +861,19 @@ export class ArenaRenderer {
     const remaining = Math.max(0.01, 1 - progress);
     view.root.position.set(effect.x, effect.y + 0.04, effect.z);
     view.ring.scale.set(Math.max(0.01, radius));
-    view.ring.visible = progress < 0.7;
+    view.ring.visible = effect.kind === "ukemi" || progress < 0.7;
     for (const [i, particle] of view.particles.entries()) {
       const angle = (i / view.particles.length) * TAU + effect.id * 0.4;
       const vertical =
         effect.kind === "step" || effect.kind === "land"
           ? 0.12
           : Math.sin(progress * Math.PI) * (large ? 2.2 : 0.8);
+      // A second, tight halo rises inside the tech ring while the fighter rolls away.
+      const spread = effect.kind === "ukemi" ? radius * 0.62 : radius;
       particle.position.set(
-        Math.cos(angle) * radius,
+        Math.cos(angle) * spread,
         vertical * (0.5 + (i % 3) * 0.25),
-        Math.sin(angle) * radius,
+        Math.sin(angle) * spread,
       );
       particle.scale.set(
         remaining * (large ? 0.18 : 0.08),
