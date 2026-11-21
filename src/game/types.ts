@@ -1,3 +1,5 @@
+import type { AiLevel, MatchOptions } from "./match";
+
 export type AttackId = "overhead" | "rising" | "sweep" | "thrust";
 export type FighterMode =
   | "idle"
@@ -28,6 +30,8 @@ export interface Fighter {
   species: Species;
   color: number;
   human: boolean;
+  /** 1-based player number among the humans of this match (slot order); null for a CPU. */
+  player: number | null;
   x: number;
   y: number;
   z: number;
@@ -49,6 +53,18 @@ export interface Fighter {
   outsideTime: number;
   airRisingUsed: boolean;
   airThrustUsed: boolean;
+  /** The one air dodge per airtime has been spent; cleared on landing. */
+  airStepUsed: boolean;
+  /**
+   * Lives left, including the one in play. In a duel or rumble a fighter is out for good once this
+   * reaches 0; `mode === "dead"` with `stocks > 0` means it is waiting to respawn. Training never
+   * spends stocks (everyone there is rebuilt 1.5 s after falling).
+   */
+  stocks: number;
+  /** Seconds until a downed fighter with lives left comes back; 0 otherwise (and in training). */
+  respawnTimer: number;
+  /** How well a CPU plays; unused for the human. */
+  aiLevel: AiLevel;
   stepDirection: Vec2;
   stepDelay: number;
   hitTargets: number[];
@@ -125,6 +141,8 @@ export interface GameState {
   messageTime: number;
   seed: number;
   pausedFrom: "playing" | "countdown";
+  /** What this match was started with. */
+  options: MatchOptions;
   stats: { hits: number; clashes: number; dodges: number; maxDamage: number };
 }
 
@@ -138,6 +156,9 @@ export interface PlayerInput {
   cancel: boolean;
   grab: boolean;
 }
+
+/** One input per human fighter, keyed by fighter id. */
+export type PlayerInputs = Partial<Record<number, PlayerInput>>;
 
 export const emptyInput = (): PlayerInput => ({
   move: { x: 0, z: 0 },

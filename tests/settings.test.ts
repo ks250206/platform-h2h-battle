@@ -35,6 +35,8 @@ describe("device profile defaults", () => {
       ambientOcclusion: false,
       showFps: false,
       cameraShake: true,
+      cameraFollow: true,
+      padRumble: true,
     });
   });
 
@@ -51,6 +53,7 @@ describe("device profile defaults", () => {
       expect(light.ambientOcclusion).toBe(false);
       expect(light.dynamicResolution).toBe(true);
       expect(light.cameraShake).toBe(true);
+      expect(light.padRumble).toBe(true);
     }
   });
 
@@ -82,6 +85,7 @@ describe("loading and saving", () => {
       ambientOcclusion: true,
       showFps: 1,
       cameraShake: false,
+      padRumble: "off",
       unknown: "ignored",
     });
     expect(loadSettings(hardware, memoryStorage(stored))).toEqual({
@@ -181,6 +185,16 @@ describe("settings store", () => {
     unsubscribe();
     store.set({ showFps: false });
     expect(seen).toHaveLength(1);
+  });
+
+  test("the pad rumble switch is stored like the other toggles", () => {
+    const storage = memoryStorage();
+    const store = createSettingsStore(hardware, storage);
+    store.set({ padRumble: false });
+    expect(JSON.parse(storage.data.get(STORAGE_KEY)!).padRumble).toBe(false);
+    expect(createSettingsStore(hardware, storage).get().padRumble).toBe(false);
+    store.set({ padRumble: 0 } as unknown as Partial<GraphicsSettings>);
+    expect(store.get().padRumble).toBe(false);
   });
 
   test("rejects invalid patch values field by field", () => {

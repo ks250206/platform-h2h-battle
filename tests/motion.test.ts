@@ -226,6 +226,56 @@ describe("fighter motion", () => {
     }
   });
 
+  test("a cancelled wind-up lowers the blade back to the guard without ever cutting", () => {
+    const { frames } = simulate(1.6, (frame) =>
+      frame === 0
+        ? { attackPressed: "overhead", attackHeld: "overhead" }
+        : frame === 16
+          ? { cancel: true }
+          : {},
+    );
+    const modes = new Set(frames.map((entry) => entry.fighter.mode));
+    expect(modes.has("windup")).toBe(true);
+    expect(modes.has("cancel")).toBe(true);
+    expect(modes.has("active")).toBe(false);
+    expect(frames.some((entry) => entry.frame.events.some((e) => e.kind === "slam"))).toBe(false);
+    for (const { frame } of frames) expect(frame.trail).toBe(0);
+    // Facing +Z: back in the tail guard the point rests on the floor behind the fighter.
+    const last = frames[frames.length - 1]!;
+    expect(last.fighter.mode).toBe("idle");
+    expect(last.frame.bladeTip.z).toBeLessThan(-1);
+    expect(last.frame.bladeTip.y).toBeLessThan(0.1);
+    // The blade is lowered, not snapped: no frame moves the point further than a full cut does.
+    let fastest = 0;
+    for (let i = 1; i < frames.length; i++)
+      fastest = Math.max(
+        fastest,
+        distance(frames[i]!.frame.bladeTip, frames[i - 1]!.frame.bladeTip),
+      );
+    expect(fastest).toBeLessThan(0.7);
+  });
+
+  test("an air dodge is one somersault that ends upright", () => {
+    const { frames } = simulate(1.4, (frame) => ({
+      jump: frame === 2,
+      step: frame === 14,
+      move: frame === 14 ? { x: 1, z: 0 } : { x: 0, z: 0 },
+    }));
+    const dodging = frames.filter((entry) => entry.fighter.mode === "step");
+    expect(dodging.length).toBeGreaterThan(10);
+    expect(dodging.every((entry) => !entry.fighter.grounded)).toBe(true);
+    const spin = (entry: (typeof frames)[number]) =>
+      Math.hypot(
+        entry.frame.skeleton.tumble.x,
+        entry.frame.skeleton.tumble.y,
+        entry.frame.skeleton.tumble.z,
+      );
+    // Half way through it is upside down; by the end it has come all the way round.
+    expect(Math.max(...dodging.map(spin))).toBeGreaterThan(Math.PI);
+    expect(spin(frames[frames.length - 1]!)).toBeLessThan(0.05);
+    for (const { frame } of frames) expect(finite(frame)).toBe(true);
+  });
+
   test("hit-stop freezes the pose with the simulation", () => {
     const { frames } = simulate(1.2, tap("overhead"), (engine) => {
       // Put the practice dummy in the blade's path so the swing connects.

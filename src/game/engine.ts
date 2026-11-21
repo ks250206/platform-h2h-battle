@@ -1,4 +1,11 @@
-import { ATTACKS, RULES } from "./tuning";
+import {
+  DEFAULT_MATCH_OPTIONS,
+  humanSlots,
+  levelFor,
+  sanitizeMatchOptions,
+  type MatchOptions,
+} from "./match";
+import { AI_LEVELS, ATTACKS, RULES } from "./tuning";
 import {
   angleDelta,
   attackContains,
@@ -14,11 +21,13 @@ import {
 import {
   emptyInput,
   type AttackId,
+  type Bomb,
   type EffectKind,
   type Fighter,
   type GameState,
   type MatchMode,
   type PlayerInput,
+  type PlayerInputs,
   type Vec2,
 } from "./types";
 
@@ -30,6 +39,20 @@ export {
   isInvulnerable,
 } from "./combat";
 
+/** Seconds before time-up: the base clock plus extra time for every life beyond the first. */
+export function matchTimeLimit(stocks: number): number {
+  return RULES.maxMatchTime + RULES.matchTimePerStock * (Math.max(1, stocks) - 1);
+}
+
+/** Will `f` still be untouchable `t` seconds from now (timed invulnerability or a step's window)? */
+function invulnerableAfter(f: Fighter, t: number): boolean {
+  if (f.invulnerable > t) return true;
+  if (f.mode !== "step") return false;
+  // A feint step's clock only starts once its delay has run out.
+  const at = f.modeTime + Math.max(0, t - f.stepDelay);
+  return at >= RULES.stepInvulStart && at < RULES.stepInvulEnd;
+}
+
 const CAST = [
   { name: "コハク", species: "fox" as const, color: 0xff7a45 },
   { name: "シロ", species: "rabbit" as const, color: 0x3fb4ff },
@@ -37,13 +60,16 @@ const CAST = [
   { name: "スミ", species: "raccoon" as const, color: 0xffc93c },
 ];
 
-function makeFighter(id: number, count: number): Fighter {
+function makeFighter(id: number, count: number, options: MatchOptions): Fighter {
+  // Player numbers follow slot order: the first human slot is P1.
+  const player = humanSlots(options, count).findIndex((slot) => slot.id === id) + 1;
   const theta =
     count === 2 ? (id === 0 ? -Math.PI / 2 : Math.PI / 2) : (id * Math.PI) / 2 - Math.PI / 2;
   return {
     ...CAST[id],
     id,
-    human: id === 0,
+    human: player > 0,
+    player: player > 0 ? player : null,
     x: Math.sin(theta) * 3.5,
     z: Math.cos(theta) * 3.5,
     y: 0,
@@ -65,6 +91,10 @@ function makeFighter(id: number, count: number): Fighter {
     outsideTime: 0,
     airRisingUsed: false,
     airThrustUsed: false,
+    airStepUsed: false,
+    stocks: options.stocks,
+    respawnTimer: 0,
+    aiLevel: levelFor(options, id),
     stepDirection: { x: 0, z: 0 },
     stepDelay: 0,
     hitTargets: [],
@@ -92,7 +122,9 @@ export class BattleEngine {
   private nextBomb = RULES.bombStart as number;
   private inputs = new Map<number, PlayerInput>();
   private timeRemainder = 0;
-  private pendingInput = emptyInput();
+  /** Each human's input, with button presses held until a simulation tick has consumed them. */
+  private pending = new Map<number, PlayerInput>();
+  private options: MatchOptions = sanitizeMatchOptions(DEFAULT_MATCH_OPTIONS);
 
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
@@ -112,7 +144,7 @@ export class BattleEngine {
       elapsed: 0,
       countdown: 3,
       fighters: Array.from({ length: mode === "rumble" ? 4 : 2 }, (_, i) =>
-        makeFighter(i, mode === "rumble" ? 4 : 2),
+        makeFighter(i, mode === "rumble" ? 4 : 2, this.options),
       ),
       arena: {
         halfSize: RULES.arenaHalfSize,
@@ -131,11 +163,18 @@ export class BattleEngine {
       messageTime: 0,
       seed,
       pausedFrom: "playing",
+      options: {
+        ...this.options,
+        controls: { ...this.options.controls },
+        overrides: { ...this.options.overrides },
+      },
       stats: { hits: 0, clashes: 0, dodges: 0, maxDamage: 0 },
     };
   }
 
-  start(mode: MatchMode): void {
+  /** Starts a match. Options given once are kept for later restarts until new ones arrive. */
+  start(mode: MatchMode, options?: Partial<MatchOptions>): void {
+    if (options) this.options = sanitizeMatchOptions({ ...this.options, ...options });
     this.state = this.createState(mode, this.state.seed);
     this.randomState = this.state.seed >>> 0;
     this.nextBomb = RULES.bombStart;
@@ -143,12 +182,12 @@ export class BattleEngine {
     this.bombId = 0;
     this.timeRemainder = 0;
     this.inputs.clear();
-    this.pendingInput = emptyInput();
+    this.pending.clear();
   }
 
   pause(): void {
     if (this.state.phase === "playing" || this.state.phase === "countdown") {
-      this.pendingInput = emptyInput();
+      this.pending.clear();
       this.state.pausedFrom = this.state.phase;
       this.state.phase = "paused";
     }
@@ -161,49 +200,70 @@ export class BattleEngine {
     this.state.phase = "menu";
   }
 
-  /** Fixed substeps keep sword contacts stable across refresh rates and slow frames. */
-  update(dt: number, input: PlayerInput = emptyInput()): void {
+  /**
+   * Advances the match in fixed substeps, which keeps sword contacts stable across refresh rates
+   * and slow frames. `input` is one input per human fighter keyed by fighter id. A bare
+   * `PlayerInput` is taken as the first human's, which is all a single-player match needs.
+   */
+  update(dt: number, input: PlayerInput | PlayerInputs = emptyInput()): void {
     if (!Number.isFinite(dt) || dt <= 0) return;
     if (
       this.state.phase === "paused" ||
       this.state.phase === "menu" ||
       this.state.phase === "ended"
     ) {
-      this.pendingInput = emptyInput();
+      this.pending.clear();
       this.timeRemainder = 0;
       return;
     }
-    this.pendingInput = {
-      ...input,
-      attackPressed: input.attackPressed ?? this.pendingInput.attackPressed,
-      jump: input.jump || this.pendingInput.jump,
-      step: input.step || this.pendingInput.step,
-      cancel: input.cancel || this.pendingInput.cancel,
-      grab: input.grab || this.pendingInput.grab,
-    };
+    const humans = this.state.fighters.filter((f) => f.human);
+    const given: PlayerInputs =
+      "move" in input ? (humans[0] ? { [humans[0].id]: input as PlayerInput } : {}) : input;
+    for (const f of humans) {
+      const now = given[f.id] ?? emptyInput();
+      const held = this.pending.get(f.id) ?? emptyInput();
+      this.pending.set(f.id, {
+        ...now,
+        attackPressed: now.attackPressed ?? held.attackPressed,
+        jump: now.jump || held.jump,
+        step: now.step || held.step,
+        cancel: now.cancel || held.cancel,
+        grab: now.grab || held.grab,
+      });
+    }
     this.timeRemainder += Math.min(dt, 0.1);
     while (this.timeRemainder >= RULES.fixedStep - 1e-8) {
-      this.tick(RULES.fixedStep, this.pendingInput);
-      this.pendingInput = {
-        ...input,
-        attackPressed: null,
-        jump: false,
-        step: false,
-        cancel: false,
-        grab: false,
-      };
+      this.tick(RULES.fixedStep, this.pending);
+      for (const f of humans) {
+        this.pending.set(f.id, {
+          ...(given[f.id] ?? emptyInput()),
+          attackPressed: null,
+          jump: false,
+          step: false,
+          cancel: false,
+          grab: false,
+        });
+      }
       this.timeRemainder -= RULES.fixedStep;
     }
   }
 
-  private tick(dt: number, playerInput: PlayerInput): void {
+  private tick(dt: number, playerInputs: ReadonlyMap<number, PlayerInput>): void {
     const state = this.state;
     if (state.phase === "paused" || state.phase === "ended" || state.phase === "menu") return;
     if (state.phase === "countdown") {
       state.countdown = Math.max(0, state.countdown - dt);
       if (state.countdown <= 0) {
         state.phase = "playing";
-        this.announce(state.mode === "training" ? "練習開始 — 相手は動きません" : "FIGHT");
+        // The practice partner stands still unless a second player has taken it.
+        const stillPartner = state.fighters.some((f) => !f.human);
+        this.announce(
+          state.mode !== "training"
+            ? "FIGHT"
+            : stillPartner
+              ? "練習開始 — 相手は動きません"
+              : "練習開始",
+        );
       }
       return;
     }
@@ -212,10 +272,11 @@ export class BattleEngine {
     state.messageTime = Math.max(0, state.messageTime - dt);
     state.effects = state.effects.filter((effect) => (effect.life -= dt) > 0);
     this.updateArena(dt);
+    this.updateRespawns(dt);
     this.inputs.clear();
     for (const f of state.fighters) {
       if ((f.mode as Fighter["mode"]) === "dead") continue;
-      this.inputs.set(f.id, f.human ? playerInput : this.ai(f, dt));
+      this.inputs.set(f.id, f.human ? (playerInputs.get(f.id) ?? emptyInput()) : this.ai(f, dt));
     }
     for (const f of state.fighters) {
       if ((f.mode as Fighter["mode"]) === "dead") continue;
@@ -252,7 +313,9 @@ export class BattleEngine {
 
   private spend(f: Fighter, cost: number): boolean {
     if (f.stamina + 1e-6 < cost) {
-      if (f.human) this.announce("スタミナ不足 — 歩いて間合いを取り直そう", 0.8);
+      // A shared centre message cannot say whose stamina ran out, so only a lone human gets it.
+      if (f.human && this.state.fighters.filter((o) => o.human).length === 1)
+        this.announce("スタミナ不足 — 歩いて間合いを取り直そう", 0.8);
       return false;
     }
     f.stamina = Math.max(0, f.stamina - cost);
@@ -260,20 +323,31 @@ export class BattleEngine {
     return true;
   }
 
+  /** How fast a fighter may turn toward its aim right now (rad/s); 0 once the blade is cutting. */
+  private turnRate(f: Fighter): number {
+    if (f.mode === "idle") return RULES.idleTurnRate;
+    if (f.mode === "charge") return RULES.chargeTurnRate;
+    if (f.mode === "windup")
+      return RULES.windupTurnRate * (f.human ? 1 : AI_LEVELS[f.aiLevel].tracking);
+    return 0;
+  }
+
+  /** A dodge works on the ground, and once per airtime in the air. */
+  private canStep(f: Fighter): boolean {
+    return f.grounded || !f.airStepUsed;
+  }
+
   private handleInput(f: Fighter, input: PlayerInput, dt: number): void {
-    if ((f.mode === "idle" || f.mode === "charge") && !input.step) {
+    const turnRate = this.turnRate(f);
+    if (turnRate > 0 && !input.step) {
       const aim = input.aim && length(input.aim) > 0.05 ? input.aim : input.move;
       if (length(aim) > 0.05) {
         const target = Math.atan2(aim.x, aim.z);
-        f.facing += clamp(
-          angleDelta(f.facing, target),
-          -dt * (f.mode === "charge" ? 3.6 : 20),
-          dt * (f.mode === "charge" ? 3.6 : 20),
-        );
+        f.facing += clamp(angleDelta(f.facing, target), -dt * turnRate, dt * turnRate);
       }
     }
     if (f.mode === "charge") {
-      if (input.step && f.grounded && this.spend(f, RULES.stepCost)) {
+      if (input.step && this.canStep(f) && this.spend(f, RULES.stepCost)) {
         this.startStep(f, input.move, true);
       } else if (input.cancel) {
         this.setMode(f, "cancel", RULES.cancelDuration);
@@ -286,8 +360,12 @@ export class BattleEngine {
       }
       return;
     }
+    if (f.mode === "windup") {
+      if (input.cancel) this.cancelWindup(f);
+      return;
+    }
     if (f.mode !== "idle") return;
-    if (input.step && f.grounded && this.spend(f, RULES.stepCost)) {
+    if (input.step && this.canStep(f) && this.spend(f, RULES.stepCost)) {
       this.startStep(f, input.move, false);
       return;
     }
@@ -331,6 +409,20 @@ export class BattleEngine {
     f.swingId++;
   }
 
+  private cancelWindup(f: Fighter): void {
+    const progress = clamp(f.modeTime / f.modeDuration, 0, 1);
+    this.setMode(f, "cancel", RULES.cancelDuration + RULES.windupCancelPenalty * progress);
+    f.attack = null;
+    f.charge = 0;
+    f.staminaDelay = RULES.staminaDelay;
+    // A cancelled grounded cut never leaves the floor, so no landing would clear its air use.
+    if (f.grounded) {
+      f.airRisingUsed = false;
+      f.airThrustUsed = false;
+    }
+    this.effect("cancel", f, 0xbbe4dc, 0.28);
+  }
+
   private startStep(f: Fighter, direction: Vec2, feint: boolean): void {
     this.setMode(f, "step", RULES.stepDuration);
     const dir = length(direction) > 0.05 ? normalize(direction) : forward(f);
@@ -338,13 +430,36 @@ export class BattleEngine {
     f.stepDelay = feint ? RULES.feintStepDelay : 0;
     f.attack = null;
     f.charge = 0;
+    if (!f.grounded) {
+      f.airStepUsed = true;
+      if (f.stepDelay <= 0) this.beginAirStep(f);
+    }
     this.effect("step", f, f.color, 0.32);
     if (f.human) this.state.stats.dodges++;
+  }
+
+  /** The dash of an air dodge starts: it floats instead of dropping (see `isAirStepping`). */
+  private beginAirStep(f: Fighter): void {
+    f.vy = Math.max(f.vy, RULES.airStepHover);
+  }
+
+  /** An air dodge's dash is running; a grounded step that runs off the edge falls normally. */
+  private isAirStepping(f: Fighter): boolean {
+    return f.mode === "step" && f.stepDelay <= 0 && f.airStepUsed && !f.grounded;
+  }
+
+  /**
+   * The air dodge holds a fighter up, it does not carry one higher: while still rising faster than
+   * the hover speed (a dodge right after a jump or a rising slash) gravity pulls at full strength.
+   */
+  private gravityScale(f: Fighter): number {
+    return this.isAirStepping(f) && f.vy <= RULES.airStepHover ? RULES.airStepGravity : 1;
   }
 
   private updateMode(f: Fighter, input: PlayerInput, dt: number): void {
     if (f.mode === "step" && f.stepDelay > 0) {
       f.stepDelay = Math.max(0, f.stepDelay - dt);
+      if (f.stepDelay <= 0 && f.airStepUsed && !f.grounded) this.beginAirStep(f);
       return;
     }
     f.modeTime += dt;
@@ -430,7 +545,7 @@ export class BattleEngine {
         f.airThrustUsed = true;
     }
     if (!f.grounded) {
-      f.vy -= RULES.gravity * dt;
+      f.vy -= RULES.gravity * this.gravityScale(f) * dt;
       f.y += f.vy * dt;
       if (previousY >= -0.08 && f.y <= 0 && f.vy <= 0 && canStandAt(this.state, f.x, f.z)) {
         f.y = 0;
@@ -438,6 +553,7 @@ export class BattleEngine {
         f.grounded = true;
         f.airRisingUsed = false;
         f.airThrustUsed = false;
+        f.airStepUsed = false;
         this.effect("land", f, 0xbed9cc, 0.3);
       }
     } else {
@@ -767,7 +883,86 @@ export class BattleEngine {
     const attacker = this.state.fighters.find((other) => other.id === f.lastAttacker);
     if (attacker && attacker.id !== f.id) attacker.kills++;
     this.effect("ko", { x: f.x, y: Math.max(-2, f.y), z: f.z }, f.color, 1.2, 1.8);
-    this.announce(f.name + " OUT", 1.8);
+    // Training rebuilds everyone for ever (see resolveOutcome) and keeps no lives.
+    if (this.state.mode !== "training") f.stocks = Math.max(0, f.stocks - 1);
+    if (this.state.mode !== "training" && f.stocks > 0) {
+      f.respawnTimer = RULES.respawnDelay;
+      this.announce(`${f.name} DOWN — 残り${f.stocks}`, 1.8);
+    } else this.announce(f.name + " OUT", 1.8);
+  }
+
+  /** Counts down downed fighters that still have lives and brings them back. */
+  private updateRespawns(dt: number): void {
+    for (const f of this.state.fighters) {
+      if (f.mode !== "dead" || f.respawnTimer <= 0) continue;
+      f.respawnTimer = Math.max(0, f.respawnTimer - dt);
+      if (f.respawnTimer <= 1e-9) this.respawn(f);
+    }
+  }
+
+  /** A clean new life, dropped in over the safest nearby spot, briefly invulnerable. */
+  private respawn(f: Fighter): void {
+    const spot = this.respawnPoint(f);
+    const opponents = this.state.fighters.filter((o) => o.id !== f.id && o.mode !== "dead");
+    const nearest = opponents.sort(
+      (a, b) => Math.hypot(a.x - spot.x, a.z - spot.z) - Math.hypot(b.x - spot.x, b.z - spot.z),
+    )[0];
+    const look = nearest ?? { x: 0, z: 0 };
+    const fresh = makeFighter(f.id, this.state.fighters.length, this.options);
+    Object.assign(f, fresh, {
+      human: f.human,
+      player: f.player,
+      kills: f.kills,
+      aiLevel: f.aiLevel,
+      stocks: f.stocks,
+      // Keeps counting so a renderer or audio cue never mistakes the next swing for an old one.
+      swingId: f.swingId,
+      x: spot.x,
+      z: spot.z,
+      y: RULES.respawnHeight,
+      grounded: false,
+      facing:
+        Math.hypot(look.x - spot.x, look.z - spot.z) > 0.01
+          ? Math.atan2(look.x - spot.x, look.z - spot.z)
+          : fresh.facing,
+      invulnerable: RULES.respawnInvulnerable,
+    } satisfies Partial<Fighter>);
+  }
+
+  /**
+   * Inside the safe zone when it is active (55% of its radius), else near the centre; always over
+   * the platform with a margin. Fixed candidates (no RNG): the one farthest from living opponents
+   * that is clear of pending bombs.
+   */
+  private respawnPoint(f: Fighter): Vec2 {
+    const { safeZone: zone, halfSize } = this.state.arena;
+    const centre = zone.active ? { x: zone.x, z: zone.z } : { x: 0, z: 0 };
+    const ring = zone.active ? zone.radius * 0.55 : 3;
+    const limit = Math.max(0, halfSize - 1);
+    const candidates: Vec2[] = [centre];
+    for (let k = 0; k < 8; k++) {
+      const angle = (k * Math.PI) / 4;
+      candidates.push({
+        x: centre.x + Math.sin(angle) * ring,
+        z: centre.z + Math.cos(angle) * ring,
+      });
+    }
+    const onFloor = candidates.map((p) => ({
+      x: clamp(p.x, -limit, limit),
+      z: clamp(p.z, -limit, limit),
+    }));
+    const clear = onFloor.filter(
+      (p) =>
+        !this.state.bombs.some(
+          (b) => !b.exploded && Math.hypot(p.x - b.x, p.z - b.z) <= b.radius + 0.3,
+        ),
+    );
+    const opponents = this.state.fighters.filter((o) => o.id !== f.id && o.mode !== "dead");
+    const room = (p: Vec2) =>
+      Math.min(...opponents.map((o) => Math.hypot(o.x - p.x, o.z - p.z)), Infinity);
+    let best = (clear.length > 0 ? clear : onFloor)[0];
+    for (const p of clear) if (room(p) > room(best) + 1e-9) best = p;
+    return best;
   }
 
   private resolveOutcome(): void {
@@ -776,27 +971,39 @@ export class BattleEngine {
       for (let i = 0; i < state.fighters.length; i++) {
         const f = state.fighters[i];
         if (f.mode === "dead" && state.elapsed - (f.eliminatedAt ?? 0) > 1.5) {
-          state.fighters[i] = makeFighter(f.id, 2);
+          state.fighters[i] = makeFighter(f.id, 2, this.options);
         }
       }
       return;
     }
-    const alive = state.fighters.filter((f) => f.mode !== "dead");
-    if (alive.length <= 1) {
-      state.winnerId = alive[0]?.id ?? null;
+    // Still in the match: alive, or down with a life left to come back on.
+    const contenders = state.fighters.filter((f) => f.stocks > 0);
+    if (contenders.length <= 1) {
+      state.winnerId = contenders[0]?.id ?? null;
       state.phase = "ended";
-      this.announce(alive[0] ? alive[0].name + " WINS" : "DRAW", 10);
-    } else if (state.elapsed >= RULES.maxMatchTime) {
-      const sorted = [...alive].sort((a, b) => a.damage - b.damage);
-      state.winnerId = Math.abs(sorted[0].damage - sorted[1].damage) < 0.01 ? null : sorted[0].id;
+      this.announce(contenders[0] ? contenders[0].name + " WINS" : "DRAW", 10);
+    } else if (state.elapsed >= matchTimeLimit(state.options.stocks)) {
+      // A fighter waiting to respawn already lost the damage it carried with that life.
+      const damage = (f: Fighter) => (f.mode === "dead" ? 0 : f.damage);
+      const sorted = [...contenders].sort((a, b) => b.stocks - a.stocks || damage(a) - damage(b));
+      const [first, second] = sorted;
+      const tied =
+        first.stocks === second.stocks && Math.abs(damage(first) - damage(second)) < 0.01;
+      state.winnerId = tied ? null : first.id;
       state.phase = "ended";
-      this.announce("TIME UP — 蓄積ダメージの少ない選手が勝利", 10);
+      this.announce(
+        state.options.stocks > 1
+          ? "TIME UP — 残機の多い選手、同数なら蓄積ダメージの少ない選手が勝利"
+          : "TIME UP — 蓄積ダメージの少ない選手が勝利",
+        10,
+      );
     }
   }
 
   private ai(f: Fighter, dt: number): PlayerInput {
     const input = emptyInput();
     if (this.state.mode === "training") return input;
+    const level = AI_LEVELS[f.aiLevel];
     const enemies = this.state.fighters.filter(
       (other) => other.id !== f.id && other.mode !== "dead",
     );
@@ -816,11 +1023,23 @@ export class BattleEngine {
       input.move = home;
       input.aim = home;
       if (f.mode === "idle") {
-        if (!f.airRisingUsed && f.y < 0.8) input.attackPressed = "rising";
-        else if (!f.airThrustUsed) input.attackPressed = "thrust";
+        const risingLeft = level.recoverRising && !f.airRisingUsed;
+        if (risingLeft && f.y < 0.8) input.attackPressed = "rising";
+        else if (level.recoverThrust && !f.airThrustUsed) input.attackPressed = "thrust";
+        // The air dodge is the last resort, once the air attacks are spent.
+        else if (
+          !risingLeft &&
+          level.recoverAirStep &&
+          !f.airStepUsed &&
+          f.stamina >= RULES.stepCost
+        )
+          input.step = true;
         input.attackHeld = input.attackPressed;
       } else if (f.mode === "charge") input.attackHeld = null;
       return input;
+    }
+    if (f.mode === "windup" && level.cancelWhiffs && this.windupWillWhiff(f, enemy)) {
+      input.cancel = true;
     }
     if (f.mode === "charge") {
       input.attackHeld = f.modeTime < f.aiCharge ? f.attack : null;
@@ -828,37 +1047,53 @@ export class BattleEngine {
       if (
         f.modeTime > 0.18 &&
         enemy.mode === "windup" &&
-        distance < 2.4 &&
+        distance < level.feintRange &&
         f.stamina >= 25 &&
         f.aiCharge > 0.4
       ) {
-        input.step = true;
+        // CPUs keep their dodges on the ground (the air dodge is for recovering).
+        input.step = f.grounded;
         input.move = { x: dir.z, z: -dir.x };
       }
       return input;
     }
+    const punish = level.punishRecovery && enemy.mode === "recovery";
     if (outside || edge) input.move = normalize({ x: zone.x - f.x, z: zone.z - f.z });
-    else if (distance > 2.4) input.move = dir;
+    else if (distance > 2.4 || punish) input.move = dir;
     else if (distance < 1.5 || f.stamina < 28) input.move = { x: -dir.x, z: -dir.z };
     else input.move = { x: dir.z * 0.5, z: -dir.x * 0.5 };
     const danger = this.state.bombs.find(
-      (b) => !b.exploded && Math.hypot(f.x - b.x, f.z - b.z) < b.radius + 0.6,
+      (b) =>
+        !b.exploded &&
+        b.timer <= level.bombNotice &&
+        Math.hypot(f.x - b.x, f.z - b.z) < b.radius + 0.6,
     );
     if (danger) input.move = normalize({ x: f.x - danger.x + 0.1, z: f.z - danger.z });
+    if (f.mode === "throw" && level.aimedThrows) input.move = this.throwAim(f);
     f.aiThink -= dt;
     if (f.mode !== "idle" || f.aiThink > 0) return input;
-    f.aiThink = 0.18 + this.random() * 0.16;
+    // Wait (deciding again every tick) for the late part of a wind-up, where tracking cannot follow.
+    const windupLeft = enemy.mode === "windup" ? enemy.modeDuration - enemy.modeTime : 0;
+    if (distance < 3.4 && windupLeft > level.dodgeWindow) return input;
+    f.aiThink = level.thinkMin + this.random() * level.thinkRange;
     if (
       (enemy.mode === "windup" || (danger && danger.timer < 0.7)) &&
       distance < 3.4 &&
       f.stamina >= 25 &&
-      this.random() < 0.7 &&
+      this.random() < level.dodgeChance &&
       !edge
     ) {
-      input.step = true;
-      input.move = enemy.attack === "sweep" ? { x: -dir.x, z: -dir.z } : { x: dir.z, z: -dir.x };
-    } else if (distance < 3.3 && f.stamina >= 30 && !outside) {
-      if (distance < 1.2 && this.random() < 0.22) input.grab = true;
+      input.step = f.grounded;
+      input.move = level.smartDodge
+        ? this.dodgeDirection(f, enemy, enemy.mode === "windup" ? null : danger!)
+        : enemy.attack === "sweep"
+          ? { x: -dir.x, z: -dir.z }
+          : { x: dir.z, z: -dir.x };
+    } else if (distance < 3.3 && f.stamina >= level.attackStamina && !outside) {
+      if (punish) {
+        input.attackPressed = this.punishAttack(enemy, distance);
+        f.aiCharge = 0.03;
+      } else if (distance < 1.2 && this.random() < 0.22) input.grab = true;
       else {
         const roll = this.random();
         input.attackPressed = !enemy.grounded
@@ -870,11 +1105,72 @@ export class BattleEngine {
               : roll < 0.78
                 ? "overhead"
                 : "thrust";
-        input.attackHeld = input.attackPressed;
-        f.aiCharge = this.random() < 0.3 ? 0.4 + this.random() * 0.5 : 0.03;
+        f.aiCharge = this.random() < level.chargeChance ? 0.4 + this.random() * 0.5 : 0.03;
       }
+      input.attackHeld = input.attackPressed;
     }
     return input;
+  }
+
+  /**
+   * Would this wind-up miss? True when, even turning as fast as it may for the time left and
+   * counting the thrust's lunge, the blade cannot reach the target, or the target will still be
+   * invulnerable when the blade comes out.
+   */
+  private windupWillWhiff(f: Fighter, target: Fighter): boolean {
+    if (!f.attack) return false;
+    const left = Math.max(0, f.modeDuration - f.modeTime);
+    if (invulnerableAfter(target, left)) return true;
+    const aim = Math.atan2(target.x - f.x, target.z - f.z);
+    const turn = this.turnRate(f) * left;
+    const facing = f.facing + clamp(angleDelta(f.facing, aim), -turn, turn);
+    const blade: Fighter = { ...f, mode: "active", facing };
+    if (attackContains(blade, target)) return false;
+    // Where the thrust's lunge (or the riser's hop) carries the blade during the cut.
+    const travel = f.attack === "thrust" ? 1.5 : f.attack === "rising" ? 0.6 : 0;
+    const dir = { x: Math.sin(facing), z: Math.cos(facing) };
+    const lunged: Fighter = { ...blade, x: f.x + dir.x * travel, z: f.z + dir.z * travel };
+    return !(travel > 0 && attackContains(lunged, target));
+  }
+
+  /** Back out of a sweep's fan, sideways off a narrow blade's line, or straight away from a bomb. */
+  private dodgeDirection(f: Fighter, enemy: Fighter, bomb: Bomb | null): Vec2 {
+    if (bomb) return normalize({ x: f.x - bomb.x + 0.01, z: f.z - bomb.z });
+    const away = normalize({ x: f.x - enemy.x, z: f.z - enemy.z });
+    if (enemy.attack === "sweep") return away;
+    // Step further to the side of the blade line it already stands on; if dead centre, inwards.
+    const blade = forward(enemy);
+    const side = { x: blade.z, z: -blade.x };
+    const offset = (f.x - enemy.x) * side.x + (f.z - enemy.z) * side.z;
+    const inward = -(f.x * side.x + f.z * side.z);
+    const sign = Math.abs(offset) > 0.05 ? Math.sign(offset) : inward >= 0 ? 1 : -1;
+    const lateral = { x: away.z, z: -away.x };
+    const flip = lateral.x * side.x + lateral.z * side.z >= 0 ? sign : -sign;
+    return { x: lateral.x * flip, z: lateral.z * flip };
+  }
+
+  /** The quickest cut that still lands before a target in recovery can act again. */
+  private punishAttack(enemy: Fighter, distance: number): AttackId {
+    if (!enemy.grounded) return "rising";
+    const left = enemy.modeDuration - enemy.modeTime;
+    if (distance > 2.2) return "thrust";
+    if (distance < 2.5 && left > ATTACKS.overhead.startup + 0.05) return "overhead";
+    return "sweep";
+  }
+
+  /** Toward the nearest edge when a ring-out is in reach, otherwise out of the safe zone. */
+  private throwAim(f: Fighter): Vec2 {
+    const { halfSize, safeZone: zone } = this.state.arena;
+    const toEdge =
+      halfSize - Math.abs(f.x) < halfSize - Math.abs(f.z)
+        ? { x: Math.sign(f.x) || 1, z: 0 }
+        : { x: 0, z: Math.sign(f.z) || 1 };
+    const victim = this.state.fighters.find((o) => o.id === f.grabbedId);
+    const reach = 2.4 + (victim?.damage ?? 0) * 0.02;
+    const edgeDistance = halfSize - Math.max(Math.abs(f.x), Math.abs(f.z));
+    if (edgeDistance < reach || !zone.active) return toEdge;
+    const out = normalize({ x: f.x - zone.x, z: f.z - zone.z });
+    return length(out) > 0 ? out : toEdge;
   }
 
   private effect(

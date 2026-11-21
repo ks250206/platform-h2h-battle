@@ -157,6 +157,8 @@ export function createFighterRig(
   g: RigAssets,
   parent: Container3D,
   f: Fighter,
+  /** Colour of the marker over a human's head; the coral default suits a lone player. */
+  pointerColor: number = PALETTE.fighter.pointer,
 ): FighterRig {
   const trait = TRAITS[f.species];
   const team = f.color;
@@ -331,7 +333,7 @@ export function createFighterRig(
   const pointer = a.mesh(
     root,
     a.cone,
-    a.material(PALETTE.fighter.pointer, 1, 0.35),
+    a.material(pointerColor, 1, 0.35),
     0,
     2.6,
     0,

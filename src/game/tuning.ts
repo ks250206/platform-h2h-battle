@@ -1,3 +1,4 @@
+import type { AiLevel } from "./match";
 import type { AttackDefinition, AttackId } from "./types";
 
 export const ATTACKS: Record<AttackId, AttackDefinition> = {
@@ -74,6 +75,7 @@ export const RULES = {
   maxCharge: 0.9,
   maxHold: 1.3,
   cancelDuration: 0.12,
+  windupCancelPenalty: 0.2,
   stepCost: 25,
   stepDuration: 0.3,
   stepSpeed: 10.5,
@@ -103,4 +105,110 @@ export const RULES = {
   bombInterval: 11,
   bombWarning: 2.1,
   maxMatchTime: 150,
+  /** Extra seconds on the clock for every life beyond the first. */
+  matchTimePerStock: 60,
+  /** Turning speeds (rad/s): free while idle, slowed while charging, slowest once committed. */
+  idleTurnRate: 20,
+  chargeTurnRate: 3.6,
+  windupTurnRate: 2.6,
+  /** An air dodge lifts vertical speed to at least this and floats on reduced gravity. */
+  airStepHover: 1.5,
+  airStepGravity: 0.35,
+  /** A fighter with lives left returns after this delay, dropping in from this height. */
+  respawnDelay: 1.4,
+  respawnHeight: 6,
+  respawnInvulnerable: 2.5,
 } as const;
+
+/** How a CPU of each strength plays. `normal` reproduces the original CPU. */
+export interface AiProfile {
+  /** Seconds between decisions: `thinkMin + random × thinkRange`. */
+  thinkMin: number;
+  thinkRange: number;
+  /** Chance to dodge a wind-up (or a bomb about to go off) it has noticed. */
+  dodgeChance: number;
+  /**
+   * Holds a dodge until the wind-up it reacts to has at most this long left (seconds), so a
+   * tracking swing cannot follow it; infinite reacts at once.
+   */
+  dodgeWindow: number;
+  /** Dodges the way that actually leaves the swing (back from a sweep, away from the blade line, away from a bomb). */
+  smartDodge: boolean;
+  /** Stamina it wants in hand before starting an attack. */
+  attackStamina: number;
+  /** Chance that an attack is held as a deliberate charge rather than tapped. */
+  chargeChance: number;
+  /** Distance within which a charging CPU may feint into a step against a wind-up; 0 never feints. */
+  feintRange: number;
+  /** Fraction of `RULES.windupTurnRate` it uses to keep aiming during its own wind-up. */
+  tracking: number;
+  /** A bomb is noticed once its fuse is this short (seconds). */
+  bombNotice: number;
+  /** Air moves it uses to get back to the platform. */
+  recoverRising: boolean;
+  recoverThrust: boolean;
+  recoverAirStep: boolean;
+  /** Cancels its wind-up when the target has left the attack's reach or will still be invulnerable. */
+  cancelWhiffs: boolean;
+  /** Closes in on, and attacks, a target stuck in attack recovery. */
+  punishRecovery: boolean;
+  /** Throws toward the nearest edge, or out of the safe zone. */
+  aimedThrows: boolean;
+}
+
+export const AI_LEVELS: Record<AiLevel, AiProfile> = {
+  easy: {
+    thinkMin: 0.42,
+    thinkRange: 0.28,
+    dodgeChance: 0.2,
+    dodgeWindow: Number.POSITIVE_INFINITY,
+    smartDodge: false,
+    attackStamina: 45,
+    chargeChance: 0,
+    feintRange: 0,
+    tracking: 0,
+    bombNotice: 0.9,
+    recoverRising: true,
+    recoverThrust: false,
+    recoverAirStep: false,
+    cancelWhiffs: false,
+    punishRecovery: false,
+    aimedThrows: false,
+  },
+  normal: {
+    thinkMin: 0.18,
+    thinkRange: 0.16,
+    dodgeChance: 0.7,
+    dodgeWindow: Number.POSITIVE_INFINITY,
+    smartDodge: false,
+    attackStamina: 30,
+    chargeChance: 0.3,
+    feintRange: 2.4,
+    tracking: 0.5,
+    bombNotice: Number.POSITIVE_INFINITY,
+    recoverRising: true,
+    recoverThrust: true,
+    recoverAirStep: true,
+    cancelWhiffs: false,
+    punishRecovery: false,
+    aimedThrows: false,
+  },
+  hard: {
+    thinkMin: 0.1,
+    thinkRange: 0.08,
+    dodgeChance: 0.9,
+    dodgeWindow: 0.17,
+    smartDodge: true,
+    attackStamina: 30,
+    chargeChance: 0.45,
+    feintRange: 2.8,
+    tracking: 1,
+    bombNotice: Number.POSITIVE_INFINITY,
+    recoverRising: true,
+    recoverThrust: true,
+    recoverAirStep: true,
+    cancelWhiffs: true,
+    punishRecovery: true,
+    aimedThrows: true,
+  },
+};

@@ -18,6 +18,7 @@ import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/setting
 import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
 import { MeshLibrary } from "./meshes";
+import { norm, qLook } from "./math3";
 import { FighterMotion } from "./motion";
 import { PALETTE } from "./palette";
 import type { MotionEvent } from "./motion";
@@ -64,6 +65,19 @@ const MENU_PAN_RIGHT = -0.17;
 const MENU_PAN_UP = -0.2;
 /** The title screen stands a little further back so the arena clears the caption beside it. */
 const MENU_PULL_BACK = 0.13;
+/** Sine and cosine of the camera's elevation: how ground depth and height foreshorten on screen. */
+const CAMERA_SIN = CAMERA_OFFSET.y / CAMERA_DISTANCE;
+const CAMERA_COS = Math.hypot(CAMERA_OFFSET.x, CAMERA_OFFSET.z) / CAMERA_DISTANCE;
+/**
+ * Follow camera: it frames every fighter still standing, closing in when they are together and
+ * backing off to the whole arena when they spread out.
+ */
+const FOLLOW_MIN_SCALE = 0.5;
+/** World units kept clear around the fighters: room for a swing, and for a knock-back to start. */
+const FOLLOW_MARGIN_X = 3.6;
+const FOLLOW_MARGIN_Y = 2.2;
+/** Part of the screen width the fight may use; the rest is breathing room at the sides. */
+const FOLLOW_USABLE_WIDTH = 0.84;
 /** Fighter facing (0 is +Z) that looks straight back at the camera. */
 const FACING_CAMERA = Math.atan2(-CAMERA_FORWARD.x, -CAMERA_FORWARD.z);
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
@@ -103,6 +117,8 @@ interface FighterView {
   rig: FighterRig;
   motion: FighterMotion;
   trail: SwordTrail;
+  /** Showing respawn protection (blinking). */
+  protected: boolean;
   label: Text;
   stamina: Graphics;
   identity: string;
@@ -120,10 +136,33 @@ interface EffectView {
   ring: Mesh3D;
 }
 /** Render-only debris raised by the animation: dust, sparks and cracked flagstones. */
+/** A streak of hot metal: drawn stretched along the way it is flying. */
+interface Spark {
+  mesh: Mesh3D;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  life: number;
+  width: number;
+}
+/** A crackle of static: a jagged line that jumps to a new shape every few frames. */
+interface Bolt {
+  segments: Mesh3D[];
+  reach: number;
+  until: number;
+  redrawAt: number;
+  seed: number;
+}
 interface Impact {
   root: Container3D;
   parts: { mesh: Mesh3D; vx: number; vy: number; vz: number; spin: number; size: number }[];
   cracks: Mesh3D[];
+  sparks: Spark[];
+  bolts: Bolt[];
+  flash: Mesh3D | null;
   age: number;
   life: number;
   gravity: number;
@@ -175,7 +214,15 @@ export class ArenaRenderer {
   private pullBack = 0;
   /** In play: the pan that centres the arena in the band between the top and bottom HUD. */
   private hudPanUp = 0;
+  /** Share of the screen height the HUD leaves free for the arena. */
+  private usableHeight = 0.6;
+  /** What the camera is looking at and from how far, eased every frame. */
+  private focusRight = 0;
+  private focusUp = 0;
+  private viewScale = 0;
   private lastElapsed = 0;
+  /** Humans in the match being drawn: decides between "YOU" and player numbers. */
+  private humanCount = 1;
   private destroyed = false;
   private readonly software: boolean;
   private readonly sun: DirectionalLight;
@@ -564,8 +611,23 @@ export class ArenaRenderer {
     this.lastElapsed = state.elapsed;
   }
 
+  /**
+   * What floats over a human: "YOU" for a lone player, the player number when several share the
+   * screen. Empty for a CPU.
+   */
+  private playerTag(f: Fighter): string {
+    if (!f.human) return "";
+    return this.humanCount > 1 ? `P${f.player ?? 1}` : "YOU";
+  }
+
+  /** A lone player is the sunny one; several each wear their fighter's colour. */
+  private tagColor(f: Fighter): number {
+    return this.humanCount > 1 ? f.color : PALETTE.label.you;
+  }
+
   private fighterView(f: Fighter): FighterView {
-    const identity = `${f.species}/${f.color}/${f.human}`;
+    const tag = this.playerTag(f);
+    const identity = `${f.species}/${f.color}/${tag}`;
     let view = this.fighters.get(f.id);
     if (view && view.identity !== identity) {
       this.destroyFighter(view);
@@ -573,17 +635,23 @@ export class ArenaRenderer {
       view = undefined;
     }
     if (view) return view;
-    const rig = createFighterRig(this.assets, this.rigAssets, this.scene, f);
+    const rig = createFighterRig(
+      this.assets,
+      this.rigAssets,
+      this.scene,
+      f,
+      this.humanCount > 1 ? f.color : undefined,
+    );
     const motion = new FighterMotion();
     // On the pale floor a white smear would vanish: each blade trails its owner's colour.
     const trail = new SwordTrail(this.scene, f.color);
     const label = new Text({
-      text: f.human ? "YOU" : f.name,
+      text: tag || f.name,
       style: {
         fontFamily: "system-ui, sans-serif",
         fontSize: 11,
         fontWeight: "800",
-        fill: f.human ? PALETTE.label.you : PALETTE.label.text,
+        fill: f.human ? this.tagColor(f) : PALETTE.label.text,
         letterSpacing: 1,
         dropShadow: { color: PALETTE.label.shadow, alpha: 0.65, blur: 3, distance: 1 },
       },
@@ -591,7 +659,7 @@ export class ArenaRenderer {
     label.anchor.set(0.5, 1);
     const stamina = new Graphics();
     this.labels.addChild(stamina, label);
-    view = { rig, motion, trail, label, stamina, identity };
+    view = { rig, motion, trail, protected: false, label, stamina, identity };
     this.fighters.set(f.id, view);
     return view;
   }
@@ -614,9 +682,14 @@ export class ArenaRenderer {
     applyFrame(view.rig, frame, shown, this.time);
     view.trail.update(frame.bladeBase, frame.bladeTip, f.mode === "dead" ? 0 : frame.trail, dt);
     for (const event of frame.events) this.spawnImpact(event);
-    // Showcase pose: face the camera, each turned a little toward the other (human is on the left).
-    if (state.phase === "menu") view.rig.root.rotation.y = FACING_CAMERA + (f.human ? 0.42 : -0.36);
+    // Showcase pose: face the camera, each turned a little toward the other (slot 0 is on the left).
+    if (state.phase === "menu")
+      view.rig.root.rotation.y = FACING_CAMERA + (f.id === 0 ? 0.42 : -0.36);
     // The blob is a stand-in for a shadow; with real shadow maps it would double up.
+    // Back from a knock-out: the body blinks for as long as nothing can touch it.
+    if (f.invulnerable > 1) view.protected = true;
+    else if (f.invulnerable <= 0 || f.mode === "dead") view.protected = false;
+    view.rig.squash.visible = !view.protected || Math.floor(this.time * 11) % 2 === 0;
     view.rig.shadow.visible &&= onPlatform && !this.shadowsActive;
     view.rig.footRing.visible &&= onPlatform;
     view.rig.heading.visible &&= onPlatform && state.phase !== "menu";
@@ -626,12 +699,12 @@ export class ArenaRenderer {
     view.stamina.visible = labelVisible;
     if (point) {
       view.label.position.set(point.x, point.y);
-      view.label.text = f.human ? "YOU" : `${f.name}  ${Math.round(f.damage)}%`;
+      view.label.text = this.playerTag(f) || `${f.name}  ${Math.round(f.damage)}%`;
       view.label.style.fill =
         f.outsideTime > 0.5
           ? PALETTE.label.outside
           : f.human
-            ? PALETTE.label.you
+            ? this.tagColor(f)
             : PALETTE.label.text;
       view.stamina
         .clear()
@@ -756,9 +829,13 @@ export class ArenaRenderer {
     view = { root, particles, ring };
     this.effects.set(effect.id, view);
     // The first frame an impact exists is the frame the screen feels it.
-    if (effect.kind === "hit") this.addShake(0.3 + effect.size * 0.32);
-    else if (effect.kind === "clash") this.addShake(0.6);
-    else if (effect.kind === "bomb") this.addShake(0.85);
+    if (effect.kind === "hit") {
+      this.addShake(0.3 + effect.size * 0.32);
+      this.spawnSparks(effect.x, effect.y, effect.z, effect.size, false);
+    } else if (effect.kind === "clash") {
+      this.addShake(0.6);
+      this.spawnSparks(effect.x, effect.y, effect.z, 1.1, true);
+    } else if (effect.kind === "bomb") this.addShake(0.85);
     else if (effect.kind === "ko") this.addShake(0.7);
     else if (effect.kind === "throw") this.addShake(0.28);
     return view;
@@ -806,6 +883,7 @@ export class ArenaRenderer {
     this.panRight += (panRight - this.panRight) * Math.min(1, dt * 4);
     this.panUp += (panUp - this.panUp) * Math.min(1, dt * 4);
     this.pullBack += ((menu ? MENU_PULL_BACK : 0) - this.pullBack) * Math.min(1, dt * 4);
+    this.updateFollow(state, visualDelta);
     this.shake *= Math.exp(-visualDelta * 9);
     if (this.shake < 0.004 || state.phase === "menu") this.shake = 0;
     this.placeCamera();
@@ -825,6 +903,7 @@ export class ArenaRenderer {
         this.fighters.delete(id);
       }
     }
+    this.humanCount = state.fighters.reduce((count, f) => count + (f.human ? 1 : 0), 0);
     for (const fighter of state.fighters) this.updateFighter(fighter, visualDelta, state);
     const bombIds = new Set(state.bombs.map((b) => b.id));
     for (const [id, view] of this.bombs) {
@@ -882,18 +961,77 @@ export class ArenaRenderer {
       CAMERA_FIT_WIDTH / aspect,
     );
     this.hudPanUp = (top - bottom) / 2 / this.height;
+    this.usableHeight = (this.height - top - bottom) / this.height;
+    // First layout, or the fixed view: sit at the whole-arena distance straight away.
+    if (!this.viewScale || !this.settings.cameraFollow) this.viewScale = this.cameraScale;
+    this.viewScale = Math.min(this.viewScale, this.cameraScale);
     this.placeCamera();
+  }
+
+  /**
+   * Chooses where the camera looks and how close it sits. With the follow camera off this eases
+   * back to the fixed view of the whole arena.
+   */
+  private updateFollow(state: GameState, dt: number): void {
+    let right = 0,
+      up = 0,
+      scale = this.cameraScale;
+    const subjects =
+      this.settings.cameraFollow && state.phase !== "menu"
+        ? state.fighters.filter((f) => f.mode !== "dead")
+        : [];
+    if (subjects.length) {
+      let minRight = Infinity,
+        maxRight = -Infinity,
+        minUp = Infinity,
+        maxUp = -Infinity;
+      // Someone sent flying is on the way out: do not chase them into the sky.
+      const limit = state.arena.initialHalfSize + 4;
+      for (const f of subjects) {
+        const x = Math.max(-limit, Math.min(limit, f.x));
+        const z = Math.max(-limit, Math.min(limit, f.z));
+        const y = Math.max(-2, Math.min(7, f.y));
+        const across = x * CAMERA_RIGHT.x + z * CAMERA_RIGHT.z;
+        const feet = (x * CAMERA_FORWARD.x + z * CAMERA_FORWARD.z) * CAMERA_SIN + y * CAMERA_COS;
+        minRight = Math.min(minRight, across);
+        maxRight = Math.max(maxRight, across);
+        minUp = Math.min(minUp, feet);
+        maxUp = Math.max(maxUp, feet + 2 * CAMERA_COS);
+      }
+      const aspect = this.width / this.height;
+      const needed = Math.max(
+        (maxRight - minRight + 2 * FOLLOW_MARGIN_X) / (VIEW_HEIGHT * aspect * FOLLOW_USABLE_WIDTH),
+        (maxUp - minUp + 2 * FOLLOW_MARGIN_Y) / (VIEW_HEIGHT * this.usableHeight),
+      );
+      const closest = Math.min(FOLLOW_MIN_SCALE, this.cameraScale);
+      scale = Math.max(closest, Math.min(this.cameraScale, needed));
+      // The further out it is, the more the frame settles on the arena itself, so the widest
+      // follow shot is exactly the fixed view.
+      const wide =
+        this.cameraScale > closest ? (scale - closest) / (this.cameraScale - closest) : 1;
+      const hold = 1 - wide * wide;
+      right = ((minRight + maxRight) / 2) * hold;
+      up = ((minUp + maxUp) / 2) * hold;
+    }
+    const drift = 1 - Math.exp(-dt * 4);
+    this.focusRight += (right - this.focusRight) * drift;
+    this.focusUp += (up - this.focusUp) * drift;
+    // Back off quickly so nobody leaves the frame; close in gently so the view does not pump.
+    const zoom = 1 - Math.exp(-dt * (scale > this.viewScale ? 6 : 1.7));
+    this.viewScale += (scale - this.viewScale) * zoom;
   }
 
   /** The only place the camera is positioned: pan the look-at target, then the fixed offset. */
   private placeCamera(): void {
-    const s = this.cameraScale * (1 + this.pullBack);
+    const s = (this.viewScale || this.cameraScale) * (1 + this.pullBack);
     const up = this.panUp * VIEW_HEIGHT * s;
-    const right = ((this.panRight * VIEW_HEIGHT * s) / this.height) * this.width;
+    const right = ((this.panRight * VIEW_HEIGHT * s) / this.height) * this.width + this.focusRight;
+    // The focus is a point on the floor: `focusUp` is measured on screen, so undo the foreshortening.
+    const depth = this.focusUp / CAMERA_SIN;
     const target = {
-      x: CAMERA_RIGHT.x * right + CAMERA_UP.x * up,
+      x: CAMERA_RIGHT.x * right + CAMERA_FORWARD.x * depth + CAMERA_UP.x * up,
       y: CAMERA_UP.y * up,
-      z: CAMERA_RIGHT.z * right + CAMERA_UP.z * up,
+      z: CAMERA_RIGHT.z * right + CAMERA_FORWARD.z * depth + CAMERA_UP.z * up,
     };
     if (this.debugCamera) {
       const { position, target: aim, fov } = this.debugCamera;
@@ -931,7 +1069,7 @@ export class ArenaRenderer {
     const root = new Container3D();
     root.position.set(event.x, Math.max(0, event.y), event.z);
     this.scene.addChild(root);
-    const impact: Impact = { root, parts: [], cracks: [], age: 0, life: 0.5, gravity: 9 };
+    const impact = this.blankImpact(root);
     const seed = (event.x * 12.9898 + event.z * 78.233 + this.time * 37.7) % 1;
     const random = (i: number) => {
       const v = Math.sin((seed + i * 0.6180339) * 43758.5453) * 0.5 + 0.5;
@@ -1016,6 +1154,74 @@ export class ArenaRenderer {
     this.impacts.push(impact);
   }
 
+  private blankImpact(root: Container3D): Impact {
+    return {
+      root,
+      parts: [],
+      cracks: [],
+      sparks: [],
+      bolts: [],
+      flash: null,
+      age: 0,
+      life: 0.5,
+      gravity: 9,
+    };
+  }
+
+  /**
+   * Steel on a body, or steel on steel: sparks thrown outward and a crackle of static round the
+   * point of contact. `power` is about 0.7 for a tap and above 1 for a charged blow.
+   */
+  private spawnSparks(x: number, y: number, z: number, power: number, clash: boolean): void {
+    if (this.impacts.length > 40) return;
+    const a = this.assets;
+    const root = new Container3D();
+    root.position.set(x, y, z);
+    this.scene.addChild(root);
+    const impact = this.blankImpact(root);
+    impact.life = 0.55;
+    const seed = (x * 12.9898 + z * 78.233 + this.time * 37.7) % 1;
+    const random = (i: number) => {
+      const v = Math.sin((seed + i * 0.6180339) * 43758.5453) * 0.5 + 0.5;
+      return v - Math.floor(v);
+    };
+    const colours = [PALETTE.fx.sparkCore, PALETTE.fx.spark, PALETTE.fx.sparkEmber];
+    const count = Math.round((clash ? 16 : 8) + power * 6);
+    for (let i = 0; i < count; i++) {
+      // A rough hemisphere, leaning upward so the spray reads from the high camera.
+      const angle = random(i) * TAU;
+      const lift = 0.15 + random(i + 40) * 0.85;
+      const speed = (4.5 + random(i + 80) * 6.5) * (0.75 + power * 0.35);
+      const flat = Math.sqrt(1 - lift * lift * 0.6);
+      const mesh = a.mesh(root, a.cube, a.material(colours[i % 3]!, 1, 0.9), 0, 0, 0, 0.03);
+      impact.sparks.push({
+        mesh,
+        x: 0,
+        y: 0,
+        z: 0,
+        vx: Math.cos(angle) * flat * speed,
+        vy: lift * speed * 0.8,
+        vz: Math.sin(angle) * flat * speed,
+        life: 0.22 + random(i + 120) * 0.28,
+        width: 0.028 + random(i + 160) * 0.022,
+      });
+    }
+    const bolts = clash ? 3 : power > 1.05 ? 3 : 2;
+    for (let b = 0; b < bolts; b++) {
+      const core = b % 2 === 1;
+      const material = a.material(core ? PALETTE.fx.boltCore : PALETTE.fx.bolt, 1, 0.9);
+      impact.bolts.push({
+        segments: Array.from({ length: 4 }, () => a.mesh(root, a.cube, material, 0, 0, 0, 0.03)),
+        reach: (0.75 + random(b + 200) * 0.5) * (0.8 + power * 0.3),
+        until: 0.16 + random(b + 220) * 0.14,
+        redrawAt: 0,
+        seed: seed + b * 3.7,
+      });
+    }
+    impact.flash = a.mesh(root, a.pebble, a.material(PALETTE.fx.flash, 0.7, 1), 0, 0, 0, 0.15);
+    this.impacts.push(impact);
+  }
+
   private updateImpacts(dt: number): void {
     for (let i = this.impacts.length - 1; i >= 0; i--) {
       const impact = this.impacts[i]!;
@@ -1043,6 +1249,70 @@ export class ArenaRenderer {
       for (const crack of impact.cracks) {
         const open = t < 0.06 ? t / 0.06 : 1 - Math.pow(t, 3);
         crack.scale.x = Math.max(0.001, 0.055 * open);
+      }
+      for (const spark of impact.sparks) {
+        const age = impact.age / spark.life;
+        if (age >= 1) {
+          spark.mesh.visible = false;
+          continue;
+        }
+        spark.vy -= 13 * dt;
+        const drag = Math.exp(-dt * 2.6);
+        spark.vx *= drag;
+        spark.vz *= drag;
+        spark.x += spark.vx * dt;
+        spark.y += spark.vy * dt;
+        spark.z += spark.vz * dt;
+        const speed = Math.hypot(spark.vx, spark.vy, spark.vz);
+        const along = norm({ x: spark.vx, y: spark.vy, z: spark.vz });
+        const q = qLook(along, { x: 0, y: 0, z: 1 }, { x: 1, y: 0, z: 0 });
+        spark.mesh.position.set(spark.x, spark.y, spark.z);
+        spark.mesh.quaternion.set(q.x, q.y, q.z, q.w);
+        // Long while fast, shrinking to a point as it cools.
+        const width = spark.width * (1 - age * 0.7);
+        spark.mesh.scale.set(width, Math.max(0.06, speed * 0.062) * (1 - age * 0.5), width);
+      }
+      for (const bolt of impact.bolts) {
+        const live = impact.age < bolt.until;
+        for (const segment of bolt.segments) segment.visible = live;
+        if (!live || impact.age < bolt.redrawAt) continue;
+        // Static does not move: it is somewhere else every few frames.
+        bolt.redrawAt = impact.age + 0.035;
+        const step = Math.floor(impact.age / 0.035);
+        const jitter = (i: number) => {
+          const v = Math.sin((bolt.seed + step * 1.37 + i * 0.6180339) * 43758.5453) * 0.5 + 0.5;
+          return v - Math.floor(v);
+        };
+        const heading = jitter(0) * TAU;
+        let from = { x: 0, y: 0, z: 0 };
+        bolt.segments.forEach((segment, i) => {
+          const distance = (bolt.reach * (i + 1)) / bolt.segments.length;
+          const swerve = heading + (jitter(i * 3 + 1) - 0.5) * 1.5;
+          const to = {
+            x: Math.cos(swerve) * distance,
+            y: (jitter(i * 3 + 2) - 0.35) * 0.7 * ((i + 1) / bolt.segments.length),
+            z: Math.sin(swerve) * distance,
+          };
+          const dx = to.x - from.x,
+            dy = to.y - from.y,
+            dz = to.z - from.z;
+          const length = Math.hypot(dx, dy, dz) || 0.001;
+          const q = qLook(
+            { x: dx / length, y: dy / length, z: dz / length },
+            { x: 0, y: 0, z: 1 },
+            { x: 1, y: 0, z: 0 },
+          );
+          segment.position.set((from.x + to.x) / 2, (from.y + to.y) / 2, (from.z + to.z) / 2);
+          segment.quaternion.set(q.x, q.y, q.z, q.w);
+          const thick = 0.045 * (1 - i / (bolt.segments.length + 1));
+          segment.scale.set(thick, length, thick);
+          from = to;
+        });
+      }
+      if (impact.flash) {
+        const pop = impact.age / 0.07;
+        impact.flash.visible = pop < 1;
+        impact.flash.scale.set(0.15 + pop * 0.4);
       }
     }
   }
