@@ -116,8 +116,10 @@ export class PadMenu {
           : {}),
       };
     }
-    const click = (selector: string) => () =>
-      this.root.querySelector<HTMLElement>(selector)?.click();
+    const click = (selector: string) => () => {
+      const control = this.root.querySelector<HTMLElement>(selector);
+      if (control && visible(control)) control.click();
+    };
     switch (this.hooks.phase()) {
       case "menu":
         return {
@@ -145,8 +147,8 @@ export class PadMenu {
         return {
           key: "ended",
           scopes: [panel],
-          primary: "[data-action='restart']",
-          start: click(".result-screen [data-action='restart']"),
+          primary: "[data-pad-primary]",
+          start: click(".result-screen [data-pad-primary]"),
         };
       }
       default:

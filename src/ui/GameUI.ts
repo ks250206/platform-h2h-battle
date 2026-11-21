@@ -16,7 +16,6 @@ import type { AccessoryId, Loadout, PaletteId, Species } from "../game/character
 import {
   countHumans,
   fighterTag,
-  fighterTitle,
   SLOT_SHAPE_LABELS,
   SLOT_SHAPE_POINTS,
   slotShape,
@@ -24,6 +23,12 @@ import {
 import { AI_LEVEL_IDS, humanSlots, padIndex, STOCK_CHOICES } from "../game/match";
 import type { AiLevel, ControlDevice, MatchOptions } from "../game/match";
 import { playableOptions, type MatchStore } from "../game/matchStore";
+import {
+  formatAccuracy,
+  formatDamage,
+  KO_CREDIT_SECONDS,
+  type PlayerMatchStats,
+} from "../game/matchStats";
 import {
   describeRules,
   effectiveRules,
@@ -42,6 +47,7 @@ import {
   type StageInfo,
   type TimeRule,
 } from "../game/rules";
+import { SET_FORMAT_LABELS, type SetFormat } from "../game/setMatch";
 import {
   GIMMICK_IDS as STAGE_GIMMICK_IDS,
   GIMMICK_LABELS as STAGE_GIMMICK_LABELS,
@@ -60,6 +66,7 @@ export interface GameUICallbacks {
   onPause: () => void;
   onResume: () => void;
   onRestart: () => void;
+  onNextGame: () => void;
   onMenu: () => void;
   onSound: (enabled: boolean) => void;
   /** The title's mode or match options changed: the line-up of fighters behind the menu follows. */
@@ -317,6 +324,14 @@ function matchOptionsMarkup(): string {
                 <p class="stage-detail-name"><strong></strong><span></span></p>
                 ${stageInfoMarkup()}
               </div>
+              <div class="match-option match-set-format" hidden>
+                <span class="match-option-label" id="match-set-format-label">対戦形式</span>
+                <div class="segmented match-segmented" role="group" aria-labelledby="match-set-format-label">${Object.entries(
+                  SET_FORMAT_LABELS,
+                )
+                  .map(([format, label]) => segment("set-format", format, label))
+                  .join("")}</div>
+              </div>
               <div class="match-option match-rule">
                 <span class="match-option-label" id="match-preset-label">ルール</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-preset-label">${PRESET_IDS.map((id) => segment("preset", id, RULE_PRESETS[id].label, ` title="${RULE_PRESETS[id].detail}"`)).join("")}</div>
@@ -373,6 +388,33 @@ function escapeHtml(value: string): string {
 }
 
 const hex = cssColor;
+
+function resultIdentity(fighter: Fighter, humans: number): string {
+  return `<span class="winner-tag" style="--fighter-color: ${hex(fighter.color)}">${glyph(fighter.id)}${fighterTag(fighter, humans)}</span><span class="winner-name">${escapeHtml(fighter.name)}</span>`;
+}
+
+function playerResults(fighters: readonly Fighter[], stats: readonly PlayerMatchStats[]): string {
+  const humans = countHumans(fighters);
+  return fighters
+    .map((fighter) => {
+      const s = stats[fighter.id];
+      const metrics = [
+        ["与ダメージ", formatDamage(s.damageDealt)],
+        ["被ダメージ", formatDamage(s.damageTaken)],
+        ["撃墜", s.kos],
+        ["失った残機", s.stocksLost],
+        ["相手による失点", s.opponentLosses],
+        ["自滅・環境など", s.environmentLosses],
+        ["剣の命中率", formatAccuracy(s)],
+        ["回避成功", s.dodges],
+      ];
+      return `<article class="result-player">
+        <h3>${resultIdentity(fighter, humans)}</h3>
+        <dl>${metrics.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join("")}</dl>
+      </article>`;
+    })
+    .join("");
+}
 
 function setText(element: HTMLElement, value: string): void {
   if (element.textContent !== value) element.textContent = value;
@@ -494,7 +536,7 @@ export class GameUI {
       </main>
 
       <section class="game-hud" aria-label="対戦情報" hidden>
-        <div class="match-heading"><span class="match-mode">DUEL</span><span class="heading-separator"></span><time class="match-time">00:00</time><span class="heading-separator"></span><span class="match-alive">2 ALIVE</span></div>
+        <div class="match-heading"><span class="match-mode">DUEL</span><span class="heading-separator"></span><time class="match-time">00:00</time><span class="heading-separator"></span><span class="match-alive">2 ALIVE</span><span class="match-set-score" hidden></span></div>
         <div class="arena-status" aria-live="polite"></div>
         <div class="center-announcement" aria-live="polite"></div>
         <div class="countdown-display" aria-live="assertive" hidden><span>READ YOUR RIVAL</span><strong>3</strong></div>
@@ -512,7 +554,31 @@ export class GameUI {
       </section>
 
       <section class="result-screen modal-scrim" role="dialog" aria-modal="true" aria-label="対戦結果" hidden>
-        <div class="modal-panel result-panel"><div class="result-paw">${icons.paw}</div><div class="eyebrow result-eyebrow">LAST PAWS STANDING</div><h2 class="result-title">勝負あり。</h2><p class="result-winner" hidden></p><p class="result-subtitle"></p><div class="result-stats"><div><strong data-stat="hits">0</strong><span>HITS</span></div><div><strong data-stat="clashes">0</strong><span>CLASHES</span></div><div><strong data-stat="time">0:00</strong><span>TIME</span></div></div><button class="primary-button" data-action="restart">もう一度、勝負 ${icons.arrow}</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel result-panel">
+          <h2 class="result-title">試合結果</h2>
+          <p class="result-winner" hidden></p>
+          <p class="result-score" hidden></p>
+          <p class="result-subtitle" hidden></p>
+          <div class="result-actions">
+            <button class="primary-button" data-action="restart" data-pad-primary><span></span> ${icons.arrow}</button>
+            <button class="secondary-button" data-action="match-settings" aria-describedby="result-exit-note" hidden>対戦設定へ戻る</button>
+            <button class="text-button" data-action="menu">タイトルへ戻る</button>
+          </div>
+          <p class="result-exit-note" id="result-exit-note" hidden>対戦設定やタイトルに戻ると、このセットは終了します。</p>
+          <div class="result-stats"><div><strong data-stat="hits">0</strong><span>HITS</span></div><div><strong data-stat="clashes">0</strong><span>CLASHES</span></div><div><strong data-stat="time">0:00</strong><span>TIME</span></div></div>
+          <div class="result-stat-picker segmented" role="group" aria-label="戦績の集計範囲" hidden>
+            <button type="button" data-result-stats="game" aria-controls="result-game" aria-pressed="true">この試合</button>
+            <button type="button" data-result-stats="set" aria-controls="result-set" aria-pressed="false">セット累計</button>
+          </div>
+          <div class="result-player-grid" id="result-game" role="group" aria-label="この試合の戦績"></div>
+          <div class="result-player-grid" id="result-set" role="group" aria-label="セット累計の戦績" hidden></div>
+          <details class="result-stat-note">
+            <summary>戦績の数え方</summary>
+            <p>命中率は、当たった剣技の回数を攻撃判定が出た回数で割った値です。複数人に当てても1回で、相殺だけなら命中には入りません。投げはダメージと撃墜に含まれます。</p>
+            <p>撃墜は、相手の攻撃や投げを受けてから${KO_CREDIT_SECONDS}秒以内の場外落下に付きます。爆弾やエリア外ゲージによる失点、撃墜者を一人に絞れない失点は「自滅・環境など」に含まれます。</p>
+            <p>回避成功は、ステップ中の無敵時間に剣技や爆風が当たる位置にいた場合に、技や爆発ごとに1回数えます。</p>
+          </details>
+        </div>
       </section>
 
       <dialog class="help-dialog" aria-labelledby="help-title">
@@ -641,6 +707,7 @@ export class GameUI {
     block.classList.toggle("practice", training);
     block.classList.toggle("four-players", count > 2);
     for (const rule of block.querySelectorAll<HTMLElement>(".match-rule")) rule.hidden = training;
+    this.query(".match-set-format").hidden = mode !== "duel";
     this.query(".match-options-note").hidden = !training;
     const rows = this.query(".player-rows");
     if (this.playerRowsMode !== mode) {
@@ -652,6 +719,7 @@ export class GameUI {
         button.setAttribute("aria-pressed", String(isOn(button)));
     };
     pressed("[data-stocks]", (b) => Number(b.dataset.stocks) === options.stocks);
+    pressed("[data-set-format]", (b) => b.dataset.setFormat === options.setFormat);
     pressed("[data-difficulty]", (b) => b.dataset.difficulty === options.difficulty);
     pressed("button[data-stage]", (b) => b.dataset.stage === options.stage);
     this.syncStage(STAGES[options.stage], training);
@@ -921,10 +989,13 @@ export class GameUI {
   }
 
   /** The line under the pause title: a pad that went away, or null. */
-  setPadNotice(text: string | null): void {
+  setPadNotice(text: string | null, blockResume = false): void {
     const notice = this.query(".pause-notice");
     notice.hidden = !text;
     setText(notice, text ?? "");
+    const resume = this.query('.pause-screen [data-action="resume"]');
+    if (blockResume) resume.setAttribute("aria-disabled", "true");
+    else resume.removeAttribute("aria-disabled");
   }
 
   /** The title rows' selects: who plays a slot, and a CPU's strength. */
@@ -1079,7 +1150,7 @@ export class GameUI {
   private handleClick = (event: MouseEvent): void => {
     // Buttons only: the host itself carries data-mode and data-stage (the running match's state).
     const target = (event.target as Element).closest<HTMLElement>(
-      "[data-action], button[data-mode], button[data-stage], [data-shadow], [data-stocks], [data-difficulty], [data-preset], [data-time], [data-gimmick], [data-customize], [data-customize-slot], [data-species], [data-palette], [data-accessory]",
+      "[data-action], button[data-mode], button[data-stage], [data-shadow], [data-stocks], [data-set-format], [data-result-stats], [data-difficulty], [data-preset], [data-time], [data-gimmick], [data-customize], [data-customize-slot], [data-species], [data-palette], [data-accessory]",
     );
     if (!target) return;
     if (target.dataset.customize !== undefined) {
@@ -1111,6 +1182,14 @@ export class GameUI {
     }
     if (target.dataset.stocks) {
       this.match.set({ stocks: Number(target.dataset.stocks) });
+      return;
+    }
+    if (target.dataset.setFormat && this.selectedMode === "duel") {
+      this.match.set({ setFormat: target.dataset.setFormat as SetFormat });
+      return;
+    }
+    if (target.dataset.resultStats) {
+      this.showResultStats(target.dataset.resultStats === "set");
       return;
     }
     if (target.dataset.difficulty) {
@@ -1157,13 +1236,21 @@ export class GameUI {
         this.callbacks.onPause();
         break;
       case "resume":
-        this.callbacks.onResume();
+        if (target.getAttribute("aria-disabled") !== "true") this.callbacks.onResume();
         break;
       case "restart":
         this.callbacks.onRestart();
         break;
+      case "next-game":
+        this.callbacks.onNextGame();
+        break;
+      case "match-settings":
+        this.callbacks.onMenu();
+        this.query(".match-set-format [aria-pressed='true']").focus();
+        break;
       case "menu":
         this.callbacks.onMenu();
+        this.query(".menu-screen [data-action='start']").focus({ preventScroll: true });
         break;
       case "brand":
         event.preventDefault();
@@ -1310,11 +1397,17 @@ export class GameUI {
     this.pausePanel.hidden = state.phase !== "paused";
     this.result.hidden = state.phase !== "ended";
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
+    if (changedPhase && state.phase === "ended") this.drawResult(state);
+    if (changedPhase && state.phase === "paused")
+      setText(
+        this.query('.pause-screen [data-action="restart"]'),
+        state.set ? "セットを最初から" : "はじめから",
+      );
     if (changedPhase && !this.dialog.open && !this.settingsDialog.open) {
       if (state.phase === "paused")
         this.pausePanel.querySelector<HTMLButtonElement>('[data-action="resume"]')?.focus();
       if (state.phase === "ended")
-        this.result.querySelector<HTMLButtonElement>('[data-action="restart"]')?.focus();
+        this.query(".result-screen [data-pad-primary]").focus({ preventScroll: true });
     }
 
     const clock = (seconds: number) =>
@@ -1327,10 +1420,19 @@ export class GameUI {
     const limit = state.rules.timeLimit;
     // The clock shows the time limit beside it, so a short match never ends by surprise.
     setText(this.query(".match-time"), limit === null ? time : `${time} / ${clock(limit)}`);
-    this.query(".match-mode").textContent = modes[state.mode].en;
+    const set = state.set;
+    setText(
+      this.query(".match-mode"),
+      set ? `${set.format.toUpperCase()} · 第${set.gameNumber}試合` : modes[state.mode].en,
+    );
+    const setScore = this.query(".match-set-score");
+    setScore.hidden = !set;
+    if (set) setText(setScore, this.setScore(state.fighters, set.wins));
     // Training respawns everyone for ever; elsewhere a fighter is in the match while it has lives.
     const training = state.mode === "training";
-    this.query(".match-alive").textContent = `${
+    const alive = this.query(".match-alive");
+    alive.hidden = Boolean(set);
+    alive.textContent = `${
       state.fighters.filter((fighter) => (training ? fighter.mode !== "dead" : fighter.stocks > 0))
         .length
     } ALIVE`;
@@ -1445,50 +1547,92 @@ export class GameUI {
         ...state.fighters.map((fighter) => this.cards.get(fighter.id)!.element),
       );
     this.applyLock();
+  }
 
-    if (state.phase === "ended") {
-      const winner = state.fighters.find((fighter) => fighter.id === state.winnerId);
-      const humans = state.fighters.filter((fighter) => fighter.human);
-      const several = humans.length > 1;
-      const tag = winner?.human && several ? `P${winner.player ?? 1}` : null;
-      // Who won, the way the match showed them: slot shape, tag, name and colour. The colour is
-      // part of the markup, so the same fighter winning again in a new colour is drawn again.
-      const badge = this.query(".result-winner");
-      badge.hidden = !winner;
-      const badgeMarkup = winner
-        ? `<span class="winner-tag" style="--fighter-color: ${hex(winner.color)}">${glyph(winner.id)}${fighterTag(winner, countHumans(state.fighters))}</span><span class="winner-name">${escapeHtml(winner.name)}</span>`
-        : "";
-      if (badge.dataset.markup !== badgeMarkup) {
-        badge.dataset.markup = badgeMarkup;
-        badge.innerHTML = badgeMarkup;
+  private setScore(fighters: readonly Fighter[], wins: readonly [number, number]): string {
+    const humans = countHumans(fighters);
+    return fighters.map((f) => `${fighterTag(f, humans)} ${wins[f.id]}勝`).join(" – ");
+  }
+
+  private showResultStats(totals: boolean): void {
+    this.query("#result-game").hidden = totals;
+    this.query("#result-set").hidden = !totals;
+    for (const button of this.result.querySelectorAll<HTMLButtonElement>(
+      "button[data-result-stats]",
+    ))
+      button.setAttribute(
+        "aria-pressed",
+        String((button.dataset.resultStats === "set") === totals),
+      );
+  }
+
+  private drawResult(state: GameState): void {
+    const set = state.set;
+    const complete = set?.phase === "complete";
+    const between = set?.phase === "betweenGames";
+    const winnerId = complete ? set.winnerId : state.winnerId;
+    const winner = state.fighters.find((f) => f.id === winnerId);
+    const badge = this.query(".result-winner");
+    badge.hidden = !winner;
+    badge.innerHTML = winner ? resultIdentity(winner, countHumans(state.fighters)) : "";
+
+    const game = set ? `第${set.gameNumber}試合` : "試合";
+    setText(
+      this.query(".result-title"),
+      complete
+        ? `${set.format.toUpperCase()} セットの勝者`
+        : winner
+          ? `${game}の勝者`
+          : set
+            ? `${game}は引き分け`
+            : "引き分け",
+    );
+    const score = this.query(".result-score");
+    score.hidden = !set;
+    if (set)
+      setText(
+        score,
+        `${complete ? "最終スコア" : SET_FORMAT_LABELS[set.format]} · ${this.setScore(state.fighters, set.wins)}`,
+      );
+
+    const subtitle = this.query(".result-subtitle");
+    const details: string[] = [];
+    if (winner) {
+      if (complete) details.push(`${game}も勝利`);
+      if (state.options.stocks > 1) details.push(`残機 ${winner.stocks}`);
+      if (countHumans(state.fighters) === 1 && !winner.human) {
+        const reason = state.fighters.find((f) => f.human)?.eliminationReason;
+        if (reason) details.push(reason);
       }
-      this.query(".result-title").textContent = winner?.human
-        ? tag
-          ? `${tag} の勝ち。`
-          : "あなたの勝ち。"
-        : winner
-          ? "また、挑もう。"
-          : "相打ち。";
-      this.query(".result-eyebrow").textContent = winner?.human
-        ? "LITTLE PAWS. BIG VICTORY."
-        : "EVERY SWING TEACHES SOMETHING.";
-      // Lives left only say something when there were several to lose.
-      const livesLeft =
-        winner && state.options.stocks > 1 && winner.stocks > 0 ? winner.stocks : null;
-      // The reason the player went out only reads right with one player.
-      const reason = !several ? humans[0]?.eliminationReason : null;
-      const who = tag ? `${winner!.name}が` : "";
-      this.query(".result-subtitle").textContent = winner?.human
-        ? livesLeft
-          ? `${who}残機を ${livesLeft} つ残して、足場を守り抜いた。`
-          : `${who}最後まで、足場を守り抜いた。`
-        : winner
-          ? `${fighterTitle(winner, state.fighters)} の勝利${livesLeft ? `（残機 ${livesLeft}）` : ""}${reason ? ` / ${reason}` : ""}`
-          : "次の一撃で、決着をつけよう。";
-      this.query('[data-stat="hits"]').textContent = String(state.stats.hits);
-      this.query('[data-stat="clashes"]').textContent = String(state.stats.clashes);
-      this.query('[data-stat="time"]').textContent = time;
+    } else {
+      details.push(
+        state.drawReason === "timeUp"
+          ? "時間切れ時に首位の残機と蓄積ダメージが同点"
+          : "最後に残っていた選手が同時に脱落",
+      );
+      if (between) details.push("再戦 — 必要勝利数は変わりません");
     }
+    subtitle.hidden = details.length === 0;
+    setText(subtitle, details.join("。"));
+
+    const primary = this.query<HTMLButtonElement>(".result-screen [data-pad-primary]");
+    primary.dataset.action = between ? "next-game" : "restart";
+    setText(
+      primary.querySelector("span")!,
+      between ? "次の試合" : complete ? "同じ条件で新しいセット" : "もう一度、勝負",
+    );
+    this.query(".result-screen [data-action='match-settings']").hidden = !between;
+    this.query(".result-exit-note").hidden = !between;
+
+    this.query(".result-stat-picker").hidden = !set;
+    this.query("#result-game").innerHTML = playerResults(state.fighters, state.playerStats);
+    this.query("#result-set").innerHTML = set ? playerResults(state.fighters, set.totals) : "";
+    this.showResultStats(false);
+    this.query<HTMLDetailsElement>(".result-stat-note").open = false;
+    this.query(".result-panel").scrollTop = 0;
+    setText(this.query('[data-stat="hits"]'), String(state.stats.hits));
+    setText(this.query('[data-stat="clashes"]'), String(state.stats.clashes));
+    setText(this.query('[data-stat="time"]'), formatClock(state.elapsed));
   }
 
   /** One pip per life in the fighter's colour, lost ones hollow; ∞ in training. */
