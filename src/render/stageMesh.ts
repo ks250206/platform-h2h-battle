@@ -729,7 +729,8 @@ export class StageView {
 
   /**
    * Shows the stage as it is in `state`. `time` is the renderer's visual clock (frozen while
-   * paused); `beltTime` only runs while belts do, so their arrows stop with the match.
+   * paused); `beltTime` only runs while belts do (while playing, and as a preview on the title),
+   * so their arrows wait out the countdown and stop with the match.
    */
   update(state: GameState, time: number, beltTime: number, shadows: boolean, reset: boolean): void {
     const a = this.a;

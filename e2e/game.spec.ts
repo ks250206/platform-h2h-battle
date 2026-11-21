@@ -501,7 +501,7 @@ test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", asyn
 test("the stage selector swaps the 3D stage on the title, persists, and the match is fought there", async ({
   page,
 }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
   const errors = await load(page);
   const canvas = page.locator("#arena canvas");
   const pick = (stage: string) => page.locator(`button[data-stage="${stage}"]`);

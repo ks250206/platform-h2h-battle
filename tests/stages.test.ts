@@ -37,6 +37,8 @@ import {
 const DT = 1 / 60;
 const LEVELS: AiLevel[] = ["easy", "normal", "hard"];
 const NEW_STAGES: StageId[] = ["ruins", "bridges", "factory"];
+/** The stages with a pit or gaps: floor is only where a tile is. */
+const GAPPED_STAGES: StageId[] = ["ruins", "bridges"];
 
 /** A started match, already past the countdown. */
 function match(
@@ -698,6 +700,84 @@ describe("spawns and respawns are always on floor", () => {
     for (const p of STAGES[id].respawns)
       expect(hasClearance(id, p.x, p.z, STAGES[id].minHalfSize, 0.9)).toBe(true);
   });
+
+  // A safe zone that goes wherever it likes (a moving zone, a much smaller one) can sit over the
+  // pit or between two bridges, where no spot with the full margin is inside it.
+  test.each(GAPPED_STAGES)(
+    "%s: a tight safe zone anywhere still has a respawn candidate on floor",
+    (id) => {
+      for (const halfSize of collapseSteps(id)) {
+        for (const radius of [1.6, 1.8, 2]) {
+          let beside = 0;
+          for (const centre of lattice(0.5)) {
+            const zone = { ...centre, radius };
+            const at = `${id} ${halfSize}, radius ${radius} at (${centre.x}, ${centre.z})`;
+            const away = (p: Vec2): number => Math.hypot(p.x - zone.x, p.z - zone.z);
+            const candidates = respawnCandidates(id, halfSize, zone);
+            expect(candidates.length, at).toBeGreaterThan(0);
+            for (const p of candidates) {
+              expect(canStandAtStage(id, p.x, p.z, halfSize), at).toBe(true);
+              // Not on a lip either: floor all round, even at the reduced margin.
+              expect(hasClearance(id, p.x, p.z, halfSize, 0.3), at).toBe(true);
+            }
+            const outside = candidates.filter((p) => away(p) > radius);
+            // A zone centred over floor always has its candidates inside it.
+            if (canStandAtStage(id, zone.x, zone.z, halfSize)) expect(outside, at).toEqual([]);
+            if (outside.length === 0) continue;
+            // A zone with no room in it: one candidate, on the floor right beside the zone
+            // (the nearest floor of all, give or take the margin), not across the stage.
+            beside++;
+            expect(candidates, at).toHaveLength(1);
+            const floor = nearestWalkablePoint(id, zone.x, zone.z, halfSize);
+            expect(away(outside[0]), at).toBeLessThanOrEqual(away(floor) + 0.6);
+          }
+          // The lattice does cover zones like that (over the pit, between the bridges).
+          expect(beside, `${id} ${halfSize}, radius ${radius}`).toBeGreaterThan(0);
+        }
+      }
+    },
+  );
+
+  test("a zone with no floor in it gets the nearest floor: the pit's rim, an island's corner", () => {
+    // Over the ruins' pit: the rim tile straight ahead, 0.4 in from its edge.
+    const pit = respawnCandidates("ruins", 9, { x: 0.5, z: -1, radius: 1.6 });
+    expect(pit).toHaveLength(1);
+    expect([pit[0].x, pit[0].z]).toEqual([expect.closeTo(0.5, 9), expect.closeTo(-3.4, 9)]);
+    // Between the east and the south arm of the bridges: the corner of the east island.
+    const gap = respawnCandidates("bridges", 9, { x: 4.5, z: 4, radius: 1.6 });
+    expect(gap).toHaveLength(1);
+    expect([gap[0].x, gap[0].z]).toEqual([expect.closeTo(5.4, 9), expect.closeTo(2.6, 9)]);
+    // A zone that small on a bridge keeps to the planks' centre line.
+    for (const p of respawnCandidates("bridges", 9, { x: 3.5, z: 0.6, radius: 1.6 })) {
+      expect(Math.abs(p.z)).toBeLessThanOrEqual(BRIDGE_WIDTH / 2 - 0.7 + 1e-9);
+      expect(tileAt("bridges", p.x, p.z, 9)?.kind).toBe("bridge");
+    }
+    // Never empty, whatever is asked: not even with every tile gone (nothing to stand on then).
+    for (const id of STAGE_IDS) {
+      expect(respawnCandidates(id, 1, null).length, id).toBeGreaterThan(0);
+      expect(respawnCandidates(id, 1, { x: 6, z: -6, radius: 0.2 }).length, id).toBeGreaterThan(0);
+    }
+  });
+
+  test.each(GAPPED_STAGES)(
+    "%s: the engine always has a floor point to bring a fighter back to",
+    (id) => {
+      const engine = match(id, "duel");
+      const [player] = engine.state.fighters;
+      const respawnPoint = (f: Fighter): Vec2 =>
+        (engine as unknown as { respawnPoint(f: Fighter): Vec2 }).respawnPoint(f);
+      for (const centre of lattice(1)) {
+        // Wherever the zone is and however tight, with a bomb about to hit its middle.
+        Object.assign(engine.state.arena.safeZone, { ...centre, radius: 1.6, active: true });
+        engine.state.bombs = [
+          { id: 1, ...centre, radius: 4, timer: 1, duration: 1, exploded: false },
+        ];
+        const spot = respawnPoint(player);
+        expect(spot, `${id} zone at (${centre.x}, ${centre.z})`).toBeDefined();
+        expect(canStandAt(engine.state, spot.x, spot.z)).toBe(true);
+      }
+    },
+  );
 
   test.each(NEW_STAGES)(
     "%s: a fallen fighter comes back on floor, before and during the zone",

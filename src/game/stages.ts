@@ -559,11 +559,18 @@ export function safeZoneAt(stageId: StageId, elapsed: number, halfSize: number):
 
 /** How much floor a returning fighter gets around its landing spot. */
 const RESPAWN_MARGIN = 0.7;
+/** The room it still gets when no spot with the full margin is inside the safe zone. */
+const RESPAWN_FALLBACK_MARGIN = 0.4;
 
 /**
  * Where a fighter may come back after a fall: inside the safe zone when it is active (`zone`),
  * else near the middle of the stage. Every point is over floor, away from pits and edges; the
  * engine picks the one farthest from the opponents that no bomb is about to hit.
+ *
+ * Never empty, so the engine always has somewhere to put a fighter. A zone too tight or too far
+ * off the floor to hold a spot with the full margin (over the pit, between two bridges) gets the
+ * floor nearest its centre instead, with a smaller margin: within 0.6 of a centre that is over
+ * floor, and as close as the floor comes to one that is not (which can be outside the zone).
  */
 export function respawnCandidates(
   stageId: StageId,
@@ -594,6 +601,13 @@ export function respawnCandidates(
       const known = points.some((q) => Math.hypot(q.x - spot.x, q.z - spot.z) < 0.25);
       if (!known && within(spot, 0.9)) points.push(spot);
     }
+  }
+  // Nothing with the full margin is in reach: the nearest floor of all, which is standable for
+  // as long as a single tile of the stage is left.
+  if (points.length === 0) {
+    points.push(
+      nearestWalkablePoint(stageId, centre.x, centre.z, halfSize, RESPAWN_FALLBACK_MARGIN),
+    );
   }
   return points;
 }

@@ -784,8 +784,9 @@ export class ArenaRenderer {
     this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
-    // Belts carry nobody once the match is over, so their arrows rest then as well.
-    if (state.phase !== "ended") this.beltTime += visualDelta;
+    // Belts only carry fighters while the match is being played, so their arrows and the cog run
+    // only then (and on the title, as a preview): still through the countdown, a pause and the end.
+    if (state.phase === "playing" || state.phase === "menu") this.beltTime += visualDelta;
     // On the menu the arena slides right of the title panel (desktop) or above the menu copy (phone).
     const menu = state.phase === "menu";
     const sidePanel = this.width >= 900 || (this.height <= 570 && this.width > this.height);
