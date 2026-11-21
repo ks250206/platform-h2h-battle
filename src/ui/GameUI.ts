@@ -25,6 +25,12 @@ import { AI_LEVEL_IDS, humanSlots, padIndex, STOCK_CHOICES } from "../game/match
 import type { AiLevel, ControlDevice, MatchOptions } from "../game/match";
 import { playableOptions, type MatchStore } from "../game/matchStore";
 import {
+  LADDER_ROUNDS,
+  ladderMatchOptions,
+  type LadderOpponent,
+  type LadderProgress,
+} from "../game/ladder";
+import {
   describeRules,
   effectiveRules,
   formatClock,
@@ -57,6 +63,8 @@ import type { TitleButton } from "./padMenu";
 export interface GameUICallbacks {
   /** Starts a match with the title menu's mode and match options. */
   onStart: (mode: MatchMode, options: MatchOptions) => void;
+  onStartLadder: (options: MatchOptions) => void;
+  onLadderContinue: () => void;
   onPause: () => void;
   onResume: () => void;
   onRestart: () => void;
@@ -166,7 +174,9 @@ const icons = {
   paw: '<svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true"><ellipse cx="9" cy="8" rx="3" ry="4" transform="rotate(-24 9 8)"/><ellipse cx="23" cy="8" rx="3" ry="4" transform="rotate(24 23 8)"/><ellipse cx="3.8" cy="16" rx="2.8" ry="3.5" transform="rotate(-30 3.8 16)"/><ellipse cx="28.2" cy="16" rx="2.8" ry="3.5" transform="rotate(30 28.2 16)"/><path d="M7 25c0-4 5-12 9-12s9 8 9 12c0 5-5 3-9 3s-9 2-9-3Z"/></svg>',
 };
 
-const modes: Record<MatchMode, { label: string; en: string; detail: string; number: string }> = {
+type TitleMode = MatchMode | "ladder";
+
+const modes: Record<TitleMode, { label: string; en: string; detail: string; number?: string }> = {
   duel: { label: "一騎打ち", en: "DUEL", detail: "1対1、剣一本の読み合い。", number: "01" },
   rumble: {
     label: "乱闘",
@@ -180,9 +190,34 @@ const modes: Record<MatchMode, { label: string; en: string; detail: string; numb
     detail: "静かな道場で、間合いと復帰を試す。",
     number: "03",
   },
+  ladder: {
+    label: "CPUラダー",
+    en: "LADDER",
+    detail: "1Pの操作と見た目は「対戦設定」の先頭枠を使います。",
+  },
 };
 
 const levelLabels: Record<AiLevel, string> = { easy: "よわい", normal: "ふつう", hard: "つよい" };
+
+const ladderRound = (round: number) => `第${round}戦 / 全${LADDER_ROUNDS.length}戦`;
+const ladderOpponentName = (opponent: LadderOpponent) =>
+  `${opponent.title} ${CHARACTERS[opponent.loadout.species].name}`;
+const ladderOpponentDetails = (opponent: LadderOpponent) =>
+  `${levelLabels[opponent.difficulty]} · ${STAGES[opponent.stage].name}`;
+
+function ladderOverviewMarkup(): string {
+  return `<section class="ladder-overview" aria-label="CPUラダーのルール" hidden>
+    <h2>全${LADDER_ROUNDS.length}戦勝ち抜き</h2>
+    <p class="ladder-curve">${LADDER_ROUNDS.map((opponent) => levelLabels[opponent.difficulty]).join(" → ")}</p>
+    <p>敗北・引き分け時は同じ相手から再挑戦。<br>各戦は標準ルール（残機${RULE_PRESETS.standard.rules.stocks}）。進行はこの挑戦中のみ。</p>
+    <p class="ladder-player" aria-live="polite"></p>
+    <div class="ladder-opponent-card">
+      <span>${ladderRound(1)}</span>
+      <strong>${ladderOpponentName(LADDER_ROUNDS[0])}</strong>
+      <span>${ladderOpponentDetails(LADDER_ROUNDS[0])}</span>
+    </div>
+  </section>`;
+}
 
 /** Short button labels; the rules summary under them spells every gimmick out. */
 const gimmickShort: Record<GimmickId, string> = {
@@ -435,7 +470,7 @@ export class GameUI {
   private keyboardFighter: number | null = null;
   private readonly cards = new Map<number, FighterCard>();
   private currentPhase: Phase = "menu";
-  private selectedMode: MatchMode = "duel";
+  private selectedMode: TitleMode = "duel";
   private sound = true;
   private resumeAfterHelp = false;
   private resumeAfterSettings = false;
@@ -474,13 +509,14 @@ export class GameUI {
             ${Object.entries(modes)
               .map(
                 ([id, mode]) =>
-                  `<button class="mode-option ${id === "duel" ? "selected" : ""}" data-mode="${id}" aria-pressed="${id === "duel"}"><span class="mode-number">${mode.number}</span><span class="mode-label">${mode.label}<small>${mode.en}</small></span></button>`,
+                  `<button class="mode-option ${id === "duel" ? "selected" : ""}" data-mode="${id}" aria-pressed="${id === "duel"}">${mode.number ? `<span class="mode-number">${mode.number}</span>` : ""}<span class="mode-label">${mode.label}<small>${mode.en}</small></span></button>`,
               )
               .join("")}
           </div>
           <p class="mode-description">${modes.duel.detail}</p>
           ${matchOptionsMarkup()}
-          <button class="start-button flex items-center justify-between" data-action="start"><span>アリーナへ<span>ENTER THE ARENA</span></span>${icons.arrow}</button>
+          ${ladderOverviewMarkup()}
+          <button class="start-button flex items-center justify-between" data-action="start"><span><b class="start-label">アリーナへ</b><span class="start-en">ENTER THE ARENA</span></span>${icons.arrow}</button>
           <div class="menu-links"><button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button><button class="menu-controls-link" data-action="settings">グラフィック設定 <span>↗</span></button></div>
           <div class="menu-features flex items-center"><span>重い一撃</span><i></i><span>自由なフェイント</span><i></i><span>一瞬の読み合い</span></div>
         </div>
@@ -493,7 +529,7 @@ export class GameUI {
 
       <section class="game-hud" aria-label="対戦情報" hidden>
         <div class="match-heading"><span class="match-mode">DUEL</span><span class="heading-separator"></span><time class="match-time">00:00</time><span class="heading-separator"></span><span class="match-alive">2 ALIVE</span></div>
-        <div class="arena-status" aria-live="polite"></div>
+        <div class="arena-status" aria-live="polite"><div class="ladder-hud" hidden></div><span class="arena-status-message"></span></div>
         <div class="center-announcement" aria-live="polite"></div>
         <div class="countdown-display" aria-live="assertive" hidden><span>READ YOUR RIVAL</span><strong>3</strong></div>
         <div class="fighter-cards"></div>
@@ -506,11 +542,28 @@ export class GameUI {
       </section>
 
       <section class="pause-screen modal-scrim" role="dialog" aria-modal="true" aria-label="一時停止" hidden>
-        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p>次の一撃を、じっくり考えよう。</p><p class="pause-notice" role="status" hidden></p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="secondary-button" data-action="settings">グラフィック設定</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p class="pause-description">次の一撃を、じっくり考えよう。</p><p class="pause-notice" role="status" hidden></p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="secondary-button" data-action="settings">グラフィック設定</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
       </section>
 
       <section class="result-screen modal-scrim" role="dialog" aria-modal="true" aria-label="対戦結果" hidden>
-        <div class="modal-panel result-panel"><div class="result-paw">${icons.paw}</div><div class="eyebrow result-eyebrow">LAST PAWS STANDING</div><h2 class="result-title">勝負あり。</h2><p class="result-winner" hidden></p><p class="result-subtitle"></p><div class="result-stats"><div><strong data-stat="hits">0</strong><span>HITS</span></div><div><strong data-stat="clashes">0</strong><span>CLASHES</span></div><div><strong data-stat="time">0:00</strong><span>TIME</span></div></div><button class="primary-button" data-action="restart">もう一度、勝負 ${icons.arrow}</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel result-panel">
+          <div class="result-paw">${icons.paw}</div>
+          <div class="eyebrow result-eyebrow">LAST PAWS STANDING</div>
+          <h2 class="result-title">勝負あり。</h2>
+          <p class="result-winner" hidden></p>
+          <p class="result-subtitle"></p>
+          <div class="result-stats"><div><strong data-stat="hits">0</strong><span>HITS</span></div><div><strong data-stat="clashes">0</strong><span>CLASHES</span></div><div><strong data-stat="time">0:00</strong><span>TIME</span></div></div>
+          <div class="ladder-opponent-card ladder-next" hidden><span></span><strong></strong><span></span></div>
+          <dl class="ladder-totals" hidden>
+            <div><dt>勝利</dt><dd data-ladder-stat="wins"></dd></div>
+            <div><dt>敗北</dt><dd data-ladder-stat="losses"></dd></div>
+            <div><dt>引き分け</dt><dd data-ladder-stat="draws"></dd></div>
+            <div><dt>再挑戦</dt><dd data-ladder-stat="retries"></dd></div>
+            <div><dt>合計試合時間</dt><dd data-ladder-stat="elapsed"></dd></div>
+          </dl>
+          <button class="primary-button" data-pad-primary data-action="restart"><b class="result-primary-label">もう一度、勝負</b> ${icons.arrow}</button>
+          <button class="text-button" data-action="menu">タイトルへ戻る</button>
+        </div>
       </section>
 
       <dialog class="help-dialog" aria-labelledby="help-title">
@@ -524,7 +577,7 @@ export class GameUI {
           <div class="help-callout"><span class="callout-icon">${icons.sword}</span><div><strong>長押しでためる。<kbd>Q</kbd> でフェイント。</strong><p>ため中はキャンセルやステップに移れる。振りかぶり中は向きをゆっくり直せて、Qで止めることもできるが、スタミナは戻らず、遅く止めるほど隙が残る。斬りかかった剣は向きが固まり、最後まで振り抜く。</p></div></div>
           <section class="stage-help" aria-labelledby="stage-help-title">
             <h3 id="stage-help-title">STAGES / ステージ</h3>
-            <p class="stage-help-lead">タイトルの「対戦設定」で選べます。どのモードでも、稽古でも使えます。</p>
+            <p class="stage-help-lead">一騎打ち・乱闘・稽古のステージは、タイトルの「対戦設定」で選べます。</p>
             <dl class="stage-help-list">${stageHelpMarkup()}</dl>
           </section>
           <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>光る円の内側が安全地帯。</strong>外では%とゲージが増加。5秒分たまるとアウト、内側ではゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
@@ -549,7 +602,7 @@ export class GameUI {
           </section>
           <section class="pad-help" aria-labelledby="pad-help-title">
             <h3 id="pad-help-title">GAMEPAD / パッド</h3>
-            <p class="pad-help-lead">パッドは4台まで、何人でも参加できます。キーボードとマウス（タッチ）はひとり分。タイトルでパッドの <kbd>A</kbd> か <kbd>Start</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
+            <p class="pad-help-lead">パッドは4台まで使えます。キーボードとマウス（タッチ）はひとり分。一騎打ち・乱闘・稽古のタイトル設定では、パッドの <kbd>A</kbd> か <kbd>Start</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
             <dl class="pad-table">
               <div><dt><kbd>RB</kbd></dt><dd>横振り</dd></div>
               <div><dt><kbd>RT</kbd></dt><dd>振り下ろし</dd></div>
@@ -632,8 +685,30 @@ export class GameUI {
   /** Reflects the stored match options, the selected mode and the connected pads in the title. */
   private syncMatchOptions(): void {
     const options = this.match.get();
-    const block = this.query(".match-options");
     const mode = this.selectedMode;
+    const block = this.query(".match-options");
+    const inLadder = mode === "ladder";
+    block.hidden = inLadder;
+    this.query(".ladder-overview").hidden = !inLadder;
+    this.menu.classList.toggle("ladder-menu", inLadder);
+    setText(this.query(".start-label"), inLadder ? "CPUラダーを始める" : "アリーナへ");
+    setText(this.query(".start-en"), inLadder ? "START LADDER" : "ENTER THE ARENA");
+    const connected = (pad: number) => this.connectedPads.includes(pad);
+    if (inLadder) {
+      const first = ladderMatchOptions(options, LADDER_ROUNDS[0]);
+      const { options: playable, substitutes } = playableOptions(first, 2, connected);
+      const look = first.loadouts[0];
+      const device = deviceLabel(playable.controls[0] ?? "keyboard");
+      const fallback = substitutes[0] ? `（${deviceLabel(substitutes[0].device)}が未接続）` : "";
+      const character = CHARACTERS[look.species].name;
+      setText(
+        this.query(".ladder-player"),
+        `1P専用 · ${character}（${PALETTES[look.palette].label} / ${ACCESSORIES[look.accessory].label}） · ${device}${fallback}`,
+      );
+      this.syncStage(STAGES[first.stage], false);
+      this.callbacks.onPreview("duel", first);
+      return;
+    }
     const training = mode === "training";
     const count = fighterCount(mode);
     block.classList.toggle("practice", training);
@@ -699,7 +774,6 @@ export class GameUI {
     if (notes.innerHTML !== notesMarkup) notes.innerHTML = notesMarkup;
     notes.hidden = training || lockedIds.length === 0;
 
-    const connected = (pad: number) => this.connectedPads.includes(pad);
     const { options: playable, substitutes } = playableOptions(options, count, connected);
     const players = humanSlots(playable, count);
     const nameOf = (id: number) => CHARACTERS[options.loadouts[id]!.species].name;
@@ -824,6 +898,7 @@ export class GameUI {
   /** Opens the look picker on `slot` of the selected mode (title screen only). */
   private openCharacter(slot: number): void {
     if (this.currentPhase !== "menu" || this.host.querySelector("dialog[open]")) return;
+    if (this.selectedMode === "ladder") return;
     if (!Number.isInteger(slot) || slot < 0 || slot >= fighterCount(this.selectedMode)) return;
     this.previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -837,6 +912,7 @@ export class GameUI {
 
   /** Another slot's tab: the choices made so far stay; cancelling still undoes them all. */
   private selectCharacterSlot(slot: number): void {
+    if (this.selectedMode === "ladder") return;
     if (!this.customizing || slot < 0 || slot >= fighterCount(this.selectedMode)) return;
     this.customizing.slot = slot;
     this.syncCharacter();
@@ -898,6 +974,9 @@ export class GameUI {
    */
   padTitleButton(index: number, button: TitleButton): boolean {
     if (this.host.querySelector("dialog[open]")) return false;
+    if (this.selectedMode === "ladder") return false;
+    if (button === "a" && document.activeElement?.matches("button[data-mode='ladder']"))
+      return false;
     const count = fighterCount(this.selectedMode);
     if (button === "y") {
       // Y opens the look picker on the slot that pad plays (the first slot before it has joined).
@@ -927,6 +1006,7 @@ export class GameUI {
 
   /** The title rows' selects: who plays a slot, and a CPU's strength. */
   private handleMatchChange = (event: Event): void => {
+    if (this.selectedMode === "ladder") return;
     const control = event.target as HTMLSelectElement;
     const count = fighterCount(this.selectedMode);
     if (control.dataset.slotDevice !== undefined) {
@@ -1133,7 +1213,7 @@ export class GameUI {
       this.match.set({ stage: target.dataset.stage as StageId });
       return;
     }
-    const mode = target.dataset.mode as MatchMode | undefined;
+    const mode = target.dataset.mode as TitleMode | undefined;
     if (mode) {
       this.selectedMode = mode;
       this.host.querySelectorAll<HTMLElement>("button[data-mode]").forEach((button) => {
@@ -1146,7 +1226,11 @@ export class GameUI {
     }
     switch (target.dataset.action) {
       case "start":
-        this.callbacks.onStart(this.selectedMode, this.match.get());
+        if (this.selectedMode === "ladder") this.callbacks.onStartLadder(this.match.get());
+        else this.callbacks.onStart(this.selectedMode, this.match.get());
+        break;
+      case "ladder-continue":
+        this.callbacks.onLadderContinue();
         break;
       case "camera":
         this.graphics.store.set({ cameraFollow: !this.graphics.store.get().cameraFollow });
@@ -1295,7 +1379,50 @@ export class GameUI {
     };
   }
 
-  update(state: GameState): void {
+  private syncLadderResult(ladder: LadderProgress, roundLabel: string): void {
+    const clear = ladder.phase === "clear";
+    this.result.classList.toggle("ladder-clear", clear);
+    this.query(".result-winner").hidden = true;
+    setText(this.query(".result-eyebrow"), clear ? "LADDER CLEAR" : "CPU LADDER");
+    setText(
+      this.query(".result-title"),
+      clear
+        ? "ラダークリア"
+        : ladder.outcome === "win"
+          ? "あなたの勝ち。"
+          : ladder.outcome === "draw"
+            ? "引き分け。"
+            : "敗北。",
+    );
+    setText(
+      this.query(".result-subtitle"),
+      clear ? `全${LADDER_ROUNDS.length}戦クリア · ${roundLabel}` : roundLabel,
+    );
+    const next = this.query(".ladder-next");
+    next.hidden = !ladder.nextOpponent;
+    if (ladder.nextOpponent) {
+      setText(next.children[0] as HTMLElement, `次の相手 · ${ladderRound(ladder.round + 1)}`);
+      setText(next.children[1] as HTMLElement, ladderOpponentName(ladder.nextOpponent));
+      setText(next.children[2] as HTMLElement, ladderOpponentDetails(ladder.nextOpponent));
+    }
+    this.query(".ladder-totals").hidden = !clear;
+    if (clear) {
+      const { totals } = ladder;
+      for (const key of ["wins", "losses", "draws", "retries"] as const)
+        setText(this.query(`[data-ladder-stat="${key}"]`), String(totals[key]));
+      setText(this.query('[data-ladder-stat="elapsed"]'), formatClock(totals.elapsed));
+    }
+    setText(
+      this.query(".result-primary-label"),
+      clear ? "もう一度ラダーに挑戦" : ladder.nextOpponent ? "次の相手へ" : "同じ相手に再挑戦",
+    );
+    setText(
+      this.query(".result-screen [data-action='menu']"),
+      clear ? "タイトルへ戻る" : "ラダーを終了",
+    );
+  }
+
+  update(state: GameState, ladder?: LadderProgress): void {
     const changedPhase = this.currentPhase !== state.phase;
     this.currentPhase = state.phase;
     // The look picker belongs to the title: a match that starts keeps what was chosen so far.
@@ -1308,11 +1435,39 @@ export class GameUI {
     this.pausePanel.hidden = state.phase !== "paused";
     this.result.hidden = state.phase !== "ended";
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
+    const ladderLabel = ladder
+      ? `${ladderRound(ladder.round)} · ${ladderOpponentName(ladder.opponent)} · ${ladderOpponentDetails(ladder.opponent)}`
+      : "";
+    const ladderHud = this.query(".ladder-hud");
+    ladderHud.hidden = !ladder;
+    setText(ladderHud, ladderLabel);
+    if (state.phase === "paused") {
+      setText(this.query(".pause-description"), ladderLabel || "次の一撃を、じっくり考えよう。");
+      this.query(".pause-screen [data-action='restart']").hidden = Boolean(ladder);
+      setText(
+        this.query(".pause-screen [data-action='menu']"),
+        ladder ? "ラダーを終了" : "タイトルへ戻る",
+      );
+    }
+    if (state.phase === "ended" && changedPhase) {
+      const primary = this.query(".result-screen [data-pad-primary]");
+      primary.dataset.action = ladder ? "ladder-continue" : "restart";
+      this.result.setAttribute("aria-label", ladder ? "CPUラダーの結果" : "対戦結果");
+      this.query(".result-stats").hidden = Boolean(ladder);
+      if (ladder) this.syncLadderResult(ladder, ladderLabel);
+      else {
+        this.result.classList.remove("ladder-clear");
+        this.query(".ladder-next").hidden = true;
+        this.query(".ladder-totals").hidden = true;
+        setText(this.query(".result-primary-label"), "もう一度、勝負");
+        setText(this.query(".result-screen [data-action='menu']"), "タイトルへ戻る");
+      }
+    }
     if (changedPhase && !this.dialog.open && !this.settingsDialog.open) {
       if (state.phase === "paused")
         this.pausePanel.querySelector<HTMLButtonElement>('[data-action="resume"]')?.focus();
       if (state.phase === "ended")
-        this.result.querySelector<HTMLButtonElement>('[data-action="restart"]')?.focus();
+        this.result.querySelector<HTMLButtonElement>("[data-pad-primary]")?.focus();
     }
 
     const clock = (seconds: number) =>
@@ -1325,7 +1480,7 @@ export class GameUI {
     const limit = state.rules.timeLimit;
     // The clock shows the time limit beside it, so a short match never ends by surprise.
     setText(this.query(".match-time"), limit === null ? time : `${time} / ${clock(limit)}`);
-    this.query(".match-mode").textContent = modes[state.mode].en;
+    setText(this.query(".match-mode"), ladder ? modes.ladder.en : modes[state.mode].en);
     // Training respawns everyone for ever; elsewhere a fighter is in the match while it has lives.
     const training = state.mode === "training";
     this.query(".match-alive").textContent = `${
@@ -1334,27 +1489,31 @@ export class GameUI {
     } ALIVE`;
 
     const arenaStatus = this.query(".arena-status");
+    const arenaStatusMessage = this.query(".arena-status-message");
     const nextCollapse = Math.max(0, Math.ceil(state.arena.nextCollapse - state.elapsed));
     arenaStatus.classList.toggle("warning", state.arena.warningRing);
     if (state.mode === "training")
       setText(
-        arenaStatus,
+        arenaStatusMessage,
         // A belt is part of the floor: it runs in practice too.
         STAGES[state.arena.stageId].gimmicks.conveyor.state === "off"
           ? "PRACTICE FIELD  ·  ギミックなし"
           : "PRACTICE FIELD  ·  コンベアだけ動く",
       );
-    else if (state.arena.warningRing) setText(arenaStatus, `外周崩壊まで ${nextCollapse} 秒`);
-    else if (state.arena.safeZone.active) setText(arenaStatus, "SAFE ZONE MOVING  ·  光の円へ");
+    else if (state.arena.warningRing)
+      setText(arenaStatusMessage, `外周崩壊まで ${nextCollapse} 秒`);
+    else if (state.arena.safeZone.active)
+      setText(arenaStatusMessage, "SAFE ZONE MOVING  ·  光の円へ");
+    else if (ladder) setText(arenaStatusMessage, "");
     else if (GIMMICK_IDS.every((id) => !state.rules.gimmicks[id])) {
       const stage = STAGES[state.arena.stageId];
       setText(
-        arenaStatus,
+        arenaStatusMessage,
         stage.gimmicks.conveyor.state === "off"
           ? `${stage.title}  ·  ギミックなし`
           : `${stage.title}  ·  コンベアだけ動く`,
       );
-    } else setText(arenaStatus, STAGES[state.arena.stageId].title);
+    } else setText(arenaStatusMessage, STAGES[state.arena.stageId].title);
 
     const announcement = this.query(".center-announcement");
     setText(announcement, state.message);
@@ -1438,7 +1597,7 @@ export class GameUI {
       );
     this.applyLock();
 
-    if (state.phase === "ended") {
+    if (state.phase === "ended" && !ladder) {
       const winner = state.fighters.find((fighter) => fighter.id === state.winnerId);
       const humans = state.fighters.filter((fighter) => fighter.human);
       const several = humans.length > 1;

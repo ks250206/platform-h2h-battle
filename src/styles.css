@@ -287,7 +287,7 @@ h1 > span {
 }
 .mode-picker {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: 100%;
   gap: 3px;
   border-bottom: 1px solid var(--line);
@@ -295,9 +295,9 @@ h1 > span {
 .mode-option {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 5px;
   position: relative;
-  padding: 13px 6px 16px;
+  padding: 13px 4px 16px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -331,7 +331,8 @@ h1 > span {
 .mode-label {
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
 }
 .mode-label small {
   display: block;
@@ -742,6 +743,47 @@ h1 > span {
   line-height: 1.6;
   color: var(--ink-soft);
 }
+.ladder-overview {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--paper);
+}
+.ladder-overview h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+}
+.ladder-overview p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.ladder-overview .ladder-curve,
+.ladder-overview .ladder-player {
+  color: var(--ink);
+  font-weight: 650;
+}
+.ladder-opponent-card {
+  display: grid;
+  gap: 3px;
+  padding: 9px 12px;
+  border-left: 2px solid var(--coral);
+  border-radius: 3px;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: left;
+}
+.ladder-opponent-card strong {
+  color: var(--ink);
+  font-size: 13px;
+}
 .start-button {
   width: 100%;
   border: none;
@@ -765,6 +807,10 @@ h1 > span {
   font-size: 16px;
   letter-spacing: 0.1em;
   font-weight: 750;
+}
+.start-label,
+.result-primary-label {
+  font-weight: inherit;
 }
 .start-button > span span {
   display: block;
@@ -926,8 +972,18 @@ h1 > span {
   box-shadow: var(--shadow-sm);
   white-space: nowrap;
 }
-.arena-status:empty {
+.arena-status:not(:has(.ladder-hud:not([hidden]), .arena-status-message:not(:empty))),
+.arena-status-message:empty {
   display: none;
+}
+.arena-status:has(.ladder-hud:not([hidden])) {
+  max-width: calc(100% - 32px);
+  white-space: normal;
+  text-align: center;
+}
+.ladder-hud {
+  color: var(--ink);
+  font-weight: 650;
 }
 .arena-status.warning {
   color: var(--danger-text);
@@ -1564,6 +1620,50 @@ kbd {
   font-size: 7px;
   color: var(--ink-soft);
   letter-spacing: 0.13em;
+}
+.ladder-next,
+.ladder-totals {
+  margin: 0 0 18px;
+}
+.ladder-totals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  padding: 12px 0;
+  border-block: 1px solid var(--line);
+}
+.ladder-totals dt {
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+.ladder-totals dd {
+  margin: 0;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.ladder-clear .result-panel {
+  background: linear-gradient(color-mix(in srgb, var(--sun) 22%, var(--paper)), var(--paper) 62%);
+  border-color: color-mix(in srgb, var(--sun) 65%, var(--line));
+}
+.ladder-clear .result-paw {
+  color: var(--coral-text);
+  filter: drop-shadow(0 0 9px var(--sun));
+}
+.result-panel:has([data-action="ladder-continue"]),
+.pause-panel:has([data-action="restart"][hidden]) {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+:is(
+    .result-panel:has([data-action="ladder-continue"]),
+    .pause-panel:has([data-action="restart"][hidden])
+  )
+  .text-button {
+  min-height: 40px;
+  padding-inline: 12px;
+  margin-top: 6px;
 }
 .help-dialog {
   width: 720px;
@@ -2300,6 +2400,9 @@ kbd {
     width: 310px;
     left: 5%;
   }
+  .mode-number {
+    display: none;
+  }
   h1 {
     font-size: 37px;
   }
@@ -2386,6 +2489,19 @@ kbd {
 /* The stage row took the taglines' line on a short desktop screen. */
 @media (max-height: 760px) and (min-width: 701px) {
   .menu-features {
+    display: none;
+  }
+}
+@media (max-height: 700px) and (min-width: 701px) {
+  .ladder-menu .menu-content {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    pointer-events: auto;
+  }
+  .ladder-menu .menu-content > .eyebrow,
+  .ladder-menu h1,
+  .ladder-menu .menu-description {
     display: none;
   }
 }
@@ -2647,6 +2763,14 @@ kbd {
     right: 22px;
   }
 }
+@media (max-width: 380px) {
+  .mode-label {
+    font-size: 11px;
+  }
+  .mode-label small {
+    font-size: 7px;
+  }
+}
 /* Short portrait phones: the last resort is scrolling inside the menu column. */
 @media (max-width: 700px) and (max-height: 760px) {
   .menu-content {
@@ -2691,6 +2815,25 @@ kbd {
     right: auto;
     width: 300px;
     transform: translateY(-43%);
+  }
+  .ladder-menu .menu-content {
+    top: 56px;
+    bottom: 27px;
+    width: min(340px, 90%);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: auto;
+    transform: none;
+  }
+  .ladder-menu .menu-content > .eyebrow,
+  .ladder-menu h1,
+  .ladder-menu .menu-description {
+    display: none;
+  }
+  .ladder-overview {
+    gap: 5px;
+    padding: 9px 12px;
+    margin-bottom: 9px;
   }
   /* Short landscape: the match options become a second column beside the menu. */
   .match-options {
