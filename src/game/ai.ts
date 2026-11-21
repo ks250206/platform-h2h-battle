@@ -50,7 +50,8 @@ export interface AiMemory {
   lastMode: Fighter["mode"];
   lastSwing: AttackId | null;
   defend: boolean;
-  chargeRead: boolean;
+  chargeReadTime: number | null;
+  chargeStepCooldown: number;
   lead: number;
   spentRead: boolean;
   counterAim: Vec2 | null;
@@ -106,9 +107,10 @@ export class CpuController {
 
   decide(f: Fighter, dt: number): PlayerInput {
     const input = this.choose(f, dt);
-    if (f.mode === "windup" && input.aim) {
+    if (f.mode === "windup") {
+      const aim = input.aim && length(input.aim) > 0.05 ? input.aim : input.move;
       const limit = RULES.windupTurnRate * AI_LEVELS[f.aiLevel].tracking * dt;
-      const wanted = Math.atan2(input.aim.x, input.aim.z);
+      const wanted = length(aim) > 0.05 ? Math.atan2(aim.x, aim.z) : f.facing;
       const angle = f.facing + clamp(angleDelta(f.facing, wanted), -limit, limit);
       input.aim = { x: Math.sin(angle), z: Math.cos(angle) };
     }
@@ -130,6 +132,7 @@ export class CpuController {
       return this.bide(f, level, input);
     }
     const { memory, enemy } = this.observeRival(f, target, level);
+    memory.chargeStepCooldown = Math.max(0, memory.chargeStepCooldown - dt);
     // Extrapolate only a manifested, direction-locked step. A new stick direction, release,
     // cancel, landing or subsequent dodge is unknowable. A counter aims at its chosen spot.
     const stepRead =
@@ -245,8 +248,7 @@ export class CpuController {
       input.move = this.againstBelt(f, input.move);
     }
     f.aiThink -= dt;
-    if (f.mode !== "idle" || !enemy || enemy.invulnerable > 0 || target.invulnerable > 0)
-      return input;
+    if (f.mode !== "idle" || !enemy || enemy.invulnerable > 0) return input;
     if (this.defend(f, input, memory, enemy, distance, edge, danger)) return input;
     if (f.aiThink > 0 && !(punish && distance < 3.3 && f.stamina >= level.attackStamina))
       return input;
@@ -311,12 +313,15 @@ export class CpuController {
       !edge &&
       f.stamina >= RULES.stepCost;
     const expecting =
-      threat && !memory.spentRead && (enemy.mode === "charge" ? memory.chargeRead : memory.defend);
+      threat &&
+      !memory.spentRead &&
+      memory.chargeStepCooldown <= 0 &&
+      (enemy.mode === "charge" ? memory.chargeReadTime !== null : memory.defend);
     // Hold the chosen read while moving. Imperfect lead time can leave the whole step early
     // or late. Only one dodge per visible swing, even if the player keeps holding the button.
     const ready =
       enemy.mode === "charge"
-        ? enemy.modeTime + age >= memory.lead
+        ? memory.chargeReadTime !== null && enemy.modeTime + age >= memory.chargeReadTime
         : enemy.mode !== "windup" || enemy.modeDuration - enemy.modeTime - age <= memory.lead;
     if (expecting && !ready) return true;
     const bombDodge =
@@ -338,6 +343,9 @@ export class CpuController {
       // Only a dodge that ends on floor: on a bridge that may leave no dodge at all.
       const landing = this.safeStep(f, dodge);
       if (landing) {
+        // After betting on a release, take one think interval on landing to reassess the rival.
+        if (expecting && enemy.mode === "charge")
+          memory.chargeStepCooldown = RULES.stepDuration + f.aiThink;
         input.step = true;
         input.move = landing;
       }
@@ -357,7 +365,8 @@ export class CpuController {
         lastMode: "idle",
         lastSwing: null,
         defend: false,
-        chargeRead: false,
+        chargeReadTime: null,
+        chargeStepCooldown: 0,
         lead: 0,
         spentRead: false,
         counterAim: f.aiMemory?.counterAim ?? null,
@@ -379,8 +388,11 @@ export class CpuController {
     if (isTell(enemy.mode) && !isTell(memory.lastMode)) {
       const repeat = level.smartDodge && enemy.attack !== null && enemy.attack === memory.lastSwing;
       memory.defend = this.random() < Math.min(0.97, level.dodgeChance + (repeat ? 0.15 : 0));
-      memory.chargeRead = this.random() < level.anticipateCharge;
+      const anticipate = this.random() < level.anticipateCharge;
       memory.lead = level.dodgeLead + (2 * this.random() - 1) * level.leadSpread;
+      memory.chargeReadTime = anticipate
+        ? level.chargeReadMin + this.random() * (level.chargeReadMax - level.chargeReadMin)
+        : null;
       memory.spentRead = false;
     }
     if (enemy.mode === "windup") memory.lastSwing = enemy.attack;

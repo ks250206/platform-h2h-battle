@@ -141,6 +141,9 @@ export interface AiProfile {
   observationTicks: number;
   /** Probability of treating a held charge as an imminent release. */
   anticipateCharge: number;
+  /** Estimated elapsed charge time (seconds) when an anticipated release prompts a step. */
+  chargeReadMin: number;
+  chargeReadMax: number;
   /** Seconds before estimated contact to start a step, plus uniform judgment error. */
   dodgeLead: number;
   leadSpread: number;
@@ -175,6 +178,8 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     dodgeChance: 0.2,
     observationTicks: 14,
     anticipateCharge: 0.16,
+    chargeReadMin: 0.18,
+    chargeReadMax: 0.38,
     dodgeLead: 0.18,
     leadSpread: 0.14,
     smartDodge: false,
@@ -196,6 +201,8 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     dodgeChance: 0.7,
     observationTicks: 9,
     anticipateCharge: 0.36,
+    chargeReadMin: 0.28,
+    chargeReadMax: 0.44,
     dodgeLead: 0.19,
     leadSpread: 0.1,
     smartDodge: false,
@@ -217,6 +224,8 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     dodgeChance: 0.9,
     observationTicks: 5,
     anticipateCharge: 0.46,
+    chargeReadMin: 0.28,
+    chargeReadMax: 0.44,
     dodgeLead: 0.17,
     leadSpread: 0.075,
     smartDodge: true,

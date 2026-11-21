@@ -70,6 +70,22 @@ describe("measurable differences between levels", () => {
     return { turned, windupFrames };
   }
 
+  test("easy keeps its wind-up facing when it moves sideways without a living target", () => {
+    const { engine, human, cpu } = duel(61, "easy", 3);
+    Object.assign(human, { mode: "dead", respawnTimer: 1 });
+    Object.assign(cpu, {
+      x: engine.state.arena.halfSize - 0.4,
+      z: 0,
+      facing: 0,
+      mode: "windup",
+      modeDuration: ATTACKS.overhead.startup,
+      attack: "overhead",
+    });
+    engine.update(DT);
+    expect(cpuInput(engine, cpu).move.x).toBeLessThan(-0.9);
+    expect(cpu.facing).toBe(0);
+  });
+
   test("easy never turns during its wind-up; hard keeps tracking", () => {
     const easy = windupTurns("easy");
     const hard = windupTurns("hard");
@@ -144,7 +160,7 @@ function exchange(
     if (human.damage > playerDamage && previousMode === "recovery") punished = true;
     if (cpu.damage > beforeDamage) {
       hits++;
-      if (cancelFrame >= 0) followHit = true;
+      if (followed) followHit = true;
     }
   }
   return { firstStep, early, caught, punished, followHit, hits };
@@ -177,7 +193,9 @@ test.each(LEVELS)("%s can misread a hold, or spend a dodge on either kind of fei
   for (const style of ["charge feint", "windup feint"] as const) {
     const rows = trials(level, style);
     expect(rows.filter((row) => row.caught).length).toBeGreaterThan(2);
-    expect(rows.filter((row) => row.caught && row.followHit).length).toBeGreaterThan(2);
+    const thrustPunishes = rows.filter((row) => row.caught && row.followHit).length;
+    const minimum = style === "charge feint" && level !== "easy" ? 20 : 3;
+    expect(thrustPunishes).toBeGreaterThanOrEqual(minimum);
   }
   const stepFrames = tap.filter((row) => row.firstStep >= 0).map((row) => row.firstStep);
   expect(Math.max(...stepFrames) - Math.min(...stepFrames)).toBeGreaterThan(2);
@@ -353,6 +371,20 @@ test.each(LEVELS)(
   },
 );
 
+test.each(LEVELS)("%s waits for observed spawn protection before withholding an attack", (level) => {
+  const { engine, human, cpu } = duel(61, level);
+  Object.assign(cpu, { x: 0, z: 0, aiThink: 99 });
+  Object.assign(human, { x: 0, z: 2.8, invulnerable: 0 });
+  const delay = AI_LEVELS[level].observationTicks;
+  for (let i = 0; i <= delay; i++) think(engine, cpu);
+
+  human.invulnerable = RULES.respawnInvulnerable;
+  for (let i = 0; i <= delay; i++) {
+    cpu.aiThink = 0;
+    expect(think(engine, cpu).attackPressed).toBe(i < delay ? "thrust" : null);
+  }
+});
+
 test("hard punishes the observed dodge landing on either side and whiffs if that read is baited", () => {
   for (const side of [-1, 1]) {
     for (const evade of [false, true]) {
@@ -402,6 +434,8 @@ test.each(LEVELS)(
     c.invulnerable = 0;
     aimAt(0, -1);
     c.invulnerable = RULES.respawnInvulnerable;
+    // The same rival remains selected. Its new blink takes one observation delay to reach combat.
+    for (let i = 0; i < AI_LEVELS[level].observationTicks; i++) think(engine, cpu);
     for (let i = 0; i < 60; i++) {
       const input = think(engine, cpu);
       expect(input.attackPressed).toBeNull();
