@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vite-plus/test";
 import {
   createSettingsStore,
+  DEFAULT_BGM_VOLUME,
+  DEFAULT_SE_VOLUME,
   defaultSettings,
   effectiveSamples,
   loadSettings,
@@ -37,6 +39,10 @@ describe("device profile defaults", () => {
       cameraShake: true,
       cameraFollow: true,
       padRumble: true,
+      reducedFlash: false,
+      bgmVolume: DEFAULT_BGM_VOLUME,
+      seVolume: DEFAULT_SE_VOLUME,
+      muted: false,
     });
   });
 
@@ -215,5 +221,108 @@ describe("settings store", () => {
     expect(store.get()).toEqual(hardware);
     expect(calls).toBe(1);
     expect(JSON.parse(storage.data.get(STORAGE_KEY)!)).toEqual(hardware);
+  });
+});
+
+describe("sound and effect settings", () => {
+  test("every profile starts with sound on, the default mix and full effects", () => {
+    for (const software of [false, true])
+      for (const touch of [false, true]) {
+        const s = defaultSettings({ software, touch });
+        expect(s.muted).toBe(false);
+        expect(s.reducedFlash).toBe(false);
+        expect(s.bgmVolume).toBe(DEFAULT_BGM_VOLUME);
+        expect(s.seVolume).toBe(DEFAULT_SE_VOLUME);
+      }
+  });
+
+  test("a record saved before the sound settings existed loads them as defaults", () => {
+    const old = JSON.stringify({ shadows: "high", cameraShake: false, padRumble: false });
+    const loaded = loadSettings(hardware, memoryStorage(old));
+    expect(loaded).toEqual({ ...hardware, shadows: "high", cameraShake: false, padRumble: false });
+  });
+
+  test("volumes are numbers clamped to 0..1 and snapped to whole percent", () => {
+    const load = (raw: object) => loadSettings(hardware, memoryStorage(JSON.stringify(raw)));
+    expect(load({ bgmVolume: 0, seVolume: 1 })).toMatchObject({ bgmVolume: 0, seVolume: 1 });
+    expect(load({ bgmVolume: 1.7, seVolume: -0.2 })).toMatchObject({ bgmVolume: 1, seVolume: 0 });
+    expect(load({ bgmVolume: 0.333333 }).bgmVolume).toBe(0.33);
+    expect(load({ bgmVolume: "0.5", seVolume: null })).toMatchObject({
+      bgmVolume: DEFAULT_BGM_VOLUME,
+      seVolume: DEFAULT_SE_VOLUME,
+    });
+    // JSON has no NaN or Infinity; a patch might.
+    const store = createSettingsStore(hardware, memoryStorage());
+    store.set({ bgmVolume: Number.NaN, seVolume: Number.POSITIVE_INFINITY });
+    expect(store.get().bgmVolume).toBe(DEFAULT_BGM_VOLUME);
+    expect(store.get().seVolume).toBe(DEFAULT_SE_VOLUME);
+  });
+
+  test("music and effect volumes are independent and the mute leaves both untouched", () => {
+    const storage = memoryStorage();
+    const store = createSettingsStore(hardware, storage);
+    store.set({ bgmVolume: 0 });
+    expect(store.get()).toMatchObject({ bgmVolume: 0, seVolume: DEFAULT_SE_VOLUME, muted: false });
+    store.set({ seVolume: 0, bgmVolume: 0.4 });
+    expect(store.get()).toMatchObject({ bgmVolume: 0.4, seVolume: 0 });
+    store.set({ muted: true });
+    expect(store.get()).toMatchObject({ bgmVolume: 0.4, seVolume: 0, muted: true });
+    store.set({ muted: false });
+    expect(store.get()).toMatchObject({ bgmVolume: 0.4, seVolume: 0, muted: false });
+  });
+
+  test("mute, volumes and reduced flash persist under bramble.settings.v1", () => {
+    expect(STORAGE_KEY).toBe("bramble.settings.v1");
+    const storage = memoryStorage();
+    const store = createSettingsStore(hardware, storage);
+    store.set({ muted: true, bgmVolume: 0.25, seVolume: 0.9, reducedFlash: true });
+    const saved = JSON.parse(storage.data.get(STORAGE_KEY)!);
+    expect(saved).toMatchObject({
+      muted: true,
+      bgmVolume: 0.25,
+      seVolume: 0.9,
+      reducedFlash: true,
+    });
+    expect(createSettingsStore(hardware, storage).get()).toMatchObject({
+      muted: true,
+      bgmVolume: 0.25,
+      seVolume: 0.9,
+      reducedFlash: true,
+    });
+  });
+
+  test("toggles reject non-booleans field by field", () => {
+    const stored = JSON.stringify({ muted: "yes", reducedFlash: 1, bgmVolume: 0.2 });
+    expect(loadSettings(hardware, memoryStorage(stored))).toEqual({ ...hardware, bgmVolume: 0.2 });
+  });
+
+  test("blocked storage: the sound settings still work for the session", () => {
+    const blocked: SettingsStorage = {
+      getItem: () => {
+        throw new Error("SecurityError");
+      },
+      setItem: () => {
+        throw new Error("SecurityError");
+      },
+    };
+    const store = createSettingsStore(hardware, blocked);
+    expect(store.get()).toEqual(hardware);
+    expect(() => store.set({ muted: true, bgmVolume: 0 })).not.toThrow();
+    expect(store.get()).toMatchObject({ muted: true, bgmVolume: 0 });
+    const none = createSettingsStore(hardware, null);
+    none.set({ seVolume: 0.5 });
+    expect(none.get().seVolume).toBe(0.5);
+  });
+
+  test("reset brings the sound back on at the default mix", () => {
+    const store = createSettingsStore(hardware, memoryStorage());
+    store.set({ muted: true, bgmVolume: 0, seVolume: 0, reducedFlash: true });
+    store.reset();
+    expect(store.get()).toMatchObject({
+      muted: false,
+      bgmVolume: DEFAULT_BGM_VOLUME,
+      seVolume: DEFAULT_SE_VOLUME,
+      reducedFlash: false,
+    });
   });
 });
