@@ -367,15 +367,13 @@ h1 > span {
   display: grid;
   gap: 5px;
 }
-.match-option,
-.override-row {
+.match-option {
   display: grid;
   grid-template-columns: 70px 1fr;
   align-items: center;
   gap: 8px;
 }
-.match-option-label,
-.override-name {
+.match-option-label {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -402,80 +400,159 @@ h1 > span {
 .match-options .segmented button[aria-pressed="true"] {
   background: var(--sun);
 }
-.match-overrides {
-  margin-top: 1px;
-}
-.match-overrides summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 0;
-  list-style: none;
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--ink-soft);
-  border-radius: 3px;
-}
-.match-overrides summary::-webkit-details-marker {
-  display: none;
-}
-.match-overrides summary::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  margin: 0 3px 0 2px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform 0.15s;
-}
-.match-overrides[open] summary::before {
-  transform: translateY(-2px) rotate(45deg);
-}
-.match-overrides summary:hover {
-  color: var(--ink);
-}
-.match-overrides summary:focus-visible {
-  outline-offset: 2px;
-}
-.override-count {
-  margin-left: auto;
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--violet);
-}
-.override-rows {
+/* One row per fighter: who plays it (keyboard, a pad or the CPU), then a P badge or CPU strength. */
+.player-rows {
   display: grid;
   gap: 4px;
-  margin: 3px 0 2px;
+  margin-top: 2px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--line-strong);
 }
-/* The taglines make way for the per-CPU rows. */
-.menu-content:has(.match-options:not(.practice) .match-overrides[open]) .menu-features {
-  display: none;
+.player-row {
+  --slot-color: var(--coral);
+  display: grid;
+  grid-template-columns: 70px 1fr 1fr;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
 }
-.override-name {
+.player-row[data-slot="1"] {
+  --slot-color: var(--sky);
+}
+.player-row[data-slot="2"] {
+  --slot-color: color-mix(in srgb, var(--violet) 62%, var(--pink));
+}
+.player-row[data-slot="3"] {
+  --slot-color: var(--sun);
+}
+.player-name {
   display: flex;
   align-items: center;
   gap: 6px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
   color: var(--ink);
+  white-space: nowrap;
 }
-.override-name i {
+.player-name i {
   width: 8px;
   height: 8px;
+  flex-shrink: 0;
   border-radius: 50%;
-  background: var(--cpu-color, var(--sky));
+  background: var(--slot-color);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
 }
-.override-name[data-cpu="2"] {
-  --cpu-color: color-mix(in srgb, var(--violet) 62%, var(--pink));
+.match-options select {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 20px 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  /* The chevron is an SVG data URI, which cannot read custom properties: its stroke is --ink. */
+  background-color: var(--paper-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%232a2550' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 7px center;
+  background-size: 10px;
+  background-repeat: no-repeat;
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  appearance: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
 }
-.override-name[data-cpu="3"] {
-  --cpu-color: var(--sun);
+.match-options select:hover {
+  border-color: var(--violet);
 }
-.match-options .override-row button {
+.match-options select:disabled {
+  background-image: none;
+  cursor: default;
+  opacity: 1;
+}
+.match-options select:disabled:hover {
+  border-color: var(--line);
+}
+.match-options option {
+  background: var(--paper);
+  color: var(--ink);
+}
+.player-row.human .player-device {
+  background-color: var(--sun);
+  border-color: color-mix(in srgb, var(--sun) 70%, var(--ink));
+}
+.player-row.missing .player-device {
+  background-color: color-mix(in srgb, var(--danger) 10%, var(--paper));
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--paper));
+  color: var(--danger-text);
+}
+.player-badge {
+  justify-self: start;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--slot-color);
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+.player-still {
+  padding-left: 4px;
   font-size: 10px;
+  color: var(--ink-soft);
+}
+.player-row.flash {
+  animation: player-joined 1s ease-out;
+}
+@keyframes player-joined {
+  0% {
+    background: color-mix(in srgb, var(--sun) 45%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--sun) 45%, transparent);
+  }
+}
+.join-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 1px 0 0;
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+}
+.join-hint.warning {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+.pad-key {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 8px;
+  font-weight: 750;
+}
+.hint-dot {
+  width: 3px;
+  height: 3px;
+  margin: 0 4px;
+  border-radius: 50%;
+  background: var(--pink);
+}
+/* Four rows in a rumble: the taglines make way. */
+.menu-content:has(.match-options.four-players:not(.practice)) .menu-features {
+  display: none;
+}
+/* Pad navigation draws its own focus ring; the mouse or the keyboard removes the attribute. */
+[data-pad-nav] :focus {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 .match-options-note {
   margin: 0;
@@ -738,7 +815,8 @@ h1 > span {
     inset 0 2px 0 var(--fighter-color),
     var(--shadow);
 }
-.fighter-card.player-card {
+/* The first card (slot 0, always a player) sits on the left, the others on the right. */
+.fighter-card:first-child {
   margin-right: auto;
 }
 .fighter-card.eliminated {
@@ -953,11 +1031,19 @@ h1 > span {
   letter-spacing: 0.08em;
   box-shadow: var(--shadow-sm);
 }
-/* The player's lock-on target; the 3D scene draws no marker, so the card says who it is. */
-.fighter-lock {
+/* The players' lock-on targets; the 3D scene draws no marker, so the card says who it is. With
+   several players each chip names its player in that player's colour. */
+.fighter-locks {
   position: absolute;
   top: -9px;
   left: 12px;
+  display: flex;
+  gap: 4px;
+}
+.fighter-locks[hidden] {
+  display: none;
+}
+.fighter-lock {
   padding: 2px 7px;
   border-radius: 999px;
   background: var(--ink);
@@ -968,6 +1054,14 @@ h1 > span {
   box-shadow: var(--shadow-sm);
 }
 /* The legend follows the lock: its keys dim when it is off, mouse aiming dims while it is on. */
+.fighter-lock.player-lock {
+  background: var(--lock-color);
+  color: var(--ink);
+  letter-spacing: 0.08em;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--ink) 22%, transparent),
+    var(--shadow-sm);
+}
 .game-hud.lock-off .legend-lock,
 .game-hud.lock-off .legend-target,
 .game-hud:not(.lock-off) .legend-mouse {
@@ -1054,6 +1148,44 @@ h1 > span {
   background: var(--paper);
   box-shadow: var(--shadow-sm);
 }
+/* The pad legend: one row under the keyboard's, or alone when nobody uses the keyboard. */
+.pad-legend {
+  position: absolute;
+  bottom: 22px;
+  left: 4.5%;
+  right: 4.5%;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--ink);
+  font-size: 9px;
+}
+.pad-legend[hidden],
+.keyboard-legend[hidden] {
+  display: none;
+}
+.pad-legend > span {
+  white-space: nowrap;
+  padding: 2px 8px 2px 2px;
+  border-radius: 6px;
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
+}
+.pad-legend > .pad-legend-title {
+  padding: 4px 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+}
+.game-hud.has-pads:not(.no-keyboard) .keyboard-legend {
+  bottom: 52px;
+}
+.game-hud.has-pads:not(.no-keyboard) .fighter-cards {
+  bottom: 96px;
+}
 kbd {
   display: inline-block;
   border: 1px solid var(--line-strong);
@@ -1132,6 +1264,16 @@ kbd {
 }
 .secondary-button:hover {
   background: var(--paper-2);
+}
+.modal-panel > .pause-notice {
+  margin: -12px 0 22px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--paper));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--paper));
+  color: var(--danger-text);
+  font-weight: 650;
+  line-height: 1.7;
 }
 .text-button {
   display: block;
@@ -1515,6 +1657,52 @@ kbd {
   color: var(--ink-soft);
   margin-top: 19px;
 }
+/* The pad bindings: a two-column table, read in pairs (RB / RT, LB / LT, …). */
+.pad-help {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.pad-help h3 {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  margin-bottom: 8px;
+  color: var(--violet);
+  font-weight: 600;
+}
+.pad-help-lead,
+.pad-help-foot {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.pad-help-foot {
+  margin-top: 10px;
+}
+.pad-table {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+  margin: 10px 0 0;
+}
+.pad-table > div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.pad-table dt {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.pad-table dd {
+  margin: 0;
+  font-size: 10px;
+  color: var(--ink-soft);
+}
 
 @media (min-width: 1700px) {
   .menu-content {
@@ -1551,10 +1739,17 @@ kbd {
   .arena-caption {
     right: 5%;
   }
-  .keyboard-legend {
+  .keyboard-legend,
+  .pad-legend {
     gap: 7px 12px;
     font-size: 8px;
     bottom: 16px;
+  }
+  .game-hud.has-pads:not(.no-keyboard) .keyboard-legend {
+    bottom: 44px;
+  }
+  .game-hud.has-pads:not(.no-keyboard) .fighter-cards {
+    bottom: 86px;
   }
   .fighter-card {
     width: 205px;
@@ -1594,6 +1789,10 @@ kbd {
   }
   .match-options {
     margin-bottom: 13px;
+  }
+  /* Four player rows: the tagline under the headline makes way too. */
+  .menu-content:has(.match-options.four-players:not(.practice)) .menu-description {
+    display: none;
   }
   .start-button {
     padding-top: 13px;
@@ -1676,8 +1875,8 @@ kbd {
     line-height: 1.8;
     margin-bottom: 14px;
   }
-  .menu-content:has(.match-options:not(.practice) .match-overrides[open]) > .eyebrow,
-  .menu-content:has(.match-options:not(.practice) .match-overrides[open]) .menu-description {
+  .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow,
+  .menu-content:has(.match-options.four-players:not(.practice)) .menu-description {
     display: none;
   }
   .mode-option {
@@ -1768,8 +1967,12 @@ kbd {
   .air-tokens > small {
     display: none;
   }
-  .keyboard-legend {
+  .keyboard-legend,
+  .pad-legend {
     display: none;
+  }
+  .game-hud.has-pads .fighter-cards {
+    bottom: 26px;
   }
   [data-mode="rumble"] .fighter-cards {
     flex-wrap: wrap;
@@ -1804,8 +2007,9 @@ kbd {
     font-size: 7px;
     letter-spacing: 0.06em;
   }
-  [data-mode="rumble"] .fighter-lock {
+  [data-mode="rumble"] .fighter-locks {
     left: 3px;
+    gap: 2px;
   }
   [data-mode="rumble"] .fighter-invulnerable {
     right: 3px;
@@ -1836,6 +2040,9 @@ kbd {
   }
   .help-tips {
     gap: 12px;
+  }
+  .pad-table {
+    grid-template-columns: 1fr;
   }
   .help-callout {
     padding: 13px;
@@ -1873,8 +2080,13 @@ kbd {
   .touch-note {
     display: block;
   }
-  .fighter-cards {
+  .fighter-cards,
+  .game-hud.has-pads:not(.no-keyboard) .fighter-cards {
     bottom: 190px;
+  }
+  /* Nobody plays on the touch screen: no touch controls to stay clear of. */
+  .game-hud.no-keyboard .fighter-cards {
+    bottom: 66px;
   }
 }
 @media (max-height: 570px) and (max-width: 950px) {
@@ -1899,15 +2111,18 @@ kbd {
     position: absolute;
     top: 50%;
     left: calc(100% + 20px);
-    width: 272px;
+    width: 300px;
     margin: 0;
     background: var(--paper);
     transform: translateY(-50%);
   }
-  .match-option,
-  .override-row {
+  .match-option {
     grid-template-columns: 58px 1fr;
     gap: 6px;
+  }
+  .player-row {
+    grid-template-columns: 58px 1fr 1fr;
+    gap: 5px;
   }
   .arena-caption,
   .match-options.practice {
@@ -1979,6 +2194,14 @@ kbd {
     bottom: 15px;
     left: 20px;
     right: 20px;
+  }
+  /* Short windows have no room for the legends under the cards (the help dialog lists them). */
+  .keyboard-legend,
+  .pad-legend {
+    display: none;
+  }
+  .game-hud.has-pads:not(.no-keyboard) .fighter-cards {
+    bottom: 15px;
   }
   .fighter-card {
     width: 180px;

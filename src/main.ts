@@ -4,10 +4,12 @@ import { BattleEngine } from "./game/engine";
 import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
-import { createMatchStore } from "./game/matchStore";
+import { createMatchStore, playableOptions } from "./game/matchStore";
 import type { MatchOptions } from "./game/match";
+import { PadHub } from "./game/pads";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
+import { PadMenu } from "./ui/padMenu";
 import { emptyInput } from "./game/types";
 import type { GameState, MatchMode, PlayerInput } from "./game/types";
 
@@ -21,9 +23,22 @@ const sound = new BattleAudio();
 let input: BattleInput | null = null;
 let renderer: ArenaRenderer | null = null;
 let selectedMode: MatchMode = "duel";
-// The title menu's remembered choices, and the ones the current match was started with.
+// The title menu's remembered choices, and the ones the current match was started with (a pad
+// that is not connected leaves its slot to a CPU; a restart checks again).
 const match = createMatchStore();
 let matchOptions: MatchOptions = match.get();
+const pads = new PadHub();
+/** Starts (or restarts) a match with what can play right now. */
+const startMatch = (mode: MatchMode, options: MatchOptions) => {
+  selectedMode = mode;
+  matchOptions = options;
+  const count = mode === "rumble" ? 4 : 2;
+  const playable = playableOptions(options, count, (pad) => pads.isConnected(pad));
+  input?.reset();
+  input?.newMatch();
+  ui.setPadNotice(null);
+  engine.start(mode, playable.options);
+};
 let animation = 0;
 let stopped = false;
 let lastTime = performance.now();
@@ -44,8 +59,17 @@ let manualStepping = false;
 
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
-  if (engine.state.phase === "paused") engine.resume();
+  if (engine.state.phase === "paused") resume();
   else engine.pause();
+};
+const resume = () => {
+  ui.setPadNotice(null);
+  engine.resume();
+};
+/** A pad of the running match went away: pause and say which one. */
+const padLost = (padNumber: number) => {
+  engine.pause();
+  ui.setPadNotice(`パッド${padNumber} の接続が切れました。つなぎ直してから再開してください。`);
 };
 /** V / the top-bar camera button / the settings dialog all write the same stored setting. */
 const toggleCameraFollow = () => {
@@ -54,21 +78,15 @@ const toggleCameraFollow = () => {
 };
 const ui = new GameUI(overlay, {
   onStart: (mode, options) => {
-    selectedMode = mode;
-    matchOptions = options;
     sound.unlock();
-    input?.reset();
-    input?.newMatch();
-    engine.start(mode, matchOptions);
+    startMatch(mode, options);
     ui.update(engine.state);
   },
   onPause: () => engine.pause(),
-  onResume: () => engine.resume(),
+  onResume: resume,
   onRestart: () => {
     sound.unlock();
-    input?.reset();
-    input?.newMatch();
-    engine.start(selectedMode, matchOptions);
+    startMatch(selectedMode, matchOptions);
     ui.update(engine.state);
   },
   onMenu: () => {
@@ -88,17 +106,27 @@ const ui = new GameUI(overlay, {
   },
 });
 ui.update(engine.state);
+pads.subscribe((connected) => {
+  ui.setPads(connected);
+  // The pad that went away during the match is back.
+  if (engine.state.phase === "paused") ui.setPadNotice(null);
+});
+const padMenu = new PadMenu(overlay, pads, {
+  phase: () => engine.state.phase,
+  titleButton: (index, button) => ui.padTitleButton(index, button),
+});
 
 async function boot() {
   try {
     renderer = await ArenaRenderer.create(host, settings.get(), software);
-    input = new BattleInput(
-      renderer.canvas,
-      (x, y) => renderer!.screenToWorld(x, y),
-      pause,
-      () => sound.unlock(),
-      toggleCameraFollow,
-    );
+    input = new BattleInput(renderer.canvas, pads, {
+      toWorld: (x, y) => renderer!.screenToWorld(x, y),
+      onPause: pause,
+      onGesture: () => sound.unlock(),
+      onCameraToggle: toggleCameraFollow,
+      onPadLost: padLost,
+      rumble: () => settings.get().padRumble,
+    });
     root.querySelector(".loading-screen")?.remove();
     lastTime = performance.now();
     const frame = (now: number) => {
@@ -118,6 +146,10 @@ async function boot() {
       lastTime = now;
       if (elapsed > 0 && elapsed < 1000)
         fps = fps ? fps + (1000 / elapsed - fps) * Math.min(1, elapsed / 500) : 1000 / elapsed;
+      // Pads are read once a frame: the menus first (a press there may start or resume the
+      // match), then the match input, which treats buttons still held as already pressed.
+      pads.poll();
+      padMenu.update(now / 1000);
       input.updateVisibility(engine.state);
       const control = input.sample(engine.state);
       if (!manualStepping) {
@@ -128,7 +160,7 @@ async function boot() {
       if (now - lastUI > 33) {
         ui.update(engine.state);
         ui.setFps(fps);
-        ui.setLock(input.lock);
+        ui.setLock(input.playerLocks);
         lastUI = now;
       }
     };
@@ -144,10 +176,7 @@ async function boot() {
         ? {
             ...inspect,
             start: (mode: MatchMode) => {
-              selectedMode = mode;
-              matchOptions = match.get();
-              input?.newMatch();
-              engine.start(mode, matchOptions);
+              startMatch(mode, match.get());
               engine.state.phase = "playing";
             },
             engine,
@@ -190,6 +219,7 @@ window.addEventListener(
     stopped = true;
     cancelAnimationFrame(animation);
     input?.destroy();
+    padMenu.destroy();
     ui.destroy();
     sound.destroy();
     renderer?.destroy();

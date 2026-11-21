@@ -2,10 +2,12 @@ import type { Fighter, GameState, MatchMode, Phase } from "../game/types";
 import { RULES } from "../game/tuning";
 import { effectiveSamples, FPS_LIMITS, MSAA_SAMPLES, RESOLUTION_OPTIONS } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, SettingsStore, ShadowLevel } from "../game/settings";
-import { AI_LEVEL_IDS, STOCK_CHOICES } from "../game/match";
-import type { AiLevel, MatchOptions } from "../game/match";
-import type { MatchStore } from "../game/matchStore";
-import type { LockState } from "../game/input";
+import { AI_LEVEL_IDS, humanSlots, padIndex, STOCK_CHOICES } from "../game/match";
+import type { AiLevel, ControlDevice, MatchOptions } from "../game/match";
+import { playableOptions, type MatchStore } from "../game/matchStore";
+import type { PlayerLock } from "../game/input";
+import { PAD_COUNT } from "../game/pads";
+import type { TitleButton } from "./padMenu";
 
 export interface GameUICallbacks {
   /** Starts a match with the title menu's mode and match options. */
@@ -75,7 +77,8 @@ function settingsDialogMarkup(): string {
             ${toggle("ambientOcclusion", "陰影を強調 (SSAO・重い)")}
             ${toggle("showFps", "FPS を表示")}
             ${toggle("cameraShake", "画面の揺れ")}
-            ${toggle("cameraFollow", "視点の自動追随", "オフにすると足場全体を固定で映します。<kbd>V</kbd> キーでも切り替え。")}
+            ${toggle("cameraFollow", "視点の自動追随", "オフにすると足場全体を固定で映します。<kbd>V</kbd> キーかパッドの View でも切り替え。")}
+            ${toggle("padRumble", "パッドの振動", "パッドで遊ぶ人が攻撃を受けた・当てた・相殺したときに震えます。")}
           </section>
         </div>
         <div class="settings-foot"><button class="text-button" data-action="reset-settings">初期設定に戻す</button><button class="primary-button" data-action="close-settings">閉じる ${icons.arrow}</button></div>
@@ -101,7 +104,7 @@ const icons = {
 };
 
 const modes: Record<MatchMode, { label: string; en: string; detail: string; number: string }> = {
-  duel: { label: "一騎打ち", en: "DUEL", detail: "あなたとCPU、剣一本の読み合い。", number: "01" },
+  duel: { label: "一騎打ち", en: "DUEL", detail: "1対1、剣一本の読み合い。", number: "01" },
   rumble: {
     label: "乱闘",
     en: "RUMBLE",
@@ -118,16 +121,24 @@ const modes: Record<MatchMode, { label: string; en: string; detail: string; numb
 
 const levelLabels: Record<AiLevel, string> = { easy: "よわい", normal: "ふつう", hard: "つよい" };
 
-/** The CPU fighters each mode puts on the island, by id (the human is id 0). */
-const cpuRoster: Record<MatchMode, readonly { id: number; name: string }[]> = {
-  duel: [{ id: 1, name: "シロ" }],
-  rumble: [
-    { id: 1, name: "シロ" },
-    { id: 2, name: "モカ" },
-    { id: 3, name: "スミ" },
-  ],
-  training: [],
-};
+/** The fighters each mode puts on the island, by slot (slot 0 is always a player). */
+const FIGHTER_NAMES = ["コハク", "シロ", "モカ", "スミ"] as const;
+const fighterCount = (mode: MatchMode) => (mode === "rumble" ? 4 : 2);
+
+/** On a phone or tablet the keyboard player's slot is played with the touch controls. */
+const touchOnly = (): boolean =>
+  typeof matchMedia === "function" &&
+  matchMedia("(pointer: coarse)").matches &&
+  !matchMedia("(any-pointer: fine)").matches;
+
+const deviceLabel = (device: ControlDevice) =>
+  device === "keyboard" ? (touchOnly() ? "タッチ" : "キーボード") : `パッド${device.slice(3)}`;
+
+/** One row per fighter slot: who plays it, and how strong it is when a CPU does. */
+function playerRowMarkup(id: number): string {
+  const name = FIGHTER_NAMES[id];
+  return `<div class="player-row" data-slot="${id}"><span class="player-name" data-fighter="${id}"><i aria-hidden="true"></i>${name}</span><select class="player-device" data-slot-device="${id}" aria-label="${name}の操作"></select><span class="player-badge" hidden></span><select class="player-level" data-slot-level="${id}" data-override="${id}" aria-label="${name}の強さ" hidden>${(["auto", ...AI_LEVEL_IDS] as const).map((level) => `<option value="${level}">${level === "auto" ? "おまかせ" : levelLabels[level]}</option>`).join("")}</select><span class="player-still" hidden>動かない</span></div>`;
+}
 
 function matchOptionsMarkup(): string {
   const segment = (attribute: string, value: string | number, label: string, extra = "") =>
@@ -136,20 +147,18 @@ function matchOptionsMarkup(): string {
           <section class="match-options" aria-labelledby="match-options-title">
             <div class="match-options-head"><h2 id="match-options-title">対戦設定</h2><span>MATCH RULES</span></div>
             <div class="match-options-body">
-              <div class="match-option">
+              <div class="match-option match-rule">
                 <span class="match-option-label" id="match-stocks-label">残機</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-stocks-label">${STOCK_CHOICES.map((n) => segment("stocks", n, String(n), ` aria-label="${n}機"`)).join("")}</div>
               </div>
-              <div class="match-option">
+              <div class="match-option match-rule">
                 <span class="match-option-label" id="match-level-label">CPU の強さ</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-level-label">${AI_LEVEL_IDS.map((level) => segment("difficulty", level, levelLabels[level])).join("")}</div>
               </div>
-              <details class="match-overrides">
-                <summary><span class="override-summary-label">個別に設定</span><small class="override-count"></small></summary>
-                <div class="override-rows"></div>
-              </details>
+              <div class="player-rows"></div>
+              <p class="join-hint" aria-live="polite"></p>
+              <p class="match-options-note" hidden>稽古は残機が無制限。CPU の相手は動きません。</p>
             </div>
-            <p class="match-options-note" hidden>稽古の相手は動かず、残機は無制限です。</p>
           </section>`;
 }
 
@@ -176,6 +185,8 @@ function escapeHtml(value: string): string {
   );
 }
 
+const hex = (color: number) => `#${color.toString(16).padStart(6, "0")}`;
+
 function setText(element: HTMLElement, value: string): void {
   if (element.textContent !== value) element.textContent = value;
 }
@@ -198,6 +209,8 @@ interface FighterCard {
   lock: HTMLElement;
   /** What the life display last drew, so it is rebuilt only when it changes. */
   lifeKey: string;
+  /** Who the card was drawn for (player number, CPU); a change rebuilds it. */
+  identity: string;
 }
 
 /** DOM HUD stays independent of the deterministic combat and the Pixi scene. */
@@ -214,8 +227,13 @@ export class GameUI {
   private readonly fpsCounter: HTMLElement;
   private readonly graphics: GraphicsSettingsBinding;
   private readonly match: MatchStore;
-  private overrideRowsMode: MatchMode | null = null;
-  private lock: LockState = { on: true, targetId: null };
+  private playerRowsMode: MatchMode | null = null;
+  private connectedPads: number[] = [];
+  private locks: PlayerLock[] = [];
+  private lockKey = "";
+  /** The running match's players by fighter id: player number and colour. */
+  private players = new Map<number, { number: number; color: string }>();
+  private keyboardFighter: number | null = null;
   private readonly cards = new Map<number, FighterCard>();
   private currentPhase: Phase = "menu";
   private selectedMode: MatchMode = "duel";
@@ -280,10 +298,13 @@ export class GameUI {
         <div class="keyboard-legend" aria-label="操作の一覧">
           <span><kbd>WASD</kbd> 移動</span><span class="legend-lock"><kbd>Tab</kbd> ロックオン</span><span class="legend-target"><kbd>E</kbd> 相手切替</span><span class="legend-mouse"><kbd>↗</kbd> マウスで照準</span><span><kbd>I</kbd> 振り上げ</span><span><kbd>J</kbd> 振り下ろし</span><span><kbd>K</kbd> 横振り</span><span><kbd>L</kbd> 突き</span><span><kbd>U</kbd> つかむ</span><span><kbd>Space</kbd> 跳ぶ</span><span><kbd>Shift</kbd> ステップ</span><span><kbd>Q</kbd> キャンセル</span><span><kbd>V</kbd> 視点</span>
         </div>
+        <div class="pad-legend" aria-label="パッド操作の一覧" hidden>
+          <span class="pad-legend-title">PAD</span><span><kbd>RB</kbd> 横振り</span><span><kbd>RT</kbd> 振り下ろし</span><span><kbd>LB</kbd> 突き</span><span><kbd>LT</kbd> 振り上げ</span><span><kbd>A</kbd> 跳ぶ</span><span><kbd>B</kbd> ステップ</span><span><kbd>X</kbd> つかむ</span><span><kbd>Y</kbd> キャンセル</span><span><kbd>R3</kbd> ロックオン</span>
+        </div>
       </section>
 
       <section class="pause-screen modal-scrim" role="dialog" aria-modal="true" aria-label="一時停止" hidden>
-        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p>次の一撃を、じっくり考えよう。</p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="secondary-button" data-action="settings">グラフィック設定</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p>次の一撃を、じっくり考えよう。</p><p class="pause-notice" role="status" hidden></p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="secondary-button" data-action="settings">グラフィック設定</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
       </section>
 
       <section class="result-screen modal-scrim" role="dialog" aria-modal="true" aria-label="対戦結果" hidden>
@@ -300,7 +321,28 @@ export class GameUI {
           </div>
           <div class="help-callout"><span class="callout-icon">${icons.sword}</span><div><strong>長押しでためる。<kbd>Q</kbd> でフェイント。</strong><p>ため中はキャンセルやステップに移れる。振りかぶり中は向きをゆっくり直せて、Qで止めることもできるが、スタミナは戻らず、遅く止めるほど隙が残る。斬りかかった剣は向きが固まり、最後まで振り抜く。</p></div></div>
           <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>光る円の内側が安全地帯。</strong>外では%とゲージが増加。5秒分たまるとアウト、内側ではゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
-          <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。ゲームパッドは左スティックで移動、A / B / X / Y で振下 / 横振 / 突き / 上昇、LB 回避・RB ジャンプ・LT 取消・RT つかみ、R3 でロックオン、右スティックを左右に弾くか十字キー左右で相手切替（解除中は右スティックで照準）、View で視点の切り替え。</p>
+          <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。</p>
+          <section class="pad-help" aria-labelledby="pad-help-title">
+            <h3 id="pad-help-title">GAMEPAD / パッド</h3>
+            <p class="pad-help-lead">パッドは4台まで、何人でも参加できます。キーボードとマウス（タッチ）はひとり分。タイトルでパッドの <kbd>A</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
+            <dl class="pad-table">
+              <div><dt><kbd>RB</kbd></dt><dd>横振り</dd></div>
+              <div><dt><kbd>RT</kbd></dt><dd>振り下ろし</dd></div>
+              <div><dt><kbd>LB</kbd></dt><dd>突き</dd></div>
+              <div><dt><kbd>LT</kbd></dt><dd>振り上げ</dd></div>
+              <div><dt><kbd>A</kbd></dt><dd>ジャンプ</dd></div>
+              <div><dt><kbd>B</kbd></dt><dd>ステップ（空中でも1回）</dd></div>
+              <div><dt><kbd>X</kbd></dt><dd>つかむ</dd></div>
+              <div><dt><kbd>Y</kbd></dt><dd>キャンセル</dd></div>
+              <div><dt><kbd>L</kbd> スティック</dt><dd>移動</dd></div>
+              <div><dt><kbd>R</kbd> スティック</dt><dd>照準 / ロック中は弾いて相手切替</dd></div>
+              <div><dt><kbd>R3</kbd></dt><dd>ロックオン切替</dd></div>
+              <div><dt><kbd>◀</kbd><kbd>▶</kbd> 十字キー</dt><dd>相手切替</dd></div>
+              <div><dt><kbd>View</kbd></dt><dd>視点の自動追随</dd></div>
+              <div><dt><kbd>Start</kbd></dt><dd>一時停止 / 再開</dd></div>
+            </dl>
+            <p class="pad-help-foot">技はボタンを押し続けるとためられます。メニューも十字キーと <kbd>A</kbd>（決定）・<kbd>B</kbd>（戻る）で操作できます。</p>
+          </section>
           <p class="touch-note">タッチ操作では左スティックで移動、右の技ボタンを長押しでためます。照準は常に相手へロックオンし、乱闘では「相手切替」ボタンで狙う相手を変えられます。視点は右上のカメラボタンで切り替えられます。</p>
         </div>
         <button class="primary-button help-done" data-action="close-help">準備できた ${icons.arrow}</button>
@@ -349,32 +391,29 @@ export class GameUI {
       signal: this.abort.signal,
     });
     this.syncSettings();
-    // The per-CPU rows start open when the player has set any of them before.
-    this.query<HTMLDetailsElement>(".match-overrides").open =
-      Object.keys(this.match.get().overrides).length > 0;
+    this.query(".match-options").addEventListener("change", this.handleMatchChange, {
+      signal: this.abort.signal,
+    });
     const unsubscribeMatch = this.match.subscribe(() => this.syncMatchOptions());
     this.abort.signal.addEventListener("abort", unsubscribeMatch);
     this.syncMatchOptions();
   }
 
-  /** Reflects the stored match options (and the selected mode) in the title menu. */
+  /** Reflects the stored match options, the selected mode and the connected pads in the title. */
   private syncMatchOptions(): void {
     const options = this.match.get();
     const block = this.query(".match-options");
-    const training = this.selectedMode === "training";
+    const mode = this.selectedMode;
+    const training = mode === "training";
+    const count = fighterCount(mode);
     block.classList.toggle("practice", training);
-    this.query(".match-options-body").hidden = training;
+    block.classList.toggle("four-players", count > 2);
+    for (const rule of block.querySelectorAll<HTMLElement>(".match-rule")) rule.hidden = training;
     this.query(".match-options-note").hidden = !training;
-    const roster = cpuRoster[this.selectedMode];
-    const rows = this.query(".override-rows");
-    if (this.overrideRowsMode !== this.selectedMode) {
-      this.overrideRowsMode = this.selectedMode;
-      rows.innerHTML = roster
-        .map(
-          ({ id, name }) =>
-            `<div class="override-row"><span class="override-name" data-cpu="${id}"><i aria-hidden="true"></i>${name}</span><div class="segmented match-segmented" role="group" aria-label="${name}の強さ">${(["auto", ...AI_LEVEL_IDS] as const).map((level) => `<button type="button" data-override="${id}" data-override-level="${level}" aria-pressed="false">${level === "auto" ? "おまかせ" : levelLabels[level]}</button>`).join("")}</div></div>`,
-        )
-        .join("");
+    const rows = this.query(".player-rows");
+    if (this.playerRowsMode !== mode) {
+      this.playerRowsMode = mode;
+      rows.innerHTML = Array.from({ length: count }, (_, id) => playerRowMarkup(id)).join("");
     }
     const pressed = (selector: string, isOn: (button: HTMLElement) => boolean) => {
       for (const button of block.querySelectorAll<HTMLElement>(selector))
@@ -382,16 +421,113 @@ export class GameUI {
     };
     pressed("[data-stocks]", (b) => Number(b.dataset.stocks) === options.stocks);
     pressed("[data-difficulty]", (b) => b.dataset.difficulty === options.difficulty);
-    pressed(
-      "[data-override]",
-      (b) => (options.overrides[Number(b.dataset.override)] ?? "auto") === b.dataset.overrideLevel,
-    );
-    const changed = roster.filter(({ id }) => options.overrides[id]).length;
-    setText(
-      this.query(".override-count"),
-      changed ? `${changed}体を変更中` : roster.length > 1 ? "すべておまかせ" : "おまかせ",
-    );
+
+    const connected = (pad: number) => this.connectedPads.includes(pad);
+    const { options: playable, substitutes } = playableOptions(options, count, connected);
+    const players = humanSlots(playable, count);
+    for (let id = 0; id < count; id++) {
+      const row = rows.querySelector<HTMLElement>(`[data-slot="${id}"]`)!;
+      const stored = options.controls[id] ?? null;
+      const device = row.querySelector<HTMLSelectElement>(".player-device")!;
+      // Sensible choices only: the keyboard, the connected pads, and this slot's own pad even
+      // while it is away. A CPU slot cannot take slot 0's device (slot 0 would be left empty).
+      const choices: { value: string; label: string }[] = [];
+      for (const candidate of [
+        "keyboard",
+        ...Array.from({ length: PAD_COUNT }, (_, i) => `pad${i + 1}`),
+      ] as ControlDevice[]) {
+        const pad = padIndex(candidate);
+        if (pad !== null && !connected(pad) && candidate !== stored) continue;
+        if (id > 0 && stored === null && options.controls[0] === candidate) continue;
+        choices.push({
+          value: candidate,
+          label: deviceLabel(candidate) + (pad !== null && !connected(pad) ? "（未接続）" : ""),
+        });
+      }
+      if (id > 0) choices.push({ value: "cpu", label: "CPU" });
+      const markup = choices.map((c) => `<option value="${c.value}">${c.label}</option>`).join("");
+      if (device.dataset.markup !== markup) {
+        device.dataset.markup = markup;
+        device.innerHTML = markup;
+      }
+      device.value = stored ?? "cpu";
+      device.disabled = choices.length < 2;
+      const player = players.findIndex((slot) => slot.id === id);
+      const missing = substitutes.some((sub) => sub.slot === id);
+      row.classList.toggle("human", player >= 0);
+      row.classList.toggle("missing", missing);
+      const badge = row.querySelector<HTMLElement>(".player-badge")!;
+      badge.hidden = player < 0;
+      setText(badge, players.length > 1 ? `P${player + 1}` : "YOU");
+      const level = row.querySelector<HTMLSelectElement>(".player-level")!;
+      level.hidden = player >= 0 || training;
+      level.value = options.overrides[id] ?? "auto";
+      row.querySelector<HTMLElement>(".player-still")!.hidden = player >= 0 || !training;
+    }
+    const lost = substitutes.find((sub) => padIndex(sub.device) !== null);
+    const hint = this.query(".join-hint");
+    hint.classList.toggle("warning", Boolean(lost));
+    const markup = lost
+      ? lost.by === "keyboard"
+        ? `${deviceLabel(lost.device)}が未接続のため、${FIGHTER_NAMES[lost.slot]}は${deviceLabel("keyboard")}で操作します`
+        : `未接続のパッドの枠は CPU が戦います`
+      : `<span class="pad-key">A</span>パッドのボタンを押して参加<span class="hint-dot"></span><span class="pad-key">B</span>抜ける`;
+    if (hint.innerHTML !== markup) hint.innerHTML = markup;
   }
+
+  /** The connected pads (indices 0-3), for the title's device choices. */
+  setPads(connected: number[]): void {
+    this.connectedPads = connected.slice();
+    this.syncMatchOptions();
+  }
+
+  /**
+   * The title's join shortcut, from the pad menu: A or Start on a pad that does not play in the
+   * selected mode puts it on the first CPU slot; B on a pad that does (not slot 0) removes it.
+   * Returns true when the press did that.
+   */
+  padTitleButton(index: number, button: TitleButton): boolean {
+    if (this.dialog.open || this.settingsDialog.open) return false;
+    const count = fighterCount(this.selectedMode);
+    const slot = button === "b" ? this.match.leave(index, count) : this.match.join(index, count);
+    if (slot === null) return false;
+    const row = this.host.querySelector<HTMLElement>(`.player-row[data-slot="${slot}"]`);
+    if (row) {
+      row.classList.remove("flash");
+      void row.offsetWidth;
+      row.classList.add("flash");
+    }
+    return true;
+  }
+
+  /** The line under the pause title: a pad that went away, or null. */
+  setPadNotice(text: string | null): void {
+    const notice = this.query(".pause-notice");
+    notice.hidden = !text;
+    setText(notice, text ?? "");
+  }
+
+  /** The title rows' selects: who plays a slot, and a CPU's strength. */
+  private handleMatchChange = (event: Event): void => {
+    const control = event.target as HTMLSelectElement;
+    const count = fighterCount(this.selectedMode);
+    if (control.dataset.slotDevice !== undefined) {
+      const value = control.value;
+      this.match.assign(
+        Number(control.dataset.slotDevice),
+        value === "cpu" ? null : (value as ControlDevice),
+        count,
+      );
+      // A refused change (slot 0 cannot become a CPU) puts the select back.
+      this.syncMatchOptions();
+    } else if (control.dataset.slotLevel !== undefined) {
+      const overrides = { ...this.match.get().overrides };
+      const id = Number(control.dataset.slotLevel);
+      if (control.value === "auto") delete overrides[id];
+      else overrides[id] = control.value as AiLevel;
+      this.match.set({ overrides });
+    }
+  };
 
   private handleSettingChange = (event: Event): void => {
     const control = event.target as HTMLInputElement | HTMLSelectElement;
@@ -473,18 +609,37 @@ export class GameUI {
     setText(this.fpsCounter, `${Math.round(fps)} FPS`);
   }
 
-  /** The player's lock-on, from the input each UI tick: a LOCK chip on the target's card. */
-  setLock(lock: LockState): void {
-    this.lock = lock;
+  /**
+   * Every player's lock-on, from the input each UI tick: a chip on each target's card. With one
+   * player it reads LOCK; with several it names the player (P1 LOCK) in that player's colour.
+   */
+  setLock(locks: PlayerLock[]): void {
+    this.locks = locks;
     this.applyLock();
   }
 
   private applyLock(): void {
-    for (const [id, card] of this.cards) {
-      const locked = this.lock.on && this.lock.targetId === id;
-      if (card.lock.hidden === locked) card.lock.hidden = !locked;
+    const several = this.players.size > 1;
+    const key = JSON.stringify([several, this.locks, [...this.cards.keys()]]);
+    if (key !== this.lockKey) {
+      this.lockKey = key;
+      for (const [id, card] of this.cards) {
+        const chips = this.locks.filter((lock) => lock.on && lock.targetId === id);
+        card.lock.hidden = chips.length === 0;
+        card.lock.innerHTML = chips
+          .map((lock) => {
+            const player = this.players.get(lock.fighterId);
+            if (!several || !player) return '<span class="fighter-lock">LOCK</span>';
+            return `<span class="fighter-lock player-lock" style="--lock-color: ${player.color}">P${player.number} LOCK</span>`;
+          })
+          .join("");
+      }
     }
-    this.hud.classList.toggle("lock-off", !this.lock.on);
+    // The keyboard legend follows the keyboard player's lock (or the only player's).
+    const legendLock =
+      this.locks.find((lock) => lock.fighterId === this.keyboardFighter) ??
+      (this.locks.length === 1 ? this.locks[0] : undefined);
+    this.hud.classList.toggle("lock-off", legendLock ? !legendLock.on : false);
   }
 
   private query<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -496,7 +651,7 @@ export class GameUI {
   private handleClick = (event: MouseEvent): void => {
     // Buttons only: the host itself carries data-mode (the running match's mode).
     const target = (event.target as Element).closest<HTMLElement>(
-      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty], [data-override]",
+      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty]",
     );
     if (!target) return;
     const shadow = target.dataset.shadow as ShadowLevel | undefined;
@@ -510,14 +665,6 @@ export class GameUI {
     }
     if (target.dataset.difficulty) {
       this.match.set({ difficulty: target.dataset.difficulty as AiLevel });
-      return;
-    }
-    if (target.dataset.override) {
-      const overrides = { ...this.match.get().overrides };
-      const level = target.dataset.overrideLevel;
-      if (level === "auto") delete overrides[Number(target.dataset.override)];
-      else overrides[Number(target.dataset.override)] = level as AiLevel;
-      this.match.set({ overrides });
       return;
     }
     const mode = target.dataset.mode as MatchMode | undefined;
@@ -619,14 +766,29 @@ export class GameUI {
     this.resumeAfterSettings = false;
   }
 
+  /** The card's tag: YOU alone, P1 / P2 … with several players, CPU 0n for the others. */
+  private identity(fighter: Fighter): string {
+    if (!fighter.human) return "CPU " + String(fighter.id).padStart(2, "0");
+    return this.players.size > 1 ? `P${fighter.player ?? 1}` : "YOU";
+  }
+
   private createCard(fighter: Fighter): FighterCard {
     const card = document.createElement("article");
+    const tag = this.identity(fighter);
     card.className = `fighter-card ${fighter.human ? "player-card" : "opponent-card"}`;
-    card.style.setProperty("--fighter-color", `#${fighter.color.toString(16).padStart(6, "0")}`);
-    card.setAttribute("aria-label", fighter.human ? "あなたの状態" : `${fighter.name}の状態`);
+    card.dataset.fighter = String(fighter.id);
+    card.style.setProperty("--fighter-color", hex(fighter.color));
+    card.setAttribute(
+      "aria-label",
+      tag === "YOU"
+        ? "あなたの状態"
+        : fighter.human
+          ? `${tag}（${fighter.name}）の状態`
+          : `${fighter.name}の状態`,
+    );
     card.innerHTML = `
-      <div class="fighter-card-top"><span class="fighter-tags"><span class="fighter-tag">${fighter.human ? "YOU" : "CPU " + String(fighter.id).padStart(2, "0")}</span><span class="fighter-level"></span></span><span class="fighter-status">READY</span></div>
-      <span class="fighter-invulnerable" hidden>無敵</span><span class="fighter-lock" hidden>LOCK</span>
+      <div class="fighter-card-top"><span class="fighter-tags"><span class="fighter-tag">${tag}</span><span class="fighter-level"></span></span><span class="fighter-status">READY</span></div>
+      <span class="fighter-invulnerable" hidden>無敵</span><span class="fighter-locks" hidden></span>
       <div class="fighter-main"><span class="fighter-avatar species-${fighter.species}">${icons.paw}</span><div class="fighter-ident"><span class="fighter-name">${escapeHtml(fighter.name)}</span><span class="fighter-species">${fighter.species.toUpperCase()}</span><span class="fighter-life" role="img"></span></div><strong class="fighter-damage"><span>0</span><small>%</small></strong></div>
       <div class="stamina-label"><span>STAMINA</span><span class="stamina-value">100</span></div><div class="stamina-track" role="meter" aria-label="スタミナ" aria-valuemin="0" aria-valuemax="100"><span></span></div>
       <div class="fighter-foot"><div class="air-tokens"><span class="air-rising" title="空中振り上げの使用権">↗</span><span class="air-thrust" title="空中突きの使用権">→</span><span class="air-step" title="空中回避の使用権">»</span><small>RECOVERY</small></div></div>
@@ -650,8 +812,9 @@ export class GameUI {
       level: q(".fighter-level"),
       life: q(".fighter-life"),
       invulnerable: q(".fighter-invulnerable"),
-      lock: q(".fighter-lock"),
+      lock: q(".fighter-locks"),
       lifeKey: "",
+      identity: this.identity(fighter),
     };
   }
 
@@ -705,9 +868,25 @@ export class GameUI {
       String(Math.max(1, Math.ceil(state.countdown))),
     );
 
+    // The players of this match: number and colour for the lock chips, devices for the legends.
+    const slots = humanSlots(state.options, state.fighters.length);
+    this.players = new Map(
+      state.fighters
+        .filter((fighter) => fighter.human)
+        .map((fighter) => [fighter.id, { number: fighter.player ?? 1, color: hex(fighter.color) }]),
+    );
+    this.keyboardFighter = slots.find((slot) => slot.device === "keyboard")?.id ?? null;
+    const padPlayers = slots.some((slot) => slot.device !== "keyboard");
+    this.hud.classList.toggle("no-keyboard", this.keyboardFighter === null);
+    this.hud.classList.toggle("has-pads", padPlayers);
+    this.query(".keyboard-legend").hidden = this.keyboardFighter === null;
+    this.query(".pad-legend").hidden = !padPlayers;
+
     const ids = new Set(state.fighters.map((fighter) => fighter.id));
+    let rebuilt = false;
     for (const [id, card] of this.cards) {
-      if (!ids.has(id)) {
+      const fighter = state.fighters.find((f) => f.id === id);
+      if (!ids.has(id) || !fighter || card.identity !== this.identity(fighter)) {
         card.element.remove();
         this.cards.delete(id);
       }
@@ -717,6 +896,7 @@ export class GameUI {
       if (!card) {
         card = this.createCard(fighter);
         this.cards.set(fighter.id, card);
+        rebuilt = true;
       }
       card.damage.textContent = String(Math.floor(fighter.damage));
       // Down with a life left (or anywhere in training) is a pause, not the end.
@@ -750,13 +930,22 @@ export class GameUI {
       card.airStep.classList.toggle("used", fighter.airStepUsed);
     }
 
+    // Cards stay in fighter order (the first, always a player, sits on the left).
+    if (rebuilt)
+      this.query(".fighter-cards").append(
+        ...state.fighters.map((fighter) => this.cards.get(fighter.id)!.element),
+      );
     this.applyLock();
 
     if (state.phase === "ended") {
       const winner = state.fighters.find((fighter) => fighter.id === state.winnerId);
-      const human = state.fighters.find((fighter) => fighter.human);
+      const humans = state.fighters.filter((fighter) => fighter.human);
+      const several = humans.length > 1;
+      const tag = winner?.human && several ? `P${winner.player ?? 1}` : null;
       this.query(".result-title").textContent = winner?.human
-        ? "あなたの勝ち。"
+        ? tag
+          ? `${tag} の勝ち。`
+          : "あなたの勝ち。"
         : winner
           ? "また、挑もう。"
           : "相打ち。";
@@ -766,12 +955,15 @@ export class GameUI {
       // Lives left only say something when there were several to lose.
       const livesLeft =
         winner && state.options.stocks > 1 && winner.stocks > 0 ? winner.stocks : null;
+      // The reason the player went out only reads right with one player.
+      const reason = !several ? humans[0]?.eliminationReason : null;
+      const who = tag ? `${winner!.name}が` : "";
       this.query(".result-subtitle").textContent = winner?.human
         ? livesLeft
-          ? `残機を ${livesLeft} つ残して、足場を守り抜いた。`
-          : "最後まで、足場を守り抜いた。"
+          ? `${who}残機を ${livesLeft} つ残して、足場を守り抜いた。`
+          : `${who}最後まで、足場を守り抜いた。`
         : winner
-          ? `${winner.name} の勝利${livesLeft ? `（残機 ${livesLeft}）` : ""}${human?.eliminationReason ? ` / ${human.eliminationReason}` : ""}`
+          ? `${winner.name} の勝利${livesLeft ? `（残機 ${livesLeft}）` : ""}${reason ? ` / ${reason}` : ""}`
           : "次の一撃で、決着をつけよう。";
       this.query('[data-stat="hits"]').textContent = String(state.stats.hits);
       this.query('[data-stat="clashes"]').textContent = String(state.stats.clashes);

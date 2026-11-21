@@ -29,6 +29,8 @@ export interface GraphicsSettings {
   cameraShake: boolean;
   /** 視点の自動追随: 戦っている場所へカメラが寄る。オフで足場全体を固定で映す */
   cameraFollow: boolean;
+  /** パッドの振動: 被弾・ヒット・相殺でパッドが震える */
+  padRumble: boolean;
 }
 
 export const RESOLUTION_OPTIONS: readonly { value: ResolutionPreset; label: string }[] = [
@@ -62,6 +64,7 @@ export function defaultSettings({ software, touch }: DeviceProfile): GraphicsSet
     showFps: false,
     cameraShake: true,
     cameraFollow: true,
+    padRumble: true,
   };
 }
 
@@ -90,6 +93,7 @@ export function sanitizeSettings(raw: unknown, defaults: GraphicsSettings): Grap
     showFps: bool(source.showFps, defaults.showFps),
     cameraShake: bool(source.cameraShake, defaults.cameraShake),
     cameraFollow: bool(source.cameraFollow, defaults.cameraFollow),
+    padRumble: bool(source.padRumble, defaults.padRumble),
   };
 }
 

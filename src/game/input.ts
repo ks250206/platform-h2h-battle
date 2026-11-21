@@ -1,10 +1,27 @@
-import { emptyInput, type AttackId, type GameState, type PlayerInput, type Vec2 } from "./types";
+import {
+  emptyInput,
+  type AttackId,
+  type GameState,
+  type PlayerInput,
+  type PlayerInputs,
+  type Vec2,
+} from "./types";
 import { normalize } from "./combat";
 import { screenToWorldMovement } from "./coordinates";
-import { cycleTarget, resolveTarget, type CycleDirection } from "./lockOn";
-
-/** A direction on the screen: +x is right, +y is down (DOM and gamepad axis convention). */
-type ScreenVec = { x: number; y: number };
+import { cycleTarget, resolveTarget } from "./lockOn";
+import { humanSlots, padIndex, type ControlDevice } from "./match";
+import {
+  anyPressed,
+  freshPadMemory,
+  readPad,
+  rumbleFor,
+  type PadCommands,
+  type PadMemory,
+  type PadSnapshot,
+  type RumbleSample,
+  type ScreenVec,
+} from "./gamepad";
+import type { PadHub } from "./pads";
 
 /**
  * Maps a summed screen-space movement (keys, touch stick, gamepad stick) to the world-space
@@ -40,49 +57,95 @@ const CONTROL_KEYS = new Set([
   "Tab",
 ]);
 
-/** What the HUD shows about the lock-on. */
-export interface LockState {
+/** One player's lock-on as the HUD shows it. */
+export interface PlayerLock {
+  fighterId: number;
   on: boolean;
   targetId: number | null;
+}
+
+/** What one device asked for this frame, before the lock-on and the camera are applied. */
+interface DeviceFrame {
+  /** Screen space: +x right, +y down. */
+  move: ScreenVec;
+  /** Free aim while unlocked, already in world space; null keeps facing the movement. */
+  freeAim: (self: { x: number; z: number }) => Vec2 | null;
+  attackPressed: AttackId | null;
+  attackHeld: AttackId | null;
+  jump: boolean;
+  step: boolean;
+  cancel: boolean;
+  grab: boolean;
+  toggleLock: boolean;
+  cycle: -1 | 0 | 1;
 }
 
 /** Seconds between two target switches from the mouse wheel (a trackpad sends bursts). */
 const WHEEL_COOLDOWN = 0.18;
 
+export interface BattleInputHooks {
+  /** Ray-casts a pointer position onto the ground. */
+  toWorld: (x: number, y: number) => Vec2 | null;
+  /** Esc, or Start on a pad that plays in the match. */
+  onPause: () => void;
+  /** Any press: unlocks audio. */
+  onGesture: () => void;
+  /** The follow-camera toggle (V, or View on any pad): one shared view setting. */
+  onCameraToggle: () => void;
+  /** A pad that drives a fighter of the running match went away (1-based pad number). */
+  onPadLost: (padNumber: number) => void;
+  /** The パッドの振動 setting. */
+  rumble: () => boolean;
+}
+
+/** The device of each human fighter of the running match, by fighter id. */
+function devicesOf(state: GameState): Map<number, ControlDevice> {
+  return new Map(
+    humanSlots(state.options, state.fighters.length)
+      .filter(({ id }) => state.fighters.some((f) => f.id === id && f.human))
+      .map(({ id, device }) => [id, device]),
+  );
+}
+
+/**
+ * Every human's input for a frame: the keyboard with the mouse (or the touch controls) for at
+ * most one player, and one gamepad each for the others. Each player keeps their own lock-on.
+ */
 export class BattleInput {
+  // ---- the keyboard / mouse / touch player
   private held = new Set<string>();
   private edges = emptyInput();
+  private keyToggleLock = false;
+  private keyCycle: -1 | 0 | 1 = 0;
   private mouse: { x: number; y: number } | null = null;
   private touchMove: ScreenVec = { x: 0, y: 0 };
   private touchAttack: AttackId | null = null;
   private mouseAttack: AttackId | null = null;
   private joystickId: number | null = null;
+  private lastWheel = 0;
   private readonly touch: HTMLElement;
   private readonly touchTarget: HTMLElement;
   private readonly abort = new AbortController();
-  private lastGamepadButtons: boolean[] = [];
-  private previousPhase = "";
-  private gamepadAim: ScreenVec | null = null;
-  private gamepadMove: ScreenVec = { x: 0, y: 0 };
-  private gamepadAttack: AttackId | null = null;
+  // ---- the pads
+  private padPrevious: (PadSnapshot | null)[] = [];
+  private padMemory: PadMemory[] = [];
+  /** Pads seen connected during the running match, so a disconnect is reported once. */
+  private padsSeen = new Set<number>();
+  private rumbleSamples = new Map<number, RumbleSample>();
+  // ---- shared
   /**
-   * Lock-on: on until the player turns it off, and remembered for the page session. While on,
-   * the aim always points at `targetId`; the mouse, arrows and right stick do not aim.
+   * Lock-on per fighter id: on until that player turns it off, and remembered for the page
+   * session. While on, the aim always points at the target; mouse, arrows and stick do not aim.
    */
-  private lockOn = true;
-  private targetId: number | null = null;
-  private pendingCycle: CycleDirection | 0 = 0;
-  private lastWheel = 0;
-  /** A right-stick flick switches once; the stick must come back near the centre to re-arm. */
-  private stickArmed = true;
+  private locks = new Map<number, { on: boolean; targetId: number | null }>();
+  private devices = new Map<number, ControlDevice>();
+  private previousPhase = "";
+  private active = false;
 
   constructor(
-    private canvas: HTMLCanvasElement,
-    private toWorld: (x: number, y: number) => Vec2 | null,
-    private onPause: () => void,
-    private onGesture: () => void,
-    /** The follow-camera toggle (V, or the pad's View / Back): a view setting, not a game input. */
-    private onCameraToggle: () => void = () => {},
+    canvas: HTMLCanvasElement,
+    private readonly pads: PadHub,
+    private readonly hooks: BattleInputHooks,
   ) {
     const signal = this.abort.signal;
     window.addEventListener("keydown", this.keyDown, { signal });
@@ -98,12 +161,12 @@ export class BattleInput {
     canvas.addEventListener(
       "pointerdown",
       (event) => {
-        this.onGesture();
+        this.hooks.onGesture();
         if (event.pointerType === "touch") return;
         if (event.button === 1) {
           // Middle button: no auto-scroll, toggle the lock-on instead.
           event.preventDefault();
-          if (this.inMatch()) this.toggleLock();
+          if (this.inMatch()) this.keyToggleLock = true;
           return;
         }
         const attack = event.button === 0 ? "overhead" : event.button === 2 ? "sweep" : null;
@@ -130,7 +193,7 @@ export class BattleInput {
         const now = performance.now() / 1000;
         if (event.deltaY === 0 || now - this.lastWheel < WHEEL_COOLDOWN) return;
         this.lastWheel = now;
-        this.requestCycle(event.deltaY > 0 ? 1 : -1);
+        this.keyCycle = event.deltaY > 0 ? 1 : -1;
       },
       { signal, passive: false },
     );
@@ -157,7 +220,7 @@ export class BattleInput {
       "pointerdown",
       (event) => {
         event.preventDefault();
-        this.onGesture();
+        this.hooks.onGesture();
         if (this.joystickId !== null) return;
         this.joystickId = event.pointerId;
         stick.setPointerCapture(event.pointerId);
@@ -186,7 +249,7 @@ export class BattleInput {
         "pointerdown",
         (event) => {
           event.preventDefault();
-          this.onGesture();
+          this.hooks.onGesture();
           button.setPointerCapture(event.pointerId);
           const attack = button.dataset.attack as AttackId | undefined;
           if (attack) {
@@ -200,7 +263,7 @@ export class BattleInput {
             | "grab"
             | "target"
             | undefined;
-          if (command === "target") this.requestCycle(1);
+          if (command === "target") this.keyCycle = 1;
           else if (command) this.edges[command] = true;
           button.classList.add("pressed");
         },
@@ -216,6 +279,10 @@ export class BattleInput {
     }
   }
 
+  private keyboardPlays(): boolean {
+    return [...this.devices.values()].includes("keyboard");
+  }
+
   private keyDown = (event: KeyboardEvent): void => {
     if (document.querySelector("dialog[open]")) return;
     if (
@@ -225,7 +292,7 @@ export class BattleInput {
     )
       return;
     if (event.code === "Escape" && !event.repeat) {
-      this.onPause();
+      this.hooks.onPause();
       return;
     }
     if (
@@ -235,17 +302,17 @@ export class BattleInput {
       !event.metaKey &&
       !event.altKey
     ) {
-      this.onCameraToggle();
+      this.hooks.onCameraToggle();
       return;
     }
-    if (this.previousPhase !== "playing" && this.previousPhase !== "countdown") return;
+    if (!this.inMatch() || !this.keyboardPlays()) return;
     if (!CONTROL_KEYS.has(event.code)) return;
     event.preventDefault();
-    this.onGesture();
+    this.hooks.onGesture();
     if (event.repeat || this.held.has(event.code)) return;
     this.held.add(event.code);
-    if (event.code === "Tab") this.toggleLock();
-    if (event.code === "KeyE") this.requestCycle(1);
+    if (event.code === "Tab") this.keyToggleLock = true;
+    if (event.code === "KeyE") this.keyCycle = 1;
     if (ATTACK_KEYS[event.code]) this.edges.attackPressed = ATTACK_KEYS[event.code];
     if (event.code === "Space") this.edges.jump = true;
     if (event.code.startsWith("Shift")) this.edges.step = true;
@@ -256,132 +323,196 @@ export class BattleInput {
     this.held.delete(event.code);
   };
 
-  private pollGamepad(): void {
-    const pad = navigator.getGamepads?.().find((item) => item && item.connected);
-    this.gamepadMove = { x: 0, y: 0 };
-    this.gamepadAim = null;
-    this.gamepadAttack = null;
-    if (!pad) {
-      this.lastGamepadButtons = [];
-      return;
-    }
-    const deadzone = (value: number) => (Math.abs(value) < 0.18 ? 0 : value);
-    this.gamepadMove = { x: deadzone(pad.axes[0] ?? 0), y: deadzone(pad.axes[1] ?? 0) };
-    const aim = { x: deadzone(pad.axes[2] ?? 0), y: deadzone(pad.axes[3] ?? 0) };
-    if (Math.hypot(aim.x, aim.y) > 0.2) this.gamepadAim = aim;
-    // Locked, a sideways flick of the right stick switches target, once per flick.
-    if (Math.hypot(aim.x, aim.y) < 0.3) this.stickArmed = true;
-    else if (
-      this.lockOn &&
-      this.stickArmed &&
-      Math.abs(aim.x) > 0.7 &&
-      Math.abs(aim.x) > Math.abs(aim.y)
-    ) {
-      this.stickArmed = false;
-      if (this.inMatch()) this.requestCycle(aim.x > 0 ? 1 : -1);
-    }
-    const attackButtons: Record<number, AttackId> = {
-      0: "overhead",
-      1: "sweep",
-      2: "thrust",
-      3: "rising",
+  /** The keyboard / mouse / touch player's frame; consumes the pending presses. */
+  private keyboardFrame(): DeviceFrame {
+    const key = (code: string) => Number(this.held.has(code));
+    let attackHeld: AttackId | null = this.touchAttack ?? this.mouseAttack;
+    for (const [code, attack] of Object.entries(ATTACK_KEYS))
+      if (this.held.has(code)) attackHeld = attack;
+    const arrows = {
+      x: key("ArrowRight") - key("ArrowLeft"),
+      y: key("ArrowDown") - key("ArrowUp"),
     };
-    pad.buttons.forEach((button, index) => {
-      const pressed = button.pressed;
-      if (pressed && attackButtons[index]) this.gamepadAttack = attackButtons[index];
-      if (pressed && !this.lastGamepadButtons[index]) {
-        this.onGesture();
-        if (attackButtons[index]) this.edges.attackPressed = attackButtons[index];
-        if (index === 4) this.edges.step = true;
-        if (index === 5) this.edges.jump = true;
-        if (index === 6) this.edges.cancel = true;
-        if (index === 7) this.edges.grab = true;
-        if (index === 8) this.onCameraToggle();
-        if (index === 9) this.onPause();
-        if (this.inMatch()) {
-          if (index === 11) this.toggleLock();
-          if (index === 14) this.requestCycle(-1);
-          if (index === 15) this.requestCycle(1);
-        }
-      }
-    });
-    this.lastGamepadButtons = pad.buttons.map((button) => button.pressed);
+    const mouse = this.mouse;
+    const frame: DeviceFrame = {
+      ...this.edges,
+      move: {
+        x: key("KeyD") - key("KeyA") + this.touchMove.x,
+        y: key("KeyS") - key("KeyW") + this.touchMove.y,
+      },
+      // Free aim: arrow keys, then the mouse (ray-cast onto the ground, so already world space).
+      freeAim: (self) => {
+        if (arrows.x || arrows.y) return screenToWorldMovement(arrows.x, arrows.y);
+        const world = mouse && this.hooks.toWorld(mouse.x, mouse.y);
+        return world ? { x: world.x - self.x, z: world.z - self.z } : null;
+      },
+      attackHeld,
+      toggleLock: this.keyToggleLock,
+      cycle: this.keyCycle,
+    };
+    this.clearKeyboardPresses();
+    return frame;
   }
 
-  sample(state: GameState): PlayerInput {
-    this.pollGamepad();
-    const f = state.fighters.find((fighter) => fighter.human)!;
-    // Keys, sticks and arrows are screen directions; the engine works on the world ground.
-    const move = screenMoveToWorld(
-      Number(this.held.has("KeyD")) -
-        Number(this.held.has("KeyA")) +
-        this.touchMove.x +
-        this.gamepadMove.x,
-      Number(this.held.has("KeyS")) -
-        Number(this.held.has("KeyW")) +
-        this.touchMove.y +
-        this.gamepadMove.y,
-    );
+  private clearKeyboardPresses(): void {
+    this.edges = emptyInput();
+    this.keyToggleLock = false;
+    this.keyCycle = 0;
+  }
+
+  /** A pad player's frame from that pad's commands. */
+  private padFrame(commands: PadCommands): DeviceFrame {
+    const aim = commands.aim;
+    return {
+      ...commands,
+      freeAim: () => (aim ? screenToWorldMovement(aim.x, aim.y) : null),
+    };
+  }
+
+  /** Held buttons at a takeover count as already pressed: nothing fires until they come up. */
+  private takeOverPads(): void {
+    this.padPrevious = this.pads.current.slice();
+    this.padMemory = this.pads.current.map(() => freshPadMemory());
+  }
+
+  private lockFor(fighterId: number) {
+    let lock = this.locks.get(fighterId);
+    if (!lock) {
+      lock = { on: true, targetId: null };
+      this.locks.set(fighterId, lock);
+    }
+    return lock;
+  }
+
+  /** Applies the lock-on and the camera to a device frame. */
+  private toPlayerInput(state: GameState, fighterId: number, frame: DeviceFrame): PlayerInput {
+    const f = state.fighters.find((fighter) => fighter.id === fighterId)!;
+    const lock = this.lockFor(fighterId);
+    if (frame.toggleLock) {
+      lock.on = !lock.on;
+      // Turned on, it picks the nearest opponent below.
+      lock.targetId = null;
+    }
     let aim: Vec2 | null = null;
-    if (this.lockOn) {
+    if (lock.on) {
       // Sticky on the same fighter; re-acquires the nearest when it goes down or is gone.
-      this.targetId = resolveTarget(state, f.id, this.targetId);
-      if (this.pendingCycle)
-        this.targetId = cycleTarget(state, f.id, this.targetId, this.pendingCycle);
-      const target = state.fighters.find((other) => other.id === this.targetId);
+      lock.targetId = resolveTarget(state, f.id, lock.targetId);
+      if (frame.cycle) lock.targetId = cycleTarget(state, f.id, lock.targetId, frame.cycle);
+      const target = state.fighters.find((other) => other.id === lock.targetId);
       if (target) aim = { x: target.x - f.x, z: target.z - f.z };
     } else {
-      // Free aim: arrow keys, then the right stick, then the mouse; with none, face the movement.
-      aim = screenToWorldMovement(
-        Number(this.held.has("ArrowRight")) - Number(this.held.has("ArrowLeft")),
-        Number(this.held.has("ArrowDown")) - Number(this.held.has("ArrowUp")),
-      );
-      if (Math.hypot(aim.x, aim.z) === 0) {
-        aim = this.gamepadAim && screenToWorldMovement(this.gamepadAim.x, this.gamepadAim.y);
-        // The pointer is ray-cast onto the ground, so this one is already world space.
-        if (!aim && this.mouse) {
-          const world = this.toWorld(this.mouse.x, this.mouse.y);
-          if (world) aim = { x: world.x - f.x, z: world.z - f.z };
-        }
-      }
+      aim = frame.freeAim(f);
+      if (aim && Math.hypot(aim.x, aim.z) === 0) aim = null;
     }
-    this.pendingCycle = 0;
-    let attackHeld: AttackId | null = this.touchAttack ?? this.mouseAttack ?? this.gamepadAttack;
-    for (const [key, attack] of Object.entries(ATTACK_KEYS))
-      if (this.held.has(key)) attackHeld = attack;
-    const result = { ...this.edges, move, aim, attackHeld };
-    this.edges = emptyInput();
-    return result;
+    return {
+      // Keys, sticks and arrows are screen directions; the engine works on the world ground.
+      move: screenMoveToWorld(frame.move.x, frame.move.y),
+      aim,
+      attackPressed: frame.attackPressed,
+      attackHeld: frame.attackHeld,
+      jump: frame.jump,
+      step: frame.step,
+      cancel: frame.cancel,
+      grab: frame.grab,
+    };
   }
 
-  /** A new match or a restart: the lock (if on) picks the nearest opponent afresh. */
+  /**
+   * One input per human fighter of `state`, each from that fighter's device. Also handles the
+   * pads' Start (pause) and View (camera), the pad-lost check and the rumble.
+   */
+  sample(state: GameState): PlayerInputs {
+    const inputs: PlayerInputs = {};
+    this.watchPads(state);
+    const active =
+      (state.phase === "playing" || state.phase === "countdown") &&
+      !document.querySelector("dialog[open]");
+    if (active && !this.active) this.takeOverPads();
+    this.active = active;
+    if (!active) {
+      this.clearKeyboardPresses();
+      return inputs;
+    }
+    // Every connected pad is read once a frame, whether it plays or not.
+    const commands = new Map<number, PadCommands>();
+    this.pads.current.forEach((current, index) => {
+      if (!current) return;
+      const previous = this.padPrevious[index] ?? null;
+      const result = readPad(current, previous, this.padMemory[index] ?? freshPadMemory());
+      if (anyPressed(current, previous)) this.hooks.onGesture();
+      this.padPrevious[index] = current;
+      this.padMemory[index] = result.memory;
+      commands.set(index, result.commands);
+    });
+    let pause = false;
+    for (const [fighterId, device] of this.devices) {
+      const pad = padIndex(device);
+      const read = pad === null ? null : commands.get(pad);
+      if (read) pause ||= read.pause;
+      const frame = pad === null ? this.keyboardFrame() : read && this.padFrame(read);
+      if (frame) inputs[fighterId] = this.toPlayerInput(state, fighterId, frame);
+    }
+    if (!this.keyboardPlays()) this.clearKeyboardPresses();
+    // View on any pad toggles the shared camera; Start pauses only from a pad that plays.
+    if ([...commands.values()].some((read) => read.camera)) this.hooks.onCameraToggle();
+    if (pause) this.hooks.onPause();
+    this.feelHits(state);
+    return inputs;
+  }
+
+  /** Every lock-on of the running match's humans, in fighter order. */
+  get playerLocks(): PlayerLock[] {
+    return [...this.devices.keys()]
+      .sort((a, b) => a - b)
+      .map((fighterId) => {
+        const lock = this.lockFor(fighterId);
+        return { fighterId, on: lock.on, targetId: lock.on ? lock.targetId : null };
+      });
+  }
+
+  /** Reports a pad of the running match that went away, once per disconnect. */
+  private watchPads(state: GameState): void {
+    const inMatch = ["playing", "countdown", "paused"].includes(state.phase);
+    for (const device of this.devices.values()) {
+      const pad = padIndex(device);
+      if (pad === null) continue;
+      if (this.pads.isConnected(pad)) this.padsSeen.add(pad);
+      else if (this.padsSeen.delete(pad) && inMatch) this.hooks.onPadLost(pad + 1);
+    }
+  }
+
+  /** A short rumble on a pad player's pad when they are hit, land a hit or clash. */
+  private feelHits(state: GameState): void {
+    const enabled = this.hooks.rumble();
+    for (const f of state.fighters) {
+      const sample: RumbleSample = { mode: f.mode, hitstop: f.hitstop, damage: f.damage };
+      const previous = this.rumbleSamples.get(f.id) ?? null;
+      this.rumbleSamples.set(f.id, sample);
+      const device = this.devices.get(f.id);
+      const pad = device ? padIndex(device) : null;
+      if (pad === null || !enabled) continue;
+      const effect = rumbleFor(previous, sample);
+      if (effect) this.pads.rumble(pad, effect);
+    }
+  }
+
+  /** A new match or a restart: every lock that is on picks the nearest opponent afresh. */
   newMatch(): void {
-    this.targetId = null;
-    this.pendingCycle = 0;
-  }
-
-  /** The lock-on as the HUD shows it. */
-  get lock(): LockState {
-    return { on: this.lockOn, targetId: this.lockOn ? this.targetId : null };
+    for (const lock of this.locks.values()) lock.targetId = null;
+    this.padsSeen.clear();
+    this.rumbleSamples.clear();
+    this.active = false;
   }
 
   private inMatch(): boolean {
     return this.previousPhase === "playing" || this.previousPhase === "countdown";
   }
 
-  private toggleLock(): void {
-    this.lockOn = !this.lockOn;
-    // Turned on, it picks the nearest opponent on the next sample.
-    this.targetId = null;
-    this.pendingCycle = 0;
-  }
-
-  private requestCycle(direction: CycleDirection): void {
-    if (this.lockOn) this.pendingCycle = direction;
-  }
-
   updateVisibility(state: GameState): void {
-    this.touch.hidden = state.phase !== "playing" && state.phase !== "countdown";
+    this.devices = devicesOf(state);
+    const inMatch = state.phase === "playing" || state.phase === "countdown";
+    // The touch controls belong to the keyboard player's slot.
+    this.touch.hidden = !inMatch || !this.keyboardPlays();
     // Only rumble has more than one opponent to switch between.
     this.touchTarget.hidden = state.fighters.length <= 2;
     if (this.previousPhase !== state.phase && ["menu", "paused", "ended"].includes(state.phase))
@@ -390,7 +521,7 @@ export class BattleInput {
   }
   reset(): void {
     this.held.clear();
-    this.edges = emptyInput();
+    this.clearKeyboardPresses();
     this.mouse = null;
     this.mouseAttack = null;
     this.touchAttack = null;

@@ -1,9 +1,13 @@
 import { describe, expect, test, vi } from "vite-plus/test";
 import { DEFAULT_MATCH_OPTIONS } from "../src/game/match";
 import {
+  assignDevice,
   createMatchStore,
+  joinPad,
+  leavePad,
   loadMatchOptions,
   MATCH_STORAGE_KEY,
+  playableOptions,
   saveMatchOptions,
   type MatchStorage,
 } from "../src/game/matchStore";
@@ -125,5 +129,150 @@ describe("match options store", () => {
     unsubscribe();
     store.set({ stocks: 2 });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("who plays what", () => {
+  test("a device another slot uses swaps with this slot's device", () => {
+    expect(assignDevice({ 0: "keyboard", 1: "pad1" }, 1, "keyboard", 2)).toEqual({
+      0: "pad1",
+      1: "keyboard",
+    });
+    expect(assignDevice({ 0: "keyboard", 1: "pad1" }, 0, "pad1", 2)).toEqual({
+      0: "pad1",
+      1: "keyboard",
+    });
+    // A free device just takes the slot.
+    expect(assignDevice({ 0: "keyboard" }, 1, "pad2", 2)).toEqual({ 0: "keyboard", 1: "pad2" });
+    expect(assignDevice({ 0: "keyboard", 1: "pad2" }, 0, "pad3", 2)).toEqual({
+      0: "pad3",
+      1: "pad2",
+    });
+  });
+
+  test("a CPU slot taking another human's device leaves that one a CPU", () => {
+    expect(assignDevice({ 0: "keyboard", 1: "pad1" }, 2, "pad1", 4)).toEqual({
+      0: "keyboard",
+      2: "pad1",
+    });
+  });
+
+  test("slot 0 never ends up without a human", () => {
+    const controls = { 0: "keyboard", 1: "pad1" } as const;
+    expect(assignDevice(controls, 0, null, 2)).toEqual(controls);
+    // A CPU slot cannot take slot 0's device: slot 0 would have nothing left.
+    expect(assignDevice(controls, 2, "keyboard", 4)).toEqual(controls);
+    // Out of range slots are ignored.
+    expect(assignDevice(controls, 2, "pad2", 2)).toEqual(controls);
+  });
+
+  test("a device parked on a slot the mode does not have moves instead of swapping", () => {
+    expect(assignDevice({ 0: "keyboard", 3: "pad2" }, 1, "pad2", 2)).toEqual({
+      0: "keyboard",
+      1: "pad2",
+    });
+  });
+
+  test("a CPU slot goes back to a CPU", () => {
+    expect(assignDevice({ 0: "keyboard", 1: "pad1" }, 1, null, 2)).toEqual({ 0: "keyboard" });
+  });
+
+  test("joining takes the first CPU slot of the mode", () => {
+    expect(joinPad({ 0: "keyboard" }, 0, 2)).toEqual({
+      controls: { 0: "keyboard", 1: "pad1" },
+      slot: 1,
+    });
+    expect(joinPad({ 0: "keyboard", 1: "pad1" }, 1, 4)).toEqual({
+      controls: { 0: "keyboard", 1: "pad1", 2: "pad2" },
+      slot: 2,
+    });
+    expect(joinPad({ 0: "keyboard", 1: "pad1", 2: "pad3" }, 1, 4)?.slot).toBe(3);
+    // Already in, or no CPU left.
+    expect(joinPad({ 0: "keyboard", 1: "pad1" }, 0, 2)).toBeNull();
+    expect(joinPad({ 0: "keyboard", 1: "pad1" }, 1, 2)).toBeNull();
+    expect(joinPad({ 0: "pad1", 1: "keyboard" }, 0, 2)).toBeNull();
+  });
+
+  test("a pad parked in a rumble slot joins a duel from there", () => {
+    expect(joinPad({ 0: "keyboard", 3: "pad2" }, 1, 2)).toEqual({
+      controls: { 0: "keyboard", 1: "pad2" },
+      slot: 1,
+    });
+  });
+
+  test("leaving frees the slot for a CPU, except slot 0", () => {
+    expect(leavePad({ 0: "keyboard", 1: "pad1", 2: "pad2" }, 1, 4)).toEqual({
+      controls: { 0: "keyboard", 1: "pad1" },
+      slot: 2,
+    });
+    expect(leavePad({ 0: "pad1", 1: "keyboard" }, 0, 2)).toBeNull();
+    expect(leavePad({ 0: "keyboard" }, 2, 4)).toBeNull();
+    // Only slots of the mode count.
+    expect(leavePad({ 0: "keyboard", 3: "pad1" }, 0, 2)).toBeNull();
+  });
+
+  test("pads that are not connected play as CPUs for the match", () => {
+    const options = {
+      ...DEFAULT_MATCH_OPTIONS,
+      controls: { 0: "keyboard", 1: "pad1", 2: "pad2", 3: "pad3" },
+    } as const;
+    const result = playableOptions(options, 4, (pad) => pad === 1);
+    expect(result.options.controls).toEqual({ 0: "keyboard", 2: "pad2" });
+    expect(result.substitutes).toEqual([
+      { slot: 1, device: "pad1", by: null },
+      { slot: 3, device: "pad3", by: null },
+    ]);
+    // Slots the mode does not have are dropped.
+    expect(playableOptions(options, 2, () => true).options.controls).toEqual({
+      0: "keyboard",
+      1: "pad1",
+    });
+  });
+
+  test("slot 0 without its pad falls back to the keyboard", () => {
+    const options = { ...DEFAULT_MATCH_OPTIONS, controls: { 0: "pad1", 1: "keyboard" } } as const;
+    const result = playableOptions(options, 2, () => false);
+    expect(result.options.controls).toEqual({ 0: "keyboard" });
+    expect(result.substitutes).toEqual([
+      { slot: 0, device: "pad1", by: "keyboard" },
+      { slot: 1, device: "keyboard", by: null },
+    ]);
+    const alone = playableOptions(
+      { ...DEFAULT_MATCH_OPTIONS, controls: { 0: "pad2" } },
+      2,
+      () => false,
+    );
+    expect(alone.options.controls).toEqual({ 0: "keyboard" });
+  });
+
+  test("the store assigns, joins and leaves, and saves each change", () => {
+    const storage = memoryStorage();
+    const store = createMatchStore(storage);
+    const listener = vi.fn();
+    store.subscribe(listener);
+    expect(store.join(0, 2)).toBe(1);
+    expect(store.join(1, 4)).toBe(2);
+    expect(store.get().controls).toEqual({ 0: "keyboard", 1: "pad1", 2: "pad2" });
+    store.assign(0, "pad2", 4);
+    expect(store.get().controls).toEqual({ 0: "pad2", 1: "pad1", 2: "keyboard" });
+    expect(store.leave(0, 4)).toBe(1);
+    expect(store.leave(1, 4)).toBeNull();
+    expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!).controls).toEqual({
+      0: "pad2",
+      2: "keyboard",
+    });
+    expect(createMatchStore(storage).get().controls).toEqual({ 0: "pad2", 2: "keyboard" });
+    expect(listener).toHaveBeenCalledTimes(4);
+    // No-ops do not notify.
+    store.assign(0, null, 4);
+    expect(store.join(0, 1)).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(4);
+  });
+
+  test("a stored device list with duplicates or junk is cleaned on load", () => {
+    const stored = JSON.stringify({
+      controls: { 0: "pad1", 1: "pad1", 2: "mouse", 3: "keyboard" },
+    });
+    expect(loadMatchOptions(memoryStorage(stored)).controls).toEqual({ 0: "pad1", 3: "keyboard" });
   });
 });

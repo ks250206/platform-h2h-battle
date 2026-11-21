@@ -29,14 +29,9 @@ async function chooseMatch(
 ) {
   if (options.stocks) await page.locator(`[data-stocks="${options.stocks}"]`).click();
   if (options.difficulty) await page.locator(`[data-difficulty="${options.difficulty}"]`).click();
-  const overrides = Object.entries(options.overrides ?? {});
-  if (overrides.length) {
-    const details = page.locator(".match-overrides");
-    if (!(await details.evaluate((element) => (element as HTMLDetailsElement).open)))
-      await details.locator("summary").click();
-    for (const [id, level] of overrides)
-      await page.locator(`[data-override="${id}"][data-override-level="${level}"]`).click();
-  }
+  // Each CPU's row has its own strength; おまかせ ("auto") follows the overall one.
+  for (const [id, level] of Object.entries(options.overrides ?? {}))
+    await page.locator(`.player-level[data-override="${id}"]`).selectOption(level);
 }
 
 async function start(page: Page, mode: string, options?: Parameters<typeof chooseMatch>[1]) {
@@ -299,7 +294,7 @@ test("graphics settings apply, persist across a reload and reflect in the dialog
   await expect(page.locator(".fps-counter")).toHaveText(/\d+ FPS/);
   // The title's 対戦設定 are remembered across the same reload.
   await chooseMatch(page, { stocks: 5, difficulty: "hard", overrides: { 1: "easy" } });
-  await expect(page.locator(".override-count")).toHaveText("1体を変更中");
+  await expect(page.locator('.player-level[data-override="1"]')).toHaveValue("easy");
 
   await page.reload();
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
@@ -315,11 +310,9 @@ test("graphics settings apply, persist across a reload and reflect in the dialog
   await expect(page.locator('[data-stocks="5"]')).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator('[data-stocks="3"]')).toHaveAttribute("aria-pressed", "false");
   await expect(page.locator('[data-difficulty="hard"]')).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".match-overrides")).toHaveAttribute("open", "");
-  await expect(page.locator('[data-override="1"][data-override-level="easy"]')).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(page.locator('.player-level[data-override="1"]')).toHaveValue("easy");
+  await expect(page.locator('.player-row[data-slot="0"] .player-device')).toHaveValue("keyboard");
+  await expect(page.locator('.player-row[data-slot="1"] .player-device')).toHaveValue("cpu");
   await expect(page.locator(".fps-counter")).toBeVisible();
   await page.locator(".menu-links [data-action='settings']").click();
   await expect(dialog).toBeVisible();
