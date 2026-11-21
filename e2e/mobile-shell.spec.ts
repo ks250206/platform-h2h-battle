@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.use({
+  // Full Chromium (--headless=new) supports real CDP touch pinch gestures on Linux CI,
+  // unlike chromium-headless-shell where synthetic touch pinch is dropped on Linux.
+  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? {} : { channel: "chromium" }),
   viewport: { width: 390, height: 844 },
   isMobile: true,
   hasTouch: true,
