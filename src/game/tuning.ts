@@ -99,7 +99,7 @@ export const RULES = {
   collapseStart: 32,
   collapseInterval: 22,
   collapseWarning: 4,
-  minHalfSize: 3,
+  minHalfSize: 5,
   safeZoneStart: 18,
   bombStart: 14,
   bombInterval: 11,

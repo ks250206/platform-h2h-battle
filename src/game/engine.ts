@@ -24,11 +24,19 @@ import {
   hasConveyors,
   nearestWalkablePoint,
   respawnCandidates,
-  safeZoneAt,
   spawnPoints,
   stageInfoFor,
   STAGES,
 } from "./stages";
+import {
+  announcedZoneIn,
+  INACTIVE_ZONE,
+  RESPAWN_LOOKAHEAD,
+  RESPAWN_STARTUP,
+  safeZoneAt,
+  ZONE_KO_REASON,
+  zoneWalkingGoal,
+} from "./safeZone";
 import { AI_LEVELS, ATTACKS, INPUT_BUFFER_TICKS, RULES, type AiProfile } from "./tuning";
 import {
   angleDelta,
@@ -213,7 +221,7 @@ export class BattleEngine {
         tileSize: RULES.tileSize,
         warningRing: false,
         nextCollapse: RULES.collapseStart,
-        safeZone: { x: 0, z: 0, radius: 10.8, active: false },
+        safeZone: { ...INACTIVE_ZONE },
         wind: { x: 0, z: 0 },
         windActive: false,
       },
@@ -1029,14 +1037,7 @@ export class BattleEngine {
       arena.warningRing = false;
       this.announce("外周の足場が崩れた", 2);
     }
-    const zone = arena.safeZone;
-    zone.active = safeZone && elapsed >= RULES.safeZoneStart;
-    if (zone.active) {
-      const placed = safeZoneAt(arena.stageId, elapsed, arena.halfSize);
-      zone.radius = placed.radius;
-      zone.x = placed.x;
-      zone.z = placed.z;
-    }
+    arena.safeZone = safeZoneAt(arena.stageId, elapsed, safeZone ? rules.timeLimit : null);
     arena.windActive = wind && elapsed >= 24 && Math.floor(elapsed / 12) % 3 === 2;
     arena.wind = arena.windActive
       ? { x: Math.sin(elapsed * 0.1) * 0.35, z: Math.cos(elapsed * 0.1) * 0.25 }
@@ -1076,10 +1077,13 @@ export class BattleEngine {
       return;
     }
     if (Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius) {
-      f.outsideTime = Math.min(RULES.outsideLimit, f.outsideTime + dt);
-      f.damage += RULES.outsideDamage * dt;
-      if (f.outsideTime >= RULES.outsideLimit - 1e-6)
-        this.eliminate(f, "エリア外ゲージが5秒に到達");
+      const exposure = Math.min(dt, RULES.outsideLimit - f.outsideTime);
+      f.outsideTime += exposure;
+      f.damage += RULES.outsideDamage * exposure;
+      if (f.outsideTime >= RULES.outsideLimit - 1e-9) {
+        f.outsideTime = RULES.outsideLimit;
+        this.eliminate(f, ZONE_KO_REASON);
+      }
     } else {
       f.outsideTime = Math.max(0, f.outsideTime - RULES.outsideRecovery * dt);
     }
@@ -1169,19 +1173,36 @@ export class BattleEngine {
    * (no RNG): the one farthest from living opponents that is clear of pending bombs.
    */
   private respawnPoint(f: Fighter): Vec2 {
-    const { safeZone: zone, halfSize, stageId } = this.state.arena;
-    const onFloor = respawnCandidates(stageId, halfSize, zone.active ? zone : null);
-    const clear = onFloor.filter(
+    const { safeZone: zone, stageId } = this.state.arena;
+    const floor = this.footingHalfSize();
+    const candidates = respawnCandidates(stageId, floor, zone.active ? zone : null);
+    const clear = candidates.filter(
       (p) =>
         !this.state.bombs.some(
           (b) => !b.exploded && Math.hypot(p.x - b.x, p.z - b.z) <= b.radius + 0.3,
         ),
     );
+    const available = clear.length > 0 ? clear : candidates;
+    const landing = announcedZoneIn(zone, RESPAWN_LOOKAHEAD);
+    const safeAtLanding = zone.active
+      ? available.filter((p) => {
+          // Belts begin carrying the fighter only after touching down.
+          const belt = conveyorVelocityAt(stageId, p.x, p.z, floor);
+          const x = p.x + belt.x * RESPAWN_STARTUP;
+          const z = p.z + belt.z * RESPAWN_STARTUP;
+          return (
+            Math.hypot(p.x - landing.x, p.z - landing.z) <= landing.radius - 0.15 &&
+            Math.hypot(x - landing.x, z - landing.z) <= landing.radius - 0.15 &&
+            hasClearance(stageId, x, z, floor, 0.3)
+          );
+        })
+      : available;
+    const pool = safeAtLanding.length > 0 ? safeAtLanding : available;
     const opponents = this.state.fighters.filter((o) => o.id !== f.id && o.mode !== "dead");
     const room = (p: Vec2) =>
       Math.min(...opponents.map((o) => Math.hypot(o.x - p.x, o.z - p.z)), Infinity);
-    let best = (clear.length > 0 ? clear : onFloor)[0];
-    for (const p of clear) if (room(p) > room(best) + 1e-9) best = p;
+    let best = pool[0];
+    for (const p of pool) if (room(p) > room(best) + 1e-9) best = p;
     return best;
   }
 
@@ -1237,13 +1258,13 @@ export class BattleEngine {
     // no lunge, dodge or ride that ends in a fall. The plain square of the garden needs neither.
     const gaps = !STAGES[this.state.arena.stageId].solid;
     const careful = gaps || hasConveyors(this.state.arena.stageId);
-    if (!enemy) return careful ? this.bide(f, level, input) : input;
+    const zone = this.state.arena.safeZone;
+    if (!enemy) return careful || zone.active ? this.bide(f, level, input) : input;
     const toEnemy = { x: enemy.x - f.x, z: enemy.z - f.z };
     const distance = length(toEnemy);
     const dir = normalize(toEnemy);
     input.aim = dir;
-    const zone = this.state.arena.safeZone;
-    const outside = zone.active && Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius - 0.5;
+    const zoneGoal = zoneWalkingGoal(zone, f, f.aiLevel);
     const edge =
       !gaps &&
       Math.max(Math.abs(f.x), Math.abs(f.z)) >
@@ -1305,11 +1326,10 @@ export class BattleEngine {
       return input;
     }
     const punish = level.punishRecovery && enemy.mode === "recovery";
-    if (outside || edge)
-      input.move = gaps
-        ? this.walkToward(f, zone)
-        : normalize({ x: zone.x - f.x, z: zone.z - f.z });
-    else if (distance > 2.4 || punish) input.move = gaps ? this.walkToward(f, enemy) : dir;
+    if (zoneGoal || edge) {
+      const goal = zoneGoal ?? (zone.active ? zone : { x: 0, z: 0 });
+      input.move = this.walkToward(f, goal);
+    } else if (distance > 2.4 || punish) input.move = gaps ? this.walkToward(f, enemy) : dir;
     else if (unsteady) input.move = this.towardFooting(f);
     else if (distance < 1.5 || f.stamina < 28) input.move = { x: -dir.x, z: -dir.z };
     else input.move = { x: dir.z * 0.5, z: -dir.x * 0.5 };
@@ -1358,7 +1378,7 @@ export class BattleEngine {
     } else if (
       distance < 3.3 &&
       f.stamina >= level.attackStamina &&
-      !outside &&
+      !zoneGoal &&
       !unsteady &&
       !(careful && this.beltCarriesOff(f, 1.6))
     ) {
@@ -1447,8 +1467,8 @@ export class BattleEngine {
     const belt = this.beltAt(f.x, f.z);
     const calm = zone.active ? zone : { x: 0, z: 0 };
     let move: Vec2 = { x: 0, z: 0 };
-    if (zone.active && Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius - 0.5)
-      move = this.walkToward(f, zone);
+    const goal = zoneWalkingGoal(zone, f, f.aiLevel);
+    if (goal) move = this.walkToward(f, goal);
     else if (belt.x !== 0 || belt.z !== 0) move = this.walkToward(f, calm);
     else if (gaps && !this.footing(f, this.footingMargin())) move = this.towardFooting(f);
     else if (!gaps && Math.max(Math.abs(f.x), Math.abs(f.z)) > this.footingHalfSize() - 0.8)

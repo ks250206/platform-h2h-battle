@@ -1,4 +1,6 @@
 import type { Fighter, GameState, MatchMode, Phase } from "../game/types";
+import { ZONE_KO_REASON } from "../game/safeZone";
+import { zoneDirections, zoneStatus } from "./zoneHud";
 import { RULES } from "../game/tuning";
 import { effectiveSamples, FPS_LIMITS, MSAA_SAMPLES, RESOLUTION_OPTIONS } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, SettingsStore, ShadowLevel } from "../game/settings";
@@ -385,6 +387,8 @@ interface FighterCard {
   danger: HTMLElement;
   dangerFill: HTMLElement;
   dangerValue: HTMLElement;
+  dangerLabel: HTMLElement;
+  zoneCompass: HTMLElement;
   airRising: HTMLElement;
   airThrust: HTMLElement;
   airStep: HTMLElement;
@@ -527,7 +531,7 @@ export class GameUI {
             <p class="stage-help-lead">タイトルの「対戦設定」で選べます。どのモードでも、稽古でも使えます。</p>
             <dl class="stage-help-list">${stageHelpMarkup()}</dl>
           </section>
-          <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>光る円の内側が安全地帯。</strong>外では%とゲージが増加。5秒分たまるとアウト、内側ではゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
+          <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>実線が安全地帯、破線が次の円。</strong>選手カードの矢印で円の方向を確認。外では%とゲージが増加し、5秒で退場。内側でゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
           <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。</p>
           <section class="rules-help" aria-labelledby="rules-help-title">
             <h3 id="rules-help-title">RULES / 対戦ルール</h3>
@@ -1268,7 +1272,8 @@ export class GameUI {
       <div class="fighter-main"><span class="fighter-avatar species-${fighter.species}">${icons.paw}</span><div class="fighter-ident"><span class="fighter-name">${escapeHtml(fighter.name)}</span><span class="fighter-species">${fighter.species.toUpperCase()}</span><span class="fighter-life" role="img"></span></div><strong class="fighter-damage"><span>0</span><small>%</small></strong></div>
       <div class="stamina-label"><span>STAMINA</span><span class="stamina-value">100</span></div><div class="stamina-track" role="meter" aria-label="スタミナ" aria-valuemin="0" aria-valuemax="100"><span></span></div>
       <div class="fighter-foot"><div class="air-tokens"><span class="air-rising" title="空中振り上げの使用権">↗</span><span class="air-thrust" title="空中突きの使用権">→</span><span class="air-step" title="空中回避の使用権">»</span><small>RECOVERY</small></div></div>
-      <div class="outside-warning" hidden><div><span>エリア外</span><strong>0.0 / 5s</strong></div><div class="outside-track"><span></span></div></div>
+      <div class="zone-compass" hidden></div>
+      <div class="outside-warning" hidden><div><span>エリア外</span><strong>0.0 / ${RULES.outsideLimit}s</strong></div><div class="outside-track"><span></span></div></div>
     `;
     this.query(".fighter-cards").append(card);
     const q = <T extends HTMLElement = HTMLElement>(selector: string): T =>
@@ -1281,6 +1286,8 @@ export class GameUI {
       status: q(".fighter-status"),
       danger: q(".outside-warning"),
       dangerFill: q(".outside-track span"),
+      zoneCompass: q(".zone-compass"),
+      dangerLabel: q(".outside-warning div:first-child span"),
       dangerValue: q(".outside-warning strong"),
       airRising: q(".air-rising"),
       airThrust: q(".air-thrust"),
@@ -1344,9 +1351,17 @@ export class GameUI {
           ? "PRACTICE FIELD  ·  ギミックなし"
           : "PRACTICE FIELD  ·  コンベアだけ動く",
       );
-    else if (state.arena.warningRing) setText(arenaStatus, `外周崩壊まで ${nextCollapse} 秒`);
-    else if (state.arena.safeZone.active) setText(arenaStatus, "SAFE ZONE MOVING  ·  光の円へ");
-    else if (GIMMICK_IDS.every((id) => !state.rules.gimmicks[id])) {
+    else if (state.arena.warningRing || state.arena.safeZone.active) {
+      setText(
+        arenaStatus,
+        [
+          state.arena.warningRing ? `外周崩壊まで ${nextCollapse}秒` : "",
+          zoneStatus(state.arena.safeZone),
+        ]
+          .filter(Boolean)
+          .join("　/　"),
+      );
+    } else if (GIMMICK_IDS.every((id) => !state.rules.gimmicks[id])) {
       const stage = STAGES[state.arena.stageId];
       setText(
         arenaStatus,
@@ -1423,9 +1438,23 @@ export class GameUI {
       );
       card.staminaValue.textContent = String(Math.ceil(fighter.stamina));
       card.element.classList.toggle("low-stamina", fighter.stamina < 25);
-      card.danger.hidden = fighter.outsideTime <= 0 || fighter.mode === "dead";
+      const zone = state.arena.safeZone;
+      card.zoneCompass.hidden = !zone.active || !fighter.human || fighter.mode === "dead";
+      if (!card.zoneCompass.hidden) setText(card.zoneCompass, zoneDirections(zone, fighter));
+      const zoneKO = fighter.mode === "dead" && fighter.eliminationReason === ZONE_KO_REASON;
+      card.danger.hidden =
+        !zone.active || fighter.outsideTime <= 0 || (fighter.mode === "dead" && !zoneKO);
+      if (!card.danger.hidden)
+        setText(
+          card.dangerLabel,
+          zoneKO
+            ? "エリア外退場"
+            : Math.hypot(fighter.x - zone.x, fighter.z - zone.z) > zone.radius
+              ? "エリア外"
+              : "ゲージ回復中",
+        );
       card.dangerFill.style.transform = `scaleX(${Math.min(1, fighter.outsideTime / RULES.outsideLimit)})`;
-      card.dangerValue.textContent = `${fighter.outsideTime.toFixed(1)} / 5s`;
+      card.dangerValue.textContent = `${(Math.floor((fighter.outsideTime + 1e-9) * 10) / 10).toFixed(1)} / ${RULES.outsideLimit}s`;
       card.airRising.classList.toggle("used", fighter.airRisingUsed);
       card.airThrust.classList.toggle("used", fighter.airThrustUsed);
       card.airStep.classList.toggle("used", fighter.airStepUsed);

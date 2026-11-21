@@ -1,6 +1,7 @@
 import type { AccessoryId, PaletteId, Species } from "./characters";
 import type { AiLevel, MatchOptions } from "./match";
 import type { EffectiveRules } from "./rules";
+import type { SafeZone } from "./safeZone";
 import type { StageId } from "./stages";
 
 export type { Species } from "./characters";
@@ -132,7 +133,7 @@ export interface ArenaState {
   tileSize: number;
   warningRing: boolean;
   nextCollapse: number;
-  safeZone: { x: number; z: number; radius: number; active: boolean };
+  safeZone: SafeZone;
   wind: Vec2;
   windActive: boolean;
 }
