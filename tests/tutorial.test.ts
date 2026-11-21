@@ -188,15 +188,22 @@ describe("independent lessons on the real fixed-step simulation", () => {
     success(b);
   });
 
-  test("neutral throw without directional input fails step 1 with steering guidance", () => {
-    const b = lesson("throw");
-    tick(b, { aim: right }, 14);
-    tick(b, { grab: true, aim: right });
-    until(b, () => b.step === 1);
-    until(b, () => b.status === "failed", { move: { x: 0, z: 0 } });
-    expect(b.status).toBe("failed");
-    expect(b.feedback).toContain("移動方向");
-    expect(b.completed.size).toBe(0);
+  test("neutral throw without directional input fails step 1 with steering guidance, while light analog steering succeeds", () => {
+    const neutral = lesson("throw");
+    tick(neutral, { aim: right }, 14);
+    tick(neutral, { grab: true, aim: right });
+    until(neutral, () => neutral.step === 1);
+    until(neutral, () => neutral.status === "failed", { move: { x: 0.05, z: 0 } });
+    expect(neutral.status).toBe("failed");
+    expect(neutral.feedback).toContain("移動方向");
+    expect(neutral.completed.size).toBe(0);
+
+    const analog = lesson("throw");
+    tick(analog, { aim: right }, 14);
+    tick(analog, { grab: true, aim: right });
+    until(analog, () => analog.step === 1);
+    until(analog, () => analog.status === "success", { move: { x: 0.15, z: 0 } });
+    success(analog);
   });
 
   test("a lesson time-up fails cleanly instead of leaving the lesson playing", () => {
@@ -515,14 +522,21 @@ describe("prompts exercise the game's actual input handlers", () => {
     input.newMatch();
     expect(input.playerLocks[0].on).toBe(false); // the normal session's lock preference
 
-    // Switching from keyboard/mouse to gamepad mid-lesson via a stick push keeps moving immediately.
+    // Switching from keyboard/mouse/touch to gamepad mid-lesson via a stick push keeps moving
+    // immediately and clears any displaced touch joystick or pressed touch button visuals.
     b.begin("basics", "keyboard");
     input.newMatch(true);
     pads.current[0] = pad();
-    take();
+    take(true);
+    const knob = document.querySelector<HTMLElement>(".touch-controls .stick-knob")!;
+    const touchAttack = document.querySelector<HTMLButtonElement>(".touch-actions button")!;
+    knob.style.transform = "translate(30px, 0px)";
+    touchAttack.classList.add("pressed");
     pads.current[0] = { ...pad(), axes: [1, 0, 0, 0] };
     b.state.options.controls = { 0: "pad1" };
     input.switchDevice();
+    expect(knob.style.transform).toBe("");
+    expect(touchAttack.classList.contains("pressed")).toBe(false);
     const switched = take();
     expect(Math.hypot(switched.move.x, switched.move.z)).toBeGreaterThan(0.9);
     input.destroy();

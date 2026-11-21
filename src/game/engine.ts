@@ -797,7 +797,7 @@ export class BattleEngine {
       return;
     }
     if (f.mode === "throw") {
-      if (length(input.move) > 0.1) f.throwDirection = normalize(input.move);
+      if (length(input.move) > RULES.throwSteerThreshold) f.throwDirection = normalize(input.move);
       if (f.modeTime >= RULES.grabHold) this.throwVictim(f);
       return;
     }

@@ -610,6 +610,8 @@ export class BattleInput {
     this.touchAttack = null;
     this.touchMove = { x: 0, y: 0 };
     this.joystickId = null;
+    this.touch.querySelector<HTMLElement>(".stick-knob")!.style.transform = "";
+    this.touch.querySelectorAll(".pressed").forEach((button) => button.classList.remove("pressed"));
     this.padsSeen.clear();
     this.rumbleSamples.clear();
   }

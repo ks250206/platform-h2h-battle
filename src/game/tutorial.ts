@@ -307,7 +307,8 @@ export class TutorialBattle extends BattleEngine {
           this.throwSteered = false;
           this.advance();
         } else if (this.step === 1) {
-          if (before.grabbed === p.id && length(input.move) > 0.2) this.throwSteered = true;
+          if (before.grabbed === p.id && length(input.move) > RULES.throwSteerThreshold)
+            this.throwSteered = true;
           if (
             before.grabbed === p.id &&
             rival.grabbedBy === null &&

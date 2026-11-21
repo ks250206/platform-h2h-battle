@@ -89,9 +89,9 @@ let manualStepping = false;
 /** The pad (1-based) whose loss paused the match, until it is back or the match goes on. */
 let lostPad: number | null = null;
 
-/** A set keeps its starting line-up, including during a disconnect between games. */
+/** A set, tutorial, or training session keeps its starting pad line-up across disconnects. */
 const missingRequiredPad = (): number | null => {
-  if (!engine.state.set && !(engine instanceof TutorialBattle)) return null;
+  if (!engine.state.set && !(engine instanceof TutorialBattle) && !engine.training) return null;
   for (const { device } of humanSlots(engine.state.options, 2)) {
     const pad = padIndex(device);
     if (pad !== null && !pads.isConnected(pad)) return pad + 1;
@@ -143,7 +143,7 @@ const padLost = (padNumber: number) => {
       : "つなぎ直してから再開してください。";
   ui.setPadNotice(
     `パッド${padNumber} の接続が切れました。${hint}`,
-    engine.state.set !== null || engine instanceof TutorialBattle,
+    engine.state.set !== null || engine instanceof TutorialBattle || engine.training !== null,
   );
 };
 /** V / the top-bar camera button / the settings dialog all write the same stored setting. */
@@ -211,6 +211,11 @@ const ui = new GameUI(overlay, {
     if (ladder) return;
     sound.unlock();
     if (engine.training) {
+      const missing = missingRequiredPad();
+      if (missing !== null) {
+        padLost(missing);
+        return;
+      }
       engine.resetTraining();
       prepareGame();
     } else if (engine.state.set) {

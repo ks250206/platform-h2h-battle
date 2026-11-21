@@ -148,4 +148,105 @@ describe("TrainingUI pad disconnect safety", () => {
     expect(engine.state.phase).toBe("playing");
     trainingUI.destroy();
   });
+
+  test("in production wiring, pause Resume and Restart stay paused in Training while the assigned pad is missing", async () => {
+    document.body.innerHTML = '<div id="app"></div>';
+    const canvas = document.createElement("canvas");
+    vi.resetModules();
+    vi.doMock("../src/render/renderer", () => ({
+      hasSoftwareRenderer: () => false,
+      ArenaRenderer: {
+        create: async (host: HTMLElement) => {
+          host.append(canvas);
+          return {
+            canvas,
+            render() {},
+            present() {},
+            applySettings() {},
+            screenToWorld: () => null,
+            setSpotlight() {},
+            destroy() {},
+          };
+        },
+      },
+    }));
+    vi.doMock("../src/game/audio", () => ({
+      BattleAudio: class {
+        unlock() {}
+        setMix() {}
+        update() {}
+        setEnabled() {}
+        destroy() {}
+      },
+    }));
+    let current: PadSnapshot | null = pad();
+    Object.defineProperty(navigator, "getGamepads", {
+      configurable: true,
+      value: () => [current && { ...current, connected: true }],
+    });
+    let now = performance.now();
+    let handle = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.set(++handle, cb);
+      return handle;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const draw = (count = 1) => {
+      for (let i = 0; i < count; i++) {
+        now += 34;
+        const batch = [...frames.values()];
+        frames.clear();
+        batch.forEach((cb) => cb(now));
+      }
+    };
+    try {
+      await import("../src/main");
+      draw(2);
+      const app = window.__BRAMBLE__!;
+      // Assign P1 to pad1 in Training and start playing.
+      document.querySelector<HTMLButtonElement>('button[data-mode="training"]')!.click();
+      const select = document.querySelector<HTMLSelectElement>(
+        '.player-row[data-slot="0"] .player-device',
+      )!;
+      select.value = "pad1";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      document.querySelector<HTMLButtonElement>('[data-action="start"]')!.click();
+      draw(2);
+      expect(app.engine!.training).not.toBeNull();
+      expect(app.engine!.state.options.controls[0]).toBe("pad1");
+      app.engine!.state.phase = "playing";
+      draw(2);
+
+      // Open Training settings, disconnect pad1, and close settings -> stays paused.
+      document.querySelector<HTMLButtonElement>(".training-hud [data-open]")!.click();
+      draw();
+      current = null;
+      draw(2);
+      document.querySelector<HTMLButtonElement>("dialog.training-dialog [data-pad-back]")!.click();
+      draw();
+      expect(app.engine!.state.phase).toBe("paused");
+
+      // Both Resume and Restart on the pause panel must refuse to resume while pad1 is missing.
+      document.querySelector<HTMLButtonElement>('.pause-screen [data-action="resume"]')!.click();
+      draw();
+      expect(app.engine!.state.phase).toBe("paused");
+      document.querySelector<HTMLButtonElement>('.pause-screen [data-action="restart"]')!.click();
+      draw();
+      expect(app.engine!.state.phase).toBe("paused");
+
+      // Reconnecting pad1 allows Resume to restore play cleanly.
+      current = pad();
+      draw(2);
+      document.querySelector<HTMLButtonElement>('.pause-screen [data-action="resume"]')!.click();
+      draw();
+      expect(app.engine!.state.phase).toBe("playing");
+    } finally {
+      window.dispatchEvent(new Event("pagehide"));
+      Reflect.deleteProperty(navigator, "getGamepads");
+      vi.unstubAllGlobals();
+      vi.doUnmock("../src/render/renderer");
+      vi.doUnmock("../src/game/audio");
+    }
+  });
 });

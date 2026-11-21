@@ -53,6 +53,21 @@ test("default duel title scrolls at 1280x720, selects accept pointer clicks, and
   await page.reload();
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
   expect(await page.evaluate(() => window.__BRAMBLE__!.snapshot().options.stage)).toBe("factory");
+
+  // Short landscape (844x390): the side-by-side match-options column must remain unclipped and hit-testable.
+  await page.setViewportSize({ width: 844, height: 390 });
+  const ruinsButton = page.locator('button[data-stage="ruins"]');
+  await expect(ruinsButton).toBeVisible();
+  const hitSelf = await ruinsButton.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return hit === el || el.contains(hit);
+  });
+  expect(hitSelf).toBe(true);
+  await ruinsButton.click();
+  await expect
+    .poll(() => page.evaluate(() => window.__BRAMBLE__!.snapshot().options.stage))
+    .toBe("ruins");
   expect(errors).toEqual([]);
 });
 

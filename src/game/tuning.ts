@@ -88,6 +88,7 @@ export const RULES = {
   grabRecovery: 0.7,
   grabReach: 1.25,
   grabHold: 0.45,
+  throwSteerThreshold: 0.1,
   hitstop: 0.085,
   clashHitstop: 0.11,
   diAngle: Math.PI / 12,
