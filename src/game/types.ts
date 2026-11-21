@@ -1,3 +1,4 @@
+import type { AiMemory } from "./ai";
 import type { AccessoryId, PaletteId, Species } from "./characters";
 import type { AiLevel, MatchOptions } from "./match";
 import type { EffectiveRules } from "./rules";
@@ -94,7 +95,7 @@ export interface Fighter {
   eliminationReason: string | null;
   aiThink: number;
   aiCharge: number;
-  aiIntent: Vec2;
+  aiMemory: AiMemory | null;
   /**
    * A press made while this fighter could not act on it, held for a few fixed ticks so it fires on
    * the first tick it becomes legal (see `RULES.inputBuffer`). CPUs use it only for a landing tech.

@@ -10,13 +10,10 @@ import {
   sanitizeMatchOptions,
   type MatchOptions,
 } from "./match";
-import { advanceRoll, cpuTechOpportunity, rollDirection } from "./ukemi";
-import { clearWalk, routeDirection } from "./navigation";
+import { CpuController } from "./ai";
 import { effectiveRules, timeLimitFor, type StageInfo, type TimeRule } from "./rules";
 import {
-  canStandAtStage,
   conveyorVelocityAt,
-  hasClearance,
   hasConveyors,
   nearestWalkablePoint,
   respawnCandidates,
@@ -25,7 +22,8 @@ import {
   stageInfoFor,
   STAGES,
 } from "./stages";
-import { AI_LEVELS, ATTACKS, INPUT_BUFFER_TICKS, RULES, UKEMI, type AiProfile } from "./tuning";
+import { ATTACKS, INPUT_BUFFER_TICKS, RULES, UKEMI } from "./tuning";
+import { advanceRoll, cpuTechOpportunity, rollDirection } from "./ukemi";
 import {
   angleDelta,
   attackContains,
@@ -41,7 +39,6 @@ import {
 import {
   emptyInput,
   type AttackId,
-  type Bomb,
   type BufferedAction,
   type BufferedInput,
   type EffectKind,
@@ -142,7 +139,7 @@ function makeFighter(id: number, count: number, options: MatchOptions): Fighter 
     eliminationReason: null,
     aiThink: 0,
     aiCharge: 0,
-    aiIntent: { x: 0, z: 0 },
+    aiMemory: null,
     inputBuffer: null,
   };
 }
@@ -162,6 +159,7 @@ function pressedActions(input: PlayerInput): { action: BufferedAction; attack: A
 
 export class BattleEngine {
   state: GameState;
+  private cpu: CpuController;
   private randomState: number;
   private effectId = 0;
   private bombId = 0;
@@ -177,6 +175,7 @@ export class BattleEngine {
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
     this.state = this.createState("duel", seed);
+    this.cpu = new CpuController(this.state, () => this.random());
     this.state.phase = "menu";
   }
 
@@ -232,6 +231,7 @@ export class BattleEngine {
     if (stage !== undefined) this.stageOverride = stage;
     else if (options?.stage !== undefined) this.stageOverride = null;
     this.state = this.createState(mode, this.state.seed);
+    this.cpu = new CpuController(this.state, () => this.random());
     this.randomState = this.state.seed >>> 0;
     this.nextBomb = RULES.bombStart;
     this.effectId = 0;
@@ -420,8 +420,7 @@ export class BattleEngine {
   private turnRate(f: Fighter): number {
     if (f.mode === "idle") return RULES.idleTurnRate;
     if (f.mode === "charge") return RULES.chargeTurnRate;
-    if (f.mode === "windup")
-      return RULES.windupTurnRate * (f.human ? 1 : AI_LEVELS[f.aiLevel].tracking);
+    if (f.mode === "windup") return RULES.windupTurnRate;
     return 0;
   }
 
@@ -749,7 +748,8 @@ export class BattleEngine {
     // A running belt carries whoever stands on it, player or CPU, whatever they are doing. In the
     // air it has no hold, and a paused or finished match never gets here.
     if (f.grounded && hasConveyors(this.state.arena.stageId)) {
-      const belt = this.beltAt(f.x, f.z);
+      const { stageId, halfSize } = this.state.arena;
+      const belt = conveyorVelocityAt(stageId, f.x, f.z, halfSize);
       f.x += belt.x * dt;
       f.z += belt.z * dt;
     }
@@ -1250,510 +1250,7 @@ export class BattleEngine {
   }
 
   private ai(f: Fighter, dt: number): PlayerInput {
-    const input = emptyInput();
-    if (this.state.mode === "training") return input;
-    const level = AI_LEVELS[f.aiLevel];
-    const enemies = this.state.fighters.filter(
-      (other) => other.id !== f.id && other.mode !== "dead",
-    );
-    const enemy = enemies.sort(
-      (a, b) => Math.hypot(a.x - f.x, a.z - f.z) - Math.hypot(b.x - f.x, b.z - f.z),
-    )[0];
-    // A stage with pits or bridges (`gaps`) is walked along its floor (navigation.ts) and every
-    // move is checked for a drop first. One with gaps or belts (`careful`) also plans its footing:
-    // no lunge, dodge or ride that ends in a fall. The plain square of the garden needs neither.
-    const gaps = !STAGES[this.state.arena.stageId].solid;
-    const careful = gaps || hasConveyors(this.state.arena.stageId);
-    if (!enemy) return careful ? this.bide(f, level, input) : input;
-    const toEnemy = { x: enemy.x - f.x, z: enemy.z - f.z };
-    const distance = length(toEnemy);
-    const dir = normalize(toEnemy);
-    input.aim = dir;
-    const zone = this.state.arena.safeZone;
-    const outside = zone.active && Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius - 0.5;
-    const edge =
-      !gaps &&
-      Math.max(Math.abs(f.x), Math.abs(f.z)) >
-        (careful ? this.footingHalfSize() : this.state.arena.halfSize) - 0.8;
-    if (!f.grounded && !canStandAt(this.state, f.x, f.z)) {
-      if (careful) return this.recover(f, level, input);
-      const home = normalize({ x: -f.x, z: -f.z });
-      input.move = home;
-      input.aim = home;
-      if (f.mode === "idle") {
-        const risingLeft = level.recoverRising && !f.airRisingUsed;
-        if (risingLeft && f.y < 0.8) input.attackPressed = "rising";
-        else if (level.recoverThrust && !f.airThrustUsed) input.attackPressed = "thrust";
-        // The air dodge is the last resort, once the air attacks are spent.
-        else if (
-          !risingLeft &&
-          level.recoverAirStep &&
-          !f.airStepUsed &&
-          f.stamina >= RULES.stepCost
-        )
-          input.step = true;
-        input.attackHeld = input.attackPressed;
-      } else if (f.mode === "charge") input.attackHeld = null;
-      return input;
-    }
-    if (f.mode === "windup" && level.cancelWhiffs && this.windupWillWhiff(f, enemy)) {
-      input.cancel = true;
-    }
-    // Every strength pulls out of a cut that would carry it into a pit or off a belt's end: the
-    // target, the floor (a collapse) or the belt may have moved since it was chosen.
-    const bail =
-      careful &&
-      (f.mode === "windup" || f.mode === "charge") &&
-      (this.lungeLeavesFloor(f, dir) ||
-        this.beltCarriesOff(f, 1) ||
-        (gaps && f.grounded && !this.footing(f, 0.12)));
-    // Beside a drop it finds room to stand before it fights: wind or a shove must not tip it in.
-    const unsteady = gaps && f.grounded && !this.footing(f, this.footingMargin());
-    if (bail) input.cancel = true;
-    if (f.mode === "charge") {
-      input.attackHeld = f.modeTime < f.aiCharge ? f.attack : null;
-      // Occasional deliberate feint; never perfectly react to the player's input.
-      if (
-        f.modeTime > 0.18 &&
-        enemy.mode === "windup" &&
-        distance < level.feintRange &&
-        f.stamina >= 25 &&
-        f.aiCharge > 0.4
-      ) {
-        // CPUs keep their dodges on the ground (the air dodge is for recovering).
-        input.step = f.grounded;
-        input.move = { x: dir.z, z: -dir.x };
-        if (careful && input.step) {
-          const landing = this.safeStep(f, input.move);
-          input.step = landing !== null;
-          input.move = landing ?? { x: 0, z: 0 };
-        }
-      }
-      return input;
-    }
-    const punish = level.punishRecovery && enemy.mode === "recovery";
-    if (outside || edge)
-      input.move = gaps
-        ? this.walkToward(f, zone)
-        : normalize({ x: zone.x - f.x, z: zone.z - f.z });
-    else if (distance > 2.4 || punish) input.move = gaps ? this.walkToward(f, enemy) : dir;
-    else if (unsteady) input.move = this.towardFooting(f);
-    else if (distance < 1.5 || f.stamina < 28) input.move = { x: -dir.x, z: -dir.z };
-    else input.move = { x: dir.z * 0.5, z: -dir.x * 0.5 };
-    const danger = this.state.bombs.find(
-      (b) =>
-        !b.exploded &&
-        b.timer <= level.bombNotice &&
-        Math.hypot(f.x - b.x, f.z - b.z) < b.radius + 0.6,
-    );
-    if (danger) input.move = normalize({ x: f.x - danger.x + 0.1, z: f.z - danger.z });
-    if (f.mode === "throw" && level.aimedThrows)
-      input.move = gaps ? this.throwAimOverGaps(f) : this.throwAim(f);
-    else {
-      if (gaps) input.move = this.keepOnFloor(f, input.move);
-      input.move = this.againstBelt(f, input.move);
-    }
-    f.aiThink -= dt;
-    if (f.mode !== "idle" || f.aiThink > 0) return input;
-    // Wait (deciding again every tick) for the late part of a wind-up, where tracking cannot follow.
-    const windupLeft = enemy.mode === "windup" ? enemy.modeDuration - enemy.modeTime : 0;
-    if (distance < 3.4 && windupLeft > level.dodgeWindow) return input;
-    f.aiThink = level.thinkMin + this.random() * level.thinkRange;
-    if (
-      (enemy.mode === "windup" || (danger && danger.timer < 0.7)) &&
-      distance < 3.4 &&
-      f.stamina >= 25 &&
-      this.random() < level.dodgeChance &&
-      !edge
-    ) {
-      const dodge = level.smartDodge
-        ? this.dodgeDirection(f, enemy, enemy.mode === "windup" ? null : danger!)
-        : enemy.attack === "sweep"
-          ? { x: -dir.x, z: -dir.z }
-          : { x: dir.z, z: -dir.x };
-      if (!careful) {
-        input.step = f.grounded;
-        input.move = dodge;
-      } else if (f.grounded) {
-        // Only a dodge that ends on floor: on a bridge that may leave no dodge at all.
-        const landing = this.safeStep(f, dodge);
-        if (landing) {
-          input.step = true;
-          input.move = landing;
-        }
-      }
-    } else if (
-      distance < 3.3 &&
-      f.stamina >= level.attackStamina &&
-      !outside &&
-      !unsteady &&
-      !(careful && this.beltCarriesOff(f, 1.6))
-    ) {
-      if (punish) {
-        input.attackPressed = this.punishAttack(enemy, distance);
-        f.aiCharge = 0.03;
-      } else if (distance < 1.2 && this.random() < 0.22) input.grab = true;
-      else {
-        const roll = this.random();
-        input.attackPressed = !enemy.grounded
-          ? "rising"
-          : distance > 2.4
-            ? "thrust"
-            : roll < 0.42
-              ? "sweep"
-              : roll < 0.78
-                ? "overhead"
-                : "thrust";
-        f.aiCharge = this.random() < level.chargeChance ? 0.4 + this.random() * 0.5 : 0.03;
-      }
-      if (careful && input.attackPressed)
-        input.attackPressed = this.attackThatStays(f, dir, distance, input.attackPressed);
-      input.attackHeld = input.attackPressed;
-    }
-    return input;
-  }
-
-  /** The belt under (x, z): where it carries a grounded fighter, or zero off the belts. */
-  private beltAt(x: number, z: number): Vec2 {
-    const { stageId, halfSize } = this.state.arena;
-    return conveyorVelocityAt(stageId, x, z, halfSize);
-  }
-
-  /**
-   * The half size a careful CPU plans its footing with: once a collapse has been announced, the
-   * one after it, so the doomed ring already counts as a drop and gets left in time.
-   */
-  private footingHalfSize(): number {
-    const { arena } = this.state;
-    return arena.warningRing
-      ? Math.max(STAGES[arena.stageId].minHalfSize, arena.halfSize - RULES.tileSize)
-      : arena.halfSize;
-  }
-
-  /** Floor at (x, z) that will still be there after an announced collapse. */
-  private firmAt(x: number, z: number): boolean {
-    return canStandAtStage(this.state.arena.stageId, x, z, this.footingHalfSize());
-  }
-
-  /** A straight walk from the fighter to `to` that stays on firm floor all the way. */
-  private firmWalk(f: Fighter, to: Vec2, margin: number): boolean {
-    return clearWalk(this.state.arena.stageId, this.footingHalfSize(), f, to, margin);
-  }
-
-  /** The nearest firm floor to a fighter, `inset` in from its edge. */
-  private nearestFloor(f: Fighter, inset: number): Vec2 {
-    return nearestWalkablePoint(this.state.arena.stageId, f.x, f.z, this.footingHalfSize(), inset);
-  }
-
-  /** Firm floor under the fighter with `margin` of it in every direction. */
-  private footing(f: Fighter, margin: number): boolean {
-    return hasClearance(this.state.arena.stageId, f.x, f.z, this.footingHalfSize(), margin);
-  }
-
-  /** Room a CPU wants around its feet before it commits to a cut; more while the wind pushes. */
-  private footingMargin(): number {
-    return this.state.arena.windActive ? 0.7 : 0.45;
-  }
-
-  /** To the nearest spot with room to stand: the middle of a bridge, in from a pit's rim. */
-  private towardFooting(f: Fighter): Vec2 {
-    const spot = this.nearestFloor(f, this.footingMargin() + 0.3);
-    return normalize({ x: spot.x - f.x, z: spot.z - f.z });
-  }
-
-  /**
-   * Nobody to fight for a moment (the rival is down). A careful CPU still looks after itself:
-   * back from over a drop, off a running belt, into the safe zone, away from an edge.
-   */
-  private bide(f: Fighter, level: AiProfile, input: PlayerInput): PlayerInput {
-    if (!f.grounded && !canStandAt(this.state, f.x, f.z)) return this.recover(f, level, input);
-    if (f.mode === "charge" || f.mode === "windup") input.cancel = true;
-    if (!f.grounded) return input;
-    const gaps = !STAGES[this.state.arena.stageId].solid;
-    const zone = this.state.arena.safeZone;
-    const belt = this.beltAt(f.x, f.z);
-    const calm = zone.active ? zone : { x: 0, z: 0 };
-    let move: Vec2 = { x: 0, z: 0 };
-    if (zone.active && Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius - 0.5)
-      move = this.walkToward(f, zone);
-    else if (belt.x !== 0 || belt.z !== 0) move = this.walkToward(f, calm);
-    else if (gaps && !this.footing(f, this.footingMargin())) move = this.towardFooting(f);
-    else if (!gaps && Math.max(Math.abs(f.x), Math.abs(f.z)) > this.footingHalfSize() - 0.8)
-      move = normalize({ x: calm.x - f.x, z: calm.z - f.z });
-    input.move = this.againstBelt(f, gaps ? this.keepOnFloor(f, move) : move);
-    return input;
-  }
-
-  /** Toward the nearest floor, aiming a little in from its edge: never blindly at the centre. */
-  private wayHome(f: Fighter): Vec2 {
-    const floor = this.nearestFloor(f, 0.6);
-    const home = normalize({ x: floor.x - f.x, z: floor.z - f.z });
-    return length(home) > 0 ? home : normalize({ x: -f.x, z: -f.z });
-  }
-
-  /**
-   * In the air over a pit, a gap or the outside of a careful stage. Back to the nearest floor,
-   * spending no more than it takes: drift when the fall leaves time for it, the air dodge when
-   * that alone lands on floor, the riser from low down, the thrust only when it will not
-   * overshoot a narrow bridge.
-   */
-  private recover(f: Fighter, level: AiProfile, input: PlayerInput): PlayerInput {
-    const home = this.wayHome(f);
-    input.move = home;
-    input.aim = home;
-    if (f.mode === "charge") input.attackHeld = null;
-    if (f.mode !== "idle") return input;
-    const floor = this.nearestFloor(f, 0);
-    const gap = Math.hypot(floor.x - f.x, floor.z - f.z);
-    // Seconds until it has fallen to floor height: nothing to drift with once it is below.
-    const fall =
-      f.y > 0 ? (f.vy + Math.sqrt(f.vy * f.vy + 2 * RULES.gravity * f.y)) / RULES.gravity : 0;
-    if (fall * RULES.airSpeed > gap + 0.4) return input;
-    const risingLeft = level.recoverRising && !f.airRisingUsed;
-    const stepLeft = level.recoverAirStep && !f.airStepUsed && f.stamina >= RULES.stepCost;
-    const thrustLeft = level.recoverThrust && !f.airThrustUsed;
-    const dodge = stepLeft && f.y > -0.1 ? this.stepOntoFloor(f, home) : null;
-    if (dodge) {
-      input.step = true;
-      input.move = dodge;
-    } else if (risingLeft && f.y < 0.8) input.attackPressed = "rising";
-    else if (thrustLeft && this.thrustLands(f, home)) input.attackPressed = "thrust";
-    // Still holding the riser: fall until it is low enough to use it.
-    else if (!risingLeft && stepLeft) input.step = true;
-    input.attackHeld = input.attackPressed;
-    return input;
-  }
-
-  /** An air dodge (about 2.6 long) that ends over firm floor: toward `home` or a little to a side. */
-  private stepOntoFloor(f: Fighter, home: Vec2): Vec2 | null {
-    const heading = Math.atan2(home.x, home.z);
-    for (const turn of [0, 0.45, -0.45, 0.9, -0.9]) {
-      const d = { x: Math.sin(heading + turn), z: Math.cos(heading + turn) };
-      if (
-        this.firmAt(f.x + d.x * 2.3, f.z + d.z * 2.3) &&
-        this.firmAt(f.x + d.x * 2.7, f.z + d.z * 2.7)
-      )
-        return d;
-    }
-    return null;
-  }
-
-  /**
-   * Would an air thrust toward `home` come down on firm floor? It needs height left after its
-   * wind-up, and it flies a fixed distance: on a narrow bridge that can be too far.
-   */
-  private thrustLands(f: Fighter, home: Vec2): boolean {
-    const wait = ATTACKS.thrust.startup;
-    const height = f.y + f.vy * wait - 0.5 * RULES.gravity * wait * wait;
-    if (height < 0.05) return false;
-    const air = (1.8 + Math.sqrt(1.8 * 1.8 + 2 * RULES.gravity * height)) / RULES.gravity;
-    const travel = (ATTACKS.thrust.lunge * (1 - Math.exp(-1.9 * air))) / 1.9;
-    return (
-      this.firmAt(f.x + home.x * travel, f.z + home.z * travel) &&
-      this.firmAt(f.x + home.x * (travel + 0.4), f.z + home.z * (travel + 0.4))
-    );
-  }
-
-  /** Walking to `goal` along the floor: round the pit and over the bridges, never across a gap. */
-  private walkToward(f: Fighter, goal: Vec2): Vec2 {
-    return routeDirection(this.state.arena.stageId, this.footingHalfSize(), f, goal);
-  }
-
-  /**
-   * The last check before a CPU walks on a stage with drops: when `move` would take it off the
-   * floor within a stride, the closest direction to it that does not (sliding along the edge),
-   * or standing still. On a ring about to collapse only the real drops count, so it can leave.
-   */
-  private keepOnFloor(f: Fighter, move: Vec2): Vec2 {
-    const size = length(move);
-    if (size < 0.05) return move;
-    const firm = this.firmAt(f.x, f.z);
-    const floor = (x: number, z: number): boolean =>
-      firm ? this.firmAt(x, z) : canStandAt(this.state, x, z);
-    // The stride itself, and a little room either side of where it ends: walking along an edge
-    // drifts back in from it instead of hugging it.
-    const ahead = (d: Vec2): boolean => {
-      const x = f.x + d.x * 0.9;
-      const z = f.z + d.z * 0.9;
-      return (
-        floor(f.x + d.x * 0.45, f.z + d.z * 0.45) &&
-        floor(x, z) &&
-        floor(x + d.z * 0.3, z - d.x * 0.3) &&
-        floor(x - d.z * 0.3, z + d.x * 0.3)
-      );
-    };
-    const d = normalize(move);
-    if (ahead(d)) return move;
-    const heading = Math.atan2(d.x, d.z);
-    for (const turn of [0.5, -0.5, 1, -1, 1.57, -1.57, 2.2, -2.2, Math.PI]) {
-      const turned = { x: Math.sin(heading + turn), z: Math.cos(heading + turn) };
-      if (ahead(turned)) return { x: turned.x * size, z: turned.z * size };
-    }
-    return { x: 0, z: 0 };
-  }
-
-  /**
-   * A dodge that stays on the floor: `wanted` when the whole step is over floor, else the first
-   * of sideways and backwards that is, or null when every way ends in a drop.
-   */
-  private safeStep(f: Fighter, wanted: Vec2): Vec2 | null {
-    const d = normalize(wanted);
-    if (length(d) === 0) return null;
-    // A step covers about 2.6; the landing needs a little floor beyond it.
-    for (const dir of [d, { x: d.z, z: -d.x }, { x: -d.z, z: d.x }, { x: -d.x, z: -d.z }])
-      if (this.firmWalk(f, { x: f.x + dir.x * 2.9, z: f.z + dir.z * 2.9 }, 0.2)) return dir;
-    return null;
-  }
-
-  /** How far a cut carries its user forward: the thrust's lunge (longer in the air), the riser's hop. */
-  private lungeTravel(f: Fighter, attack: AttackId): number {
-    return attack === "thrust" ? (f.grounded ? 1.7 : 3.8) : attack === "rising" ? 2 : 0;
-  }
-
-  /** The cut being charged or wound up would end over a drop, along its facing or its aim. */
-  private lungeLeavesFloor(f: Fighter, aim: Vec2): boolean {
-    const travel = f.attack ? this.lungeTravel(f, f.attack) : 0;
-    if (travel === 0) return false;
-    const facing = forward(f);
-    return [facing, aim].some(
-      (d) => !this.firmWalk(f, { x: f.x + d.x * travel, z: f.z + d.z * travel }, 0.15),
-    );
-  }
-
-  /**
-   * Thrusts and rising cuts carry their user forward. Where that would end over a drop, the
-   * heavy overhead or the sweep if the target is in their reach, else no attack this time.
-   */
-  private attackThatStays(
-    f: Fighter,
-    dir: Vec2,
-    distance: number,
-    attack: AttackId,
-  ): AttackId | null {
-    const travel = this.lungeTravel(f, attack);
-    const carried = { x: f.x + dir.x * travel, z: f.z + dir.z * travel };
-    if (travel === 0 || this.firmWalk(f, carried, 0.15)) return attack;
-    if (distance < ATTACKS.overhead.reach + RULES.fighterRadius) return "overhead";
-    if (distance < ATTACKS.sweep.reach + RULES.fighterRadius) return "sweep";
-    return null;
-  }
-
-  /** Standing on a belt that tips it off the firm floor within `seconds`. */
-  private beltCarriesOff(f: Fighter, seconds: number): boolean {
-    if (!f.grounded || !hasConveyors(this.state.arena.stageId)) return false;
-    const belt = this.beltAt(f.x, f.z);
-    if (belt.x === 0 && belt.z === 0) return false;
-    return !this.firmAt(f.x + belt.x * seconds, f.z + belt.z * seconds);
-  }
-
-  /**
-   * Walking on a belt: the stick direction that, once the belt's drift is added, still goes the
-   * way `move` meant. Belts are slower than walking, so there always is one.
-   */
-  private againstBelt(f: Fighter, move: Vec2): Vec2 {
-    if (!f.grounded || !hasConveyors(this.state.arena.stageId)) return move;
-    const belt = this.beltAt(f.x, f.z);
-    if ((belt.x === 0 && belt.z === 0) || length(move) < 0.05) return move;
-    const d = normalize(move);
-    // Cancel the part of the drift that is across the wanted direction; spend the rest going on.
-    const along = belt.x * d.x + belt.z * d.z;
-    const acrossX = (belt.x - along * d.x) / RULES.moveSpeed;
-    const acrossZ = (belt.z - along * d.z) / RULES.moveSpeed;
-    const forward = Math.sqrt(Math.max(0, 1 - acrossX * acrossX - acrossZ * acrossZ));
-    return normalize({ x: d.x * forward - acrossX, z: d.z * forward - acrossZ });
-  }
-
-  /**
-   * Throwing on a stage with pits: toward the nearest drop the victim would land in (the pit
-   * counts as much as the outside), otherwise out of the safe zone.
-   */
-  private throwAimOverGaps(f: Fighter): Vec2 {
-    const zone = this.state.arena.safeZone;
-    const victim = this.state.fighters.find((o) => o.id === f.grabbedId);
-    const reach = 2.4 + (victim?.damage ?? 0) * 0.02;
-    let best: Vec2 | null = null;
-    let nearest = Infinity;
-    for (let k = 0; k < 16; k++) {
-      const angle = (k * Math.PI) / 8;
-      const d = { x: Math.sin(angle), z: Math.cos(angle) };
-      if (canStandAt(this.state, f.x + d.x * reach, f.z + d.z * reach)) continue;
-      // How soon the floor ends this way: the sooner, the less a victim can drift back.
-      let drop = reach;
-      for (let step = 0.3; step < reach; step += 0.3) {
-        if (!canStandAt(this.state, f.x + d.x * step, f.z + d.z * step)) {
-          drop = step;
-          break;
-        }
-      }
-      if (drop < nearest - 1e-9) {
-        nearest = drop;
-        best = d;
-      }
-    }
-    if (best) return best;
-    const out = normalize({ x: f.x - zone.x, z: f.z - zone.z });
-    return zone.active && length(out) > 0 ? out : forward(f);
-  }
-
-  /**
-   * Would this wind-up miss? True when, even turning as fast as it may for the time left and
-   * counting the thrust's lunge, the blade cannot reach the target, or the target will still be
-   * invulnerable when the blade comes out.
-   */
-  private windupWillWhiff(f: Fighter, target: Fighter): boolean {
-    if (!f.attack) return false;
-    const left = Math.max(0, f.modeDuration - f.modeTime);
-    if (isInvulnerable(target, left)) return true;
-    const aim = Math.atan2(target.x - f.x, target.z - f.z);
-    const turn = this.turnRate(f) * left;
-    const facing = f.facing + clamp(angleDelta(f.facing, aim), -turn, turn);
-    const blade: Fighter = { ...f, mode: "active", facing };
-    if (attackContains(blade, target)) return false;
-    // Where the thrust's lunge (or the riser's hop) carries the blade during the cut.
-    const travel = f.attack === "thrust" ? 1.5 : f.attack === "rising" ? 0.6 : 0;
-    const dir = { x: Math.sin(facing), z: Math.cos(facing) };
-    const lunged: Fighter = { ...blade, x: f.x + dir.x * travel, z: f.z + dir.z * travel };
-    return !(travel > 0 && attackContains(lunged, target));
-  }
-
-  /** Back out of a sweep's fan, sideways off a narrow blade's line, or straight away from a bomb. */
-  private dodgeDirection(f: Fighter, enemy: Fighter, bomb: Bomb | null): Vec2 {
-    if (bomb) return normalize({ x: f.x - bomb.x + 0.01, z: f.z - bomb.z });
-    const away = normalize({ x: f.x - enemy.x, z: f.z - enemy.z });
-    if (enemy.attack === "sweep") return away;
-    // Step further to the side of the blade line it already stands on; if dead centre, inwards.
-    const blade = forward(enemy);
-    const side = { x: blade.z, z: -blade.x };
-    const offset = (f.x - enemy.x) * side.x + (f.z - enemy.z) * side.z;
-    const inward = -(f.x * side.x + f.z * side.z);
-    const sign = Math.abs(offset) > 0.05 ? Math.sign(offset) : inward >= 0 ? 1 : -1;
-    const lateral = { x: away.z, z: -away.x };
-    const flip = lateral.x * side.x + lateral.z * side.z >= 0 ? sign : -sign;
-    return { x: lateral.x * flip, z: lateral.z * flip };
-  }
-
-  /** The quickest cut that still lands before a target in recovery can act again. */
-  private punishAttack(enemy: Fighter, distance: number): AttackId {
-    if (!enemy.grounded) return "rising";
-    const left = enemy.modeDuration - enemy.modeTime;
-    if (distance > 2.2) return "thrust";
-    if (distance < 2.5 && left > ATTACKS.overhead.startup + 0.05) return "overhead";
-    return "sweep";
-  }
-
-  /** Toward the nearest edge when a ring-out is in reach, otherwise out of the safe zone. */
-  private throwAim(f: Fighter): Vec2 {
-    const { halfSize, safeZone: zone } = this.state.arena;
-    const toEdge =
-      halfSize - Math.abs(f.x) < halfSize - Math.abs(f.z)
-        ? { x: Math.sign(f.x) || 1, z: 0 }
-        : { x: 0, z: Math.sign(f.z) || 1 };
-    const victim = this.state.fighters.find((o) => o.id === f.grabbedId);
-    const reach = 2.4 + (victim?.damage ?? 0) * 0.02;
-    const edgeDistance = halfSize - Math.max(Math.abs(f.x), Math.abs(f.z));
-    if (edgeDistance < reach || !zone.active) return toEdge;
-    const out = normalize({ x: f.x - zone.x, z: f.z - zone.z });
-    return length(out) > 0 ? out : toEdge;
+    return this.cpu.decide(f, dt);
   }
 
   private effect(

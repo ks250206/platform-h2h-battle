@@ -8,7 +8,10 @@ export function normalize(v: Vec2): Vec2 {
   const d = length(v);
   return d > 0.00001 ? { x: v.x / d, z: v.z / d } : { x: 0, z: 0 };
 }
-export const forward = (f: Fighter): Vec2 => ({ x: Math.sin(f.facing), z: Math.cos(f.facing) });
+export const forward = (f: Pick<Fighter, "facing">): Vec2 => ({
+  x: Math.sin(f.facing),
+  z: Math.cos(f.facing),
+});
 export const angleDelta = (from: number, to: number): number =>
   Math.atan2(Math.sin(to - from), Math.cos(to - from));
 
@@ -43,7 +46,7 @@ export function isInvulnerable(f: Fighter, ahead = 0): boolean {
   return stepTime >= RULES.stepInvulStart && stepTime < RULES.stepInvulEnd;
 }
 
-export function attackContains(a: Fighter, b: Fighter): boolean {
+export function attackContains(a: Fighter, b: Pick<Fighter, "mode" | "x" | "y" | "z">): boolean {
   if (!a.attack || a.mode !== "active" || b.mode === "dead") return false;
   const attack = ATTACKS[a.attack];
   const dx = b.x - a.x,

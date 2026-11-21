@@ -1,13 +1,11 @@
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { describe, expect, test } from "vite-plus/test";
 import { BattleEngine } from "../src/game/engine";
 import type { AiLevel } from "../src/game/match";
-import { AI_LEVELS, ATTACKS, RULES, type AiProfile } from "../src/game/tuning";
+import { AI_LEVELS, ATTACKS, RULES } from "../src/game/tuning";
 import {
   emptyInput,
   type AttackId,
   type Fighter,
-  type GameState,
-  type MatchMode,
   type PlayerInput,
   type Vec2,
 } from "../src/game/types";
@@ -31,58 +29,7 @@ function duel(seed: number, difficulty: AiLevel, stocks = 1) {
   return { engine, human, cpu };
 }
 
-/** Temporarily changes a level's profile; restored after each test. */
-const saved = new Map<AiLevel, AiProfile>();
-function patchLevel(level: AiLevel, patch: Partial<AiProfile>) {
-  if (!saved.has(level)) saved.set(level, { ...AI_LEVELS[level] });
-  Object.assign(AI_LEVELS[level], patch);
-}
-afterEach(() => {
-  for (const [level, profile] of saved) Object.assign(AI_LEVELS[level], profile);
-  saved.clear();
-});
-
 describe("the difficulty table", () => {
-  test("levels are ordered sensibly from easy to hard", () => {
-    const [easy, normal, hard] = LEVELS.map((level) => AI_LEVELS[level]);
-    const slowest = (p: AiProfile) => p.thinkMin + p.thinkRange;
-    expect(easy.thinkMin).toBeGreaterThan(normal.thinkMin);
-    expect(normal.thinkMin).toBeGreaterThan(hard.thinkMin);
-    expect(slowest(easy)).toBeGreaterThan(slowest(normal));
-    expect(slowest(normal)).toBeGreaterThan(slowest(hard));
-    expect(easy.dodgeChance).toBeLessThan(normal.dodgeChance);
-    expect(hard.dodgeWindow).toBeLessThan(normal.dodgeWindow);
-    expect(normal.dodgeChance).toBeLessThan(hard.dodgeChance);
-    expect(easy.chargeChance).toBe(0);
-    expect(normal.chargeChance).toBeLessThan(hard.chargeChance);
-    expect(easy.feintRange).toBe(0);
-    expect(normal.feintRange).toBeLessThanOrEqual(hard.feintRange);
-    expect(easy.attackStamina).toBeGreaterThan(normal.attackStamina);
-    expect([easy.tracking, normal.tracking, hard.tracking]).toEqual([0, 0.5, 1]);
-    expect(easy.bombNotice).toBeLessThan(normal.bombNotice);
-    expect([easy.recoverRising, easy.recoverThrust, easy.recoverAirStep]).toEqual([
-      true,
-      false,
-      false,
-    ]);
-    expect([hard.recoverRising, hard.recoverThrust, hard.recoverAirStep]).toEqual([
-      true,
-      true,
-      true,
-    ]);
-    for (const flag of ["smartDodge", "cancelWhiffs", "punishRecovery", "aimedThrows"] as const) {
-      expect([easy[flag], normal[flag], hard[flag]]).toEqual([false, false, true]);
-    }
-  });
-
-  test("normal keeps the original CPU's numbers", () => {
-    const normal = AI_LEVELS.normal;
-    expect([normal.thinkMin, normal.thinkRange, normal.dodgeChance]).toEqual([0.18, 0.16, 0.7]);
-    expect([normal.attackStamina, normal.chargeChance, normal.feintRange]).toEqual([30, 0.3, 2.4]);
-    expect(normal.bombNotice).toBe(Number.POSITIVE_INFINITY);
-    expect(normal.dodgeWindow).toBe(Number.POSITIVE_INFINITY);
-  });
-
   test("each CPU's level comes from the match options: the global level or its override", () => {
     const engine = new BattleEngine(1);
     engine.start("duel", { difficulty: "hard" });
@@ -95,63 +42,6 @@ describe("the difficulty table", () => {
 });
 
 describe("measurable differences between levels", () => {
-  /**
-   * The human is already committed to an overhead at 2.2 units; the CPU's next decision falls at
-   * a seeded point within one of its own think intervals. Did it step before the blade came out?
-   */
-  function dodges(level: AiLevel, trials: number): { rate: number; windupLeft: number[] } {
-    const profile = AI_LEVELS[level];
-    let dodged = 0;
-    const windupLeft: number[] = [];
-    for (let i = 0; i < trials; i++) {
-      const { engine, human, cpu } = duel(1000 + i, level);
-      Object.assign(human, { x: 0, z: 0, facing: 0 });
-      Object.assign(cpu, {
-        x: 0,
-        z: 2.2,
-        facing: Math.PI,
-        aiThink: ((i % 25) / 25) * (profile.thinkMin + profile.thinkRange),
-      });
-      Object.assign(human, {
-        mode: "windup",
-        modeTime: 0,
-        modeDuration: ATTACKS.overhead.startup,
-        attack: "overhead",
-        hitTargets: [],
-        swingId: human.swingId + 1,
-      });
-      let stepped = false;
-      for (let frame = 0; frame < (ATTACKS.overhead.startup + 0.1) / DT; frame++) {
-        const left = human.mode === "windup" ? human.modeDuration - human.modeTime : 0;
-        engine.update(DT, emptyInput());
-        if (cpu.mode === "step" && !stepped) windupLeft.push(left);
-        if (cpu.mode === "step") stepped = true;
-      }
-      if (stepped) dodged++;
-    }
-    return { rate: dodged / trials, windupLeft };
-  }
-
-  test("hard dodges a committed swing far more often than easy", () => {
-    const easy = dodges("easy", 200).rate;
-    const hard = dodges("hard", 200).rate;
-    expect(hard).toBeGreaterThan(0.75);
-    expect(easy).toBeLessThan(0.3);
-    expect(hard).toBeGreaterThan(easy * 3);
-  });
-
-  test("hard holds its dodge for the late part of the wind-up, where tracking cannot follow it", () => {
-    const hard = dodges("hard", 60).windupLeft;
-    expect(hard.length).toBeGreaterThan(40);
-    for (const left of hard) {
-      expect(left).toBeLessThanOrEqual(AI_LEVELS.hard.dodgeWindow + 1e-9);
-      expect(left).toBeGreaterThan(AI_LEVELS.hard.dodgeWindow - 2 * DT);
-    }
-    // Normal still reacts as soon as it notices, often early in the wind-up.
-    const normal = dodges("normal", 60).windupLeft;
-    expect(Math.max(...normal)).toBeGreaterThan(AI_LEVELS.hard.dodgeWindow + 0.1);
-  });
-
   /** Counts wind-up frames in which the CPU's facing moved, against an opponent circling it. */
   function windupTurns(level: AiLevel): { turned: number; windupFrames: number } {
     let turned = 0;
@@ -173,12 +63,28 @@ describe("measurable differences between levels", () => {
         engine.update(DT, input);
         if (before.mode === "windup" && cpu.mode === "windup" && cpu.hitstop <= 0) {
           windupFrames++;
-          if (cpu.facing !== before.facing) turned++;
+          if (Math.abs(cpu.facing - before.facing) > 1e-9) turned++;
         }
       }
     }
     return { turned, windupFrames };
   }
+
+  test("easy keeps its wind-up facing when it moves sideways without a living target", () => {
+    const { engine, human, cpu } = duel(61, "easy", 3);
+    Object.assign(human, { mode: "dead", respawnTimer: 1 });
+    Object.assign(cpu, {
+      x: engine.state.arena.halfSize - 0.4,
+      z: 0,
+      facing: 0,
+      mode: "windup",
+      modeDuration: ATTACKS.overhead.startup,
+      attack: "overhead",
+    });
+    engine.update(DT);
+    expect(cpuInput(engine, cpu).move.x).toBeLessThan(-0.9);
+    expect(cpu.facing).toBe(0);
+  });
 
   test("easy never turns during its wind-up; hard keeps tracking", () => {
     const easy = windupTurns("easy");
@@ -190,86 +96,115 @@ describe("measurable differences between levels", () => {
   });
 });
 
-describe("normal reproduces the original CPU", () => {
-  const ORDER: AttackId[] = ["overhead", "sweep", "thrust", "rising"];
-
-  /** A deterministic opponent that never turns during its own wind-up and never air-dodges. */
-  function scripted(state: GameState, tick: number): PlayerInput {
+function exchange(
+  level: AiLevel,
+  trial: number,
+  style: "tap" | "hold" | "charge feint" | "windup feint" | "whiff" | "spam",
+) {
+  const { engine, human, cpu } = duel((trial + 1) * 7919, level);
+  Object.assign(human, { x: 0, z: 0, facing: 0 });
+  Object.assign(cpu, { x: 0, z: 2.2, facing: Math.PI, aiThink: (8 + (trial % 15)) * DT });
+  if (style === "whiff")
+    Object.assign(human, {
+      mode: "active",
+      attack: "overhead",
+      facing: Math.PI,
+      modeDuration: DT,
+      swingId: 1,
+    });
+  let firstStep = -1;
+  let early = false;
+  let caught = false;
+  let punished = false;
+  let cancelFrame = -1;
+  let followHit = false;
+  let followed = false;
+  let hits = 0;
+  for (let tick = 0; tick < (style === "spam" ? 240 : 115); tick++) {
     const input = emptyInput();
-    const me = state.fighters[0];
-    const foes = state.fighters.filter((f) => f.id !== me.id && f.mode !== "dead");
-    if (me.mode === "dead" || me.mode === "windup" || foes.length === 0) return input;
-    const foe = foes.reduce((a, b) =>
-      Math.hypot(a.x - me.x, a.z - me.z) <= Math.hypot(b.x - me.x, b.z - me.z) ? a : b,
-    );
-    const to = unit({ x: foe.x - me.x, z: foe.z - me.z });
-    const distance = Math.hypot(foe.x - me.x, foe.z - me.z);
-    const nearEdge = Math.max(Math.abs(me.x), Math.abs(me.z)) > state.arena.halfSize - 1.5;
-    input.aim = to;
-    input.move = nearEdge
-      ? unit({ x: -me.x, z: -me.z })
-      : distance > 2.6
-        ? to
-        : tick % 240 < 120
-          ? { x: to.z, z: -to.x }
-          : { x: -to.z, z: to.x };
-    if (tick % 97 === 0 && me.mode === "idle" && me.grounded) {
-      input.attackPressed = input.attackHeld = ORDER[Math.floor(tick / 97) % 4];
-    }
-    if (tick % 173 === 50 && me.mode === "idle" && me.grounded) input.step = true;
-    if (tick % 211 === 100 && me.grounded) input.jump = true;
-    return input;
-  }
-
-  /** FNV-1a over every fighter's state on every tick, until the match ends. */
-  function fingerprint(seed: number, mode: MatchMode): string {
-    const engine = new BattleEngine(seed);
-    engine.start(mode, { stocks: 1, difficulty: "normal", overrides: {} });
-    engine.state.phase = "playing" as GameState["phase"];
-    let hash = 0x811c9dc5;
-    let tick = 0;
-    for (; tick < 400 / DT && engine.state.phase !== "ended"; tick++) {
-      engine.update(DT, scripted(engine.state, tick));
-      for (const f of engine.state.fighters) {
-        const text = `${f.mode}${f.attack}${f.x}${f.y}${f.z}${f.facing}${f.damage}${f.stamina}${f.grounded}|`;
-        for (let i = 0; i < text.length; i++)
-          hash = Math.imul(hash ^ text.charCodeAt(i), 16777619) >>> 0;
+    input.aim = unit({ x: cpu.x - human.x, z: cpu.z - human.z });
+    if (style === "spam") {
+      if (tick % 4 === 0) input.attackPressed = "overhead";
+      if (Math.hypot(cpu.x - human.x, cpu.z - human.z) > 2) input.move = input.aim;
+    } else if (style !== "whiff") {
+      if (tick === 0) input.attackPressed = "overhead";
+      const hold = style === "hold" ? 16 + (trial % 20) : style === "charge feint" ? 45 : 1;
+      if (tick < hold) input.attackHeld = "overhead";
+      const cancelMode = style === "charge feint" ? "charge" : "windup";
+      if (
+        (style === "charge feint" || style === "windup feint") &&
+        firstStep >= 0 &&
+        cancelFrame < 0 &&
+        human.mode === cancelMode
+      ) {
+        input.cancel = true;
+        cancelFrame = tick;
+      }
+      if (cancelFrame >= 0 && tick > cancelFrame) {
+        input.move = input.aim;
+        if (human.mode === "idle" && !followed) {
+          input.attackPressed = "thrust";
+          followed = true;
+        }
       }
     }
-    return `${tick}:${hash.toString(16)}`;
+    const previousMode = human.mode;
+    const beforeDamage = cpu.damage;
+    const playerDamage = human.damage;
+    engine.update(DT, input);
+    if (firstStep < 0 && cpu.mode === "step") {
+      firstStep = tick;
+      early = previousMode === "charge";
+    }
+    if (input.cancel && cpu.mode === "step" && human.mode === "cancel") caught = true;
+    if (human.damage > playerDamage && previousMode === "recovery") punished = true;
+    if (cpu.damage > beforeDamage) {
+      hits++;
+      if (followed) followHit = true;
+    }
   }
+  return { firstStep, early, caught, punished, followHit, hits };
+}
 
-  /**
-   * Recorded with the engine as it was before difficulty levels, wind-up tracking, the air dodge
-   * and stocks existed (commit c0a9581), running this exact scenario: about 285 simulated seconds.
-   * Seeds 13 (duel) and 22 (rumble) are left out on purpose: in them an airborne CPU decides to
-   * dodge, which the old engine ignored except that the step press froze its facing for that one
-   * tick; the CPU now simply does not press step in the air (no air dodge outside recovery), so it
-   * turns on that tick and the runs part ways. With that one-tick quirk patched out of the old
-   * engine, those seeds match bit for bit as well.
-   */
-  const RECORDED: [number, MatchMode, string][] = [
-    [11, "duel", "2016:ebe7ef34"],
-    [12, "duel", "1692:ac355f86"],
-    [14, "duel", "1995:e0952d74"],
-    [15, "duel", "913:6e2ff67a"],
-    [16, "duel", "1746:e592ac0"],
-    [21, "rumble", "3011:6d8460d1"],
-    [23, "rumble", "3292:babbfa0b"],
-    [24, "rumble", "2437:2bfa7dd"],
-  ];
+// Same seeds, facing, opening spacing and decision phases on all levels. Count discrete
+// events over a cohort: small floating-point differences cannot invalidate an entire replay.
+const trials = (level: AiLevel, style: Parameters<typeof exchange>[2]) =>
+  Array.from({ length: 96 }, (_, i) => exchange(level, i, style));
 
-  test("with tracking at 0 and no air dodge, normal replays the old decisions bit for bit", () => {
-    patchLevel("normal", { tracking: 0, recoverAirStep: false });
-    for (const [seed, mode, recorded] of RECORDED) expect(fingerprint(seed, mode)).toBe(recorded);
-  });
+test("tap pressure leaves basic openings on easy, while normal and hard answer more often", () => {
+  const steps = LEVELS.map(
+    (level) => trials(level, "tap").filter((row) => row.firstStep >= 0).length,
+  );
+  expect(steps[0]).toBeLessThan(30);
+  expect(steps[1]).toBeGreaterThan(steps[0] + 20);
+  expect(steps[2]).toBeGreaterThan(steps[1] + 15);
+  const hits = LEVELS.map((level) => trials(level, "spam").reduce((n, row) => n + row.hits, 0));
+  expect(hits[0]).toBeGreaterThan(hits[1] + 25);
+  expect(hits[1]).toBeGreaterThan(hits[2] + 15);
+});
 
-  test("with its real settings normal does play differently (the check above is not vacuous)", () => {
-    const changed = RECORDED.filter(
-      ([seed, mode, recorded]) => fingerprint(seed, mode) !== recorded,
-    );
-    expect(changed.length).toBeGreaterThan(0);
-  });
+test.each(LEVELS)("%s can misread a hold, or spend a dodge on either kind of feint", (level) => {
+  const tap = trials(level, "tap");
+  const held = trials(level, "hold");
+  expect(tap.some((row) => row.early)).toBe(false);
+  expect(held.some((row, i) => row.hits > 0 && tap[i].hits === 0)).toBe(true);
+  expect(held.filter((row) => row.early).length).toBeGreaterThan(2);
+  expect(held.some((row) => !row.early)).toBe(true);
+  for (const style of ["charge feint", "windup feint"] as const) {
+    const rows = trials(level, style);
+    expect(rows.filter((row) => row.caught).length).toBeGreaterThan(2);
+    const thrustPunishes = rows.filter((row) => row.caught && row.followHit).length;
+    const minimum = style === "charge feint" && level !== "easy" ? 20 : 3;
+    expect(thrustPunishes).toBeGreaterThanOrEqual(minimum);
+  }
+  const stepFrames = tap.filter((row) => row.firstStep >= 0).map((row) => row.firstStep);
+  expect(Math.max(...stepFrames) - Math.min(...stepFrames)).toBeGreaterThan(2);
+});
+
+test("hard lands a counter before an opponent can recover from a missed overhead", () => {
+  const hits = LEVELS.map((level) => trials(level, "whiff").filter((row) => row.punished).length);
+  expect(hits[1]).toBeGreaterThan(0);
+  expect(hits[2]).toBeGreaterThan(Math.max(hits[0], hits[1]) + 30);
 });
 
 describe("level-specific skills", () => {
@@ -326,6 +261,8 @@ describe("level-specific skills", () => {
       attack: "overhead",
     });
     Object.assign(human, { x: 0, z: 2, ...target });
+    for (let tick = 0; tick < AI_LEVELS[level].observationTicks; tick++)
+      expect(think(engine, cpu).cancel).toBe(false);
     return think(engine, cpu);
   }
 
@@ -349,6 +286,7 @@ describe("level-specific skills", () => {
       modeDuration: ATTACKS.overhead.recovery,
       attack: "overhead",
     });
+    for (let tick = 0; tick < AI_LEVELS.hard.observationTicks; tick++) think(engine, cpu);
     const input = think(engine, cpu);
     expect(input.move.z).toBeGreaterThan(0.9);
     expect(input.attackPressed).toBe("overhead");
@@ -387,4 +325,267 @@ describe("level-specific skills", () => {
       expect(dummy.mode).toBe("idle");
     }
   });
+});
+
+/** The actual CPU input gathered by the engine, before either player's action was applied. */
+function cpuInput(engine: BattleEngine, cpu: Fighter): PlayerInput {
+  return (engine as unknown as { inputs: Map<number, PlayerInput> }).inputs.get(cpu.id)!;
+}
+
+test.each(LEVELS)(
+  "%s sees neither a button edge nor the resulting animation before its delay",
+  (level) => {
+    const delay = AI_LEVELS[level].observationTicks;
+    for (const action of ["tap", "charge", "step", "cancel"] as const) {
+      const pair = [duel(7919, level), duel(7919, level)];
+      for (const { engine, human, cpu } of pair) {
+        Object.assign(cpu, { x: 0, z: 0, aiThink: 99 });
+        Object.assign(human, { x: 0, z: 2.7, facing: Math.PI });
+        for (let i = 0; i <= delay; i++) engine.update(DT);
+        if (action === "cancel")
+          engine.update(DT, { ...emptyInput(), attackPressed: "sweep", attackHeld: "sweep" });
+      }
+      for (let i = 0; i <= delay; i++) {
+        for (const [index, { engine }] of pair.entries()) {
+          const input = emptyInput();
+          if (action === "cancel") input.attackHeld = "sweep";
+          if (index === 1) {
+            input.move = { x: 1, z: 0 };
+            if (i === 0 && (action === "tap" || action === "charge"))
+              input.attackPressed = "overhead";
+            if (action === "charge") input.attackHeld = "overhead";
+            input.step = i === 0 && action === "step";
+            input.cancel = i === 0 && action === "cancel";
+          }
+          engine.update(DT, input);
+        }
+        const [one, two] = pair.map(({ engine, cpu }) => cpuInput(engine, cpu));
+        expect(two).toEqual(one);
+      }
+      // First changed animation becomes visible to the CPU on precisely the next tick.
+      for (const { engine } of pair) engine.update(DT);
+      const firstPose = pair[1].cpu.aiMemory!.lastMode;
+      expect(firstPose).toBe(action === "tap" ? "charge" : action);
+      expect(firstPose).not.toBe(pair[0].cpu.aiMemory!.lastMode);
+    }
+  },
+);
+
+test.each(LEVELS)("%s waits for observed spawn protection before withholding an attack", (level) => {
+  const { engine, human, cpu } = duel(61, level);
+  Object.assign(cpu, { x: 0, z: 0, aiThink: 99 });
+  Object.assign(human, { x: 0, z: 2.8, invulnerable: 0 });
+  const delay = AI_LEVELS[level].observationTicks;
+  for (let i = 0; i <= delay; i++) think(engine, cpu);
+
+  human.invulnerable = RULES.respawnInvulnerable;
+  for (let i = 0; i <= delay; i++) {
+    cpu.aiThink = 0;
+    expect(think(engine, cpu).attackPressed).toBe(i < delay ? "thrust" : null);
+  }
+});
+
+test("hard punishes the observed dodge landing on either side and whiffs if that read is baited", () => {
+  for (const side of [-1, 1]) {
+    for (const evade of [false, true]) {
+      const { engine, cpu, human } = duel(61, "hard");
+      Object.assign(cpu, { x: 0, z: 0, facing: 0, aiThink: 10 });
+      Object.assign(human, { x: 0, z: 1.15, facing: Math.PI });
+      engine.update(DT, { ...emptyInput(), step: true, move: { x: side, z: 0 } });
+      for (let i = 0; i <= AI_LEVELS.hard.observationTicks; i++) engine.update(DT);
+      expect(cpu.mode).toBe("charge");
+      expect(cpuInput(engine, cpu).aim!.x * side).toBeGreaterThan(0.75);
+      for (let i = 0; i < 75 && cpu.mode !== "recovery"; i++) {
+        engine.update(DT, {
+          ...emptyInput(),
+          move: { x: 0, z: evade ? 1 : 0 },
+          step: evade && human.mode === "idle",
+        });
+      }
+      expect(cpu.mode).toBe("recovery");
+      expect(human.damage === 0).toBe(evade);
+    }
+  }
+});
+
+test.each(LEVELS)(
+  "%s retains a rumble target through small spacing changes and drops a KO'd or protected rival",
+  (level) => {
+    const engine = new BattleEngine(61);
+    engine.start("rumble", { difficulty: level });
+    const [a, cpu, b, c] = engine.state.fighters;
+    Object.assign(cpu, { x: 0, z: 0 });
+    Object.assign(a, { x: 0, z: 2 });
+    Object.assign(b, { x: 2.1, z: 0 });
+    Object.assign(c, { x: 0, z: -1, mode: "dead", respawnTimer: 0.5 });
+    function aimAt(x: number, z: number) {
+      for (let i = 0; i <= AI_LEVELS[level].observationTicks; i++) {
+        expect(think(engine, cpu).aim).toEqual({ x, z });
+      }
+    }
+    aimAt(0, 1);
+    b.x = 1.9;
+    aimAt(0, 1);
+    Object.assign(a, { mode: "dead", stocks: 0 });
+    aimAt(1, 0);
+    Object.assign(c, { mode: "idle", respawnTimer: 0, invulnerable: RULES.respawnInvulnerable });
+    aimAt(1, 0);
+    b.invulnerable = RULES.respawnInvulnerable;
+    c.invulnerable = 0;
+    aimAt(0, -1);
+    c.invulnerable = RULES.respawnInvulnerable;
+    // The same rival remains selected. Its new blink takes one observation delay to reach combat.
+    for (let i = 0; i < AI_LEVELS[level].observationTicks; i++) think(engine, cpu);
+    for (let i = 0; i < 60; i++) {
+      const input = think(engine, cpu);
+      expect(input.attackPressed).toBeNull();
+      expect(input.grab).toBe(false);
+    }
+  },
+);
+
+test.each(LEVELS)("%s can use each cut, a charged release and a close grab", (level) => {
+  const actions = new Set<AttackId | "grab" | "held">();
+  for (let i = 0; i < 96; i++) {
+    const { engine, cpu, human } = duel((i + 1) * 7919, level);
+    Object.assign(cpu, { x: 0, z: 0 });
+    Object.assign(human, { x: 0, z: [1, 2, 2.9, 2][i % 4], grounded: i % 4 !== 3 });
+    for (let tick = 0; tick <= AI_LEVELS[level].observationTicks; tick++) {
+      const input = think(engine, cpu);
+      if (input.grab) actions.add("grab");
+      if (input.attackPressed) {
+        actions.add(input.attackPressed);
+        if (cpu.aiCharge >= 0.4) actions.add("held");
+      }
+    }
+  }
+  expect(actions).toEqual(new Set(["sweep", "overhead", "rising", "thrust", "grab", "held"]));
+  const { engine, cpu, human } = duel(61, level);
+  Object.assign(cpu, {
+    x: 0,
+    z: 0,
+    mode: "charge",
+    modeTime: 0.22,
+    attack: "sweep",
+    aiCharge: 0.8,
+  });
+  Object.assign(human, { x: 5, z: 0 });
+  for (let tick = 0; tick <= AI_LEVELS[level].observationTicks; tick++) engine.update(DT);
+  expect(cpu.mode).toBe("cancel");
+  expect(cpu.modeDuration).toBe(RULES.cancelDuration);
+  for (let i = 1; i * DT < RULES.cancelDuration; i++) {
+    engine.update(DT);
+    expect(cpu.mode).toBe("cancel");
+  }
+});
+
+test.each(LEVELS)("%s respects stamina, air-action and respawn limits", (level) => {
+  const { engine, cpu, human } = duel(198, level, 3);
+  Object.assign(cpu, { x: 0, z: 0, stamina: 4, staminaDelay: 2 });
+  Object.assign(human, { x: 0, z: 2, facing: Math.PI });
+  for (let i = 0; i < 35; i++) {
+    engine.update(DT, {
+      ...emptyInput(),
+      attackPressed: i === 0 ? "sweep" : null,
+      attackHeld: "sweep",
+    });
+    expect(cpu.mode).toBe("idle");
+    expect(cpu.stamina).toBe(4);
+  }
+  Object.assign(cpu, {
+    x: 10,
+    z: 0,
+    y: 1,
+    grounded: false,
+    stamina: 100,
+    airRisingUsed: true,
+    airThrustUsed: true,
+    airStepUsed: true,
+  });
+  engine.update(DT);
+  expect(cpu.mode).toBe("idle");
+  expect(cpu.stamina).toBe(100);
+  Object.assign(cpu, { mode: "dead", respawnTimer: DT });
+  Object.assign(human, { mode: "dead", respawnTimer: DT });
+  engine.update(DT);
+  expect(cpu.invulnerable).toBeCloseTo(RULES.respawnInvulnerable - DT);
+  expect(cpu.invulnerable).toBe(human.invulnerable);
+  expect([cpu.airRisingUsed, cpu.airThrustUsed, cpu.airStepUsed]).toEqual([false, false, false]);
+});
+
+test.each(LEVELS)("%s reaches melee distance on all four stages without falling", (level) => {
+  for (const stage of ["garden", "ruins", "bridges", "factory"] as const) {
+    for (const seed of [61, 739, 7069]) {
+      const engine = new BattleEngine(seed);
+      engine.start("duel", { difficulty: level, stage });
+      engine.state.phase = "playing";
+      const [human, cpu] = engine.state.fighters;
+      let reached = false;
+      for (let i = 0; i < 600 && !reached; i++) {
+        engine.update(DT);
+        expect(cpu.mode).not.toBe("dead");
+        expect(cpu.y).toBeGreaterThanOrEqual(-0.2);
+        reached = Math.hypot(cpu.x - human.x, cpu.z - human.z) < 3;
+      }
+      expect(reached, stage).toBe(true);
+    }
+  }
+});
+
+test.each(LEVELS)("%s reads successive attacks from the same rival", (level) => {
+  function secondSwing(first: AttackId) {
+    let dodges = 0;
+    for (let i = 0; i < 192; i++) {
+      const { engine, human, cpu } = duel((i + 1) * 7919, level);
+      Object.assign(cpu, { x: 0, z: 2, aiThink: 99 });
+      // Learn the first strike out of reach. Bring the rival to the same spot and
+      // feed the same second overhead in both runs, changing only the previous cut.
+      Object.assign(human, {
+        x: 0,
+        z: -5,
+        facing: 0,
+        mode: "windup",
+        attack: first,
+        modeDuration: ATTACKS[first].startup,
+      });
+      const delay = AI_LEVELS[level].observationTicks;
+      for (let tick = 0; tick <= delay; tick++) think(engine, cpu);
+      Object.assign(human, { z: 0, mode: "idle", attack: null });
+      for (let tick = 0; tick <= delay; tick++) think(engine, cpu);
+      Object.assign(human, {
+        mode: "windup",
+        attack: "overhead",
+        modeDuration: ATTACKS.overhead.startup,
+      });
+      for (let tick = 0; tick * DT < ATTACKS.overhead.startup; tick++) {
+        human.modeTime = tick * DT;
+        if (think(engine, cpu).step) {
+          dodges++;
+          break;
+        }
+      }
+    }
+    return dodges;
+  }
+  const repeat = secondSwing("overhead"),
+    mixed = secondSwing("sweep");
+  if (level === "hard") expect(repeat).toBeGreaterThan(mixed + 4);
+  else expect(repeat).toBe(mixed);
+});
+
+test("hard cannot read the direction of a charge-cancel step before the dash moves", () => {
+  const pair = [-1, 1].map((side) => {
+    const { engine, cpu, human } = duel(61, "hard");
+    Object.assign(cpu, { x: 0, z: 0, aiThink: 99 });
+    Object.assign(human, { x: 0, z: 1.15, mode: "charge", attack: "sweep", facing: Math.PI });
+    engine.update(DT, { ...emptyInput(), step: true, move: { x: side, z: 0 } });
+    expect(human.stepDelay).toBe(RULES.feintStepDelay);
+    return { engine, cpu, human };
+  });
+  // Identical poses until the feet move, then identical decisions through the observation delay.
+  for (let i = 0; i < Math.ceil(RULES.feintStepDelay / DT) + AI_LEVELS.hard.observationTicks; i++) {
+    for (const { engine } of pair) engine.update(DT);
+    expect(cpuInput(pair[0].engine, pair[0].cpu)).toEqual(cpuInput(pair[1].engine, pair[1].cpu));
+  }
+  expect(pair[0].human.x).toBeLessThan(pair[1].human.x);
 });
