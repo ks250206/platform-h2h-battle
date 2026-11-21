@@ -40,6 +40,7 @@ describe("match options store", () => {
       gimmicks: ALL,
       loadouts,
       stage: "garden",
+      setFormat: "single",
     });
   });
 
@@ -70,6 +71,7 @@ describe("match options store", () => {
         loadouts[3],
       ],
       stage: "garden",
+      setFormat: "single",
     };
     expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!)).toEqual(saved);
     expect(createMatchStore(storage).get()).toEqual(saved);
@@ -92,6 +94,7 @@ describe("match options store", () => {
       gimmicks: ALL,
       loadouts,
       stage: "garden",
+      setFormat: "single",
     });
     const other = JSON.stringify({ stocks: 2, difficulty: "insane", overrides: { 1: "mega" } });
     expect(loadMatchOptions(memoryStorage(other))).toEqual({
@@ -103,6 +106,7 @@ describe("match options store", () => {
       gimmicks: ALL,
       loadouts,
       stage: "garden",
+      setFormat: "single",
     });
     const store = createMatchStore(memoryStorage());
     store.set({ stocks: 0 });
@@ -132,6 +136,7 @@ describe("match options store", () => {
       gimmicks: ALL,
       loadouts,
       stage: "garden",
+      setFormat: "single",
     });
     for (const stage of ["volcano", "", 2, null, ["ruins"]])
       expect(loadMatchOptions(memoryStorage(JSON.stringify({ stage }))).stage).toBe("garden");

@@ -10,13 +10,16 @@ import {
   sanitizeMatchOptions,
   type MatchOptions,
 } from "./match";
+import { emptyPlayerStats, MatchStats } from "./matchStats";
 import { clearWalk, routeDirection } from "./navigation";
+import { effectiveRules, timeLimitFor, type StageInfo, type TimeRule } from "./rules";
 import {
-  effectiveRules,
-  timeLimitFor,
-  type StageInfo,
-  type TimeRule,
-} from "./rules";
+  advanceSet,
+  createSetMatch,
+  effectiveSetFormat,
+  finishSetGame,
+  type SetMatch,
+} from "./setMatch";
 import {
   canStandAtStage,
   conveyorVelocityAt,
@@ -48,6 +51,7 @@ import {
   type Bomb,
   type BufferedAction,
   type BufferedInput,
+  type DrawReason,
   type EffectKind,
   type Fighter,
   type GameState,
@@ -149,6 +153,7 @@ function makeFighter(id: number, count: number, options: MatchOptions): Fighter 
     pendingLaunch: null,
     diInput: { x: 0, z: 0 },
     lastAttacker: null,
+    lastHitAt: 0,
     kills: 0,
     eliminatedAt: null,
     eliminationReason: null,
@@ -183,12 +188,14 @@ export class BattleEngine {
   /** Each human's input, with button presses held until a simulation tick has consumed them. */
   private pending = new Map<number, PlayerInput>();
   private options: MatchOptions = sanitizeMatchOptions(DEFAULT_MATCH_OPTIONS);
+  private matchStats: MatchStats;
   /** Explicit stage constraint override when passed to `start`; null derives from `options.stage`. */
   private stageOverride: StageInfo | null = null;
 
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
     this.state = this.createState("duel", seed);
+    this.matchStats = new MatchStats(this.state.playerStats);
     this.state.phase = "menu";
   }
 
@@ -197,15 +204,14 @@ export class BattleEngine {
     return this.randomState / 4294967296;
   }
 
-  private createState(mode: MatchMode, seed: number): GameState {
+  private createState(mode: MatchMode, seed: number, set: SetMatch | null = null): GameState {
+    const count = mode === "rumble" ? 4 : 2;
     return {
       phase: "countdown",
       mode,
       elapsed: 0,
       countdown: 3,
-      fighters: Array.from({ length: mode === "rumble" ? 4 : 2 }, (_, i) =>
-        makeFighter(i, mode === "rumble" ? 4 : 2, this.options),
-      ),
+      fighters: Array.from({ length: count }, (_, i) => makeFighter(i, count, this.options)),
       arena: {
         stageId: this.options.stage,
         halfSize: STAGES[this.options.stage].halfSize,
@@ -220,16 +226,22 @@ export class BattleEngine {
       bombs: [],
       effects: [],
       winnerId: null,
+      drawReason: null,
+      set,
       message: "",
       messageTime: 0,
       seed,
       pausedFrom: "playing",
-      options: copyMatchOptions(this.options),
+      options: {
+        ...copyMatchOptions(this.options),
+        setFormat: effectiveSetFormat(mode, this.options.setFormat),
+      },
       rules: effectiveRules(
         this.options,
         mode,
         this.stageOverride ?? stageInfoFor(this.options.stage),
       ),
+      playerStats: Array.from({ length: count }, emptyPlayerStats),
       stats: { hits: 0, clashes: 0, dodges: 0, maxDamage: 0 },
     };
   }
@@ -243,7 +255,21 @@ export class BattleEngine {
     if (options) this.options = sanitizeMatchOptions({ ...this.options, ...options });
     if (stage !== undefined) this.stageOverride = stage;
     else if (options?.stage !== undefined) this.stageOverride = null;
-    this.state = this.createState(mode, this.state.seed);
+    this.resetGame(mode, createSetMatch(effectiveSetFormat(mode, this.options.setFormat)));
+  }
+
+  /** A result can advance only once, and only while the set is still open. */
+  nextSetGame(): boolean {
+    if (this.state.phase !== "ended" || !this.state.set) return false;
+    const next = advanceSet(this.state.set);
+    if (!next) return false;
+    this.resetGame(this.state.mode, next);
+    return true;
+  }
+
+  private resetGame(mode: MatchMode, set: SetMatch | null): void {
+    this.state = this.createState(mode, this.state.seed, set);
+    this.matchStats = new MatchStats(this.state.playerStats);
     this.randomState = this.state.seed >>> 0;
     this.nextBomb = RULES.bombStart;
     this.effectId = 0;
@@ -279,6 +305,7 @@ export class BattleEngine {
     const options = typeof modeOrOptions === "string" ? maybeOptions : modeOrOptions;
     this.start(mode, options);
     this.state.phase = "menu";
+    this.state.set = null;
     if (STAGES[this.state.arena.stageId].solid) {
       const spots = SHOWCASE_SPOTS[this.state.fighters.length];
       this.state.fighters.forEach((f, index) => {
@@ -681,6 +708,7 @@ export class BattleEngine {
     if (f.mode === "windup" && f.attack) {
       const attack = ATTACKS[f.attack];
       this.setMode(f, "active", attack.active);
+      this.matchStats.beginSwing(f);
       const dir = forward(f);
       if (f.attack === "rising") {
         f.grounded = false;
@@ -847,11 +875,14 @@ export class BattleEngine {
         if (
           target.id === attacker.id ||
           attacker.hitTargets.includes(target.id) ||
-          isInvulnerable(target) ||
           target.mode === "grabbed"
         )
           continue;
         if (attackContains(attacker, target)) {
+          if (isInvulnerable(target)) {
+            if (target.mode === "step") this.matchStats.dodgeSword(target, attacker);
+            continue;
+          }
           hits.push({
             attacker,
             target,
@@ -870,7 +901,7 @@ export class BattleEngine {
       const { attacker, target, attack, charge, airborne, direction } = hit;
       const definition = ATTACKS[attack];
       const multiplier = 1 + charge * 0.65;
-      target.damage += definition.damage * multiplier;
+      this.matchStats.swordHit(attacker, target, definition.damage * multiplier);
       const force =
         (definition.knockback + target.damage * definition.growth) * (1 + charge * 0.25);
       const meteor = attack === "overhead" && airborne && !target.grounded;
@@ -947,7 +978,7 @@ export class BattleEngine {
     stop: number = RULES.hitstop,
   ): void {
     this.breakGrab(f);
-    f.lastAttacker = attackerId;
+    this.matchStats.recordLaunch(f, attackerId, this.state.elapsed);
     f.attack = null;
     f.charge = 0;
     this.setMode(f, "hitstun", duration);
@@ -1000,7 +1031,7 @@ export class BattleEngine {
     this.setMode(f, "recovery", 0.4);
     if (!target || target.mode === "dead") return;
     target.grabbedBy = null;
-    target.damage += 6;
+    this.matchStats.damage(target, 6, f.id);
     const force = 7.5 + target.damage * 0.065;
     const dir = normalize(f.throwDirection);
     this.receiveHit(target, f.id, { x: dir.x * force, y: 6, z: dir.z * force }, 0.42, 0.06);
@@ -1077,9 +1108,9 @@ export class BattleEngine {
     }
     if (Math.hypot(f.x - zone.x, f.z - zone.z) > zone.radius) {
       f.outsideTime = Math.min(RULES.outsideLimit, f.outsideTime + dt);
-      f.damage += RULES.outsideDamage * dt;
+      this.matchStats.damage(f, RULES.outsideDamage * dt);
       if (f.outsideTime >= RULES.outsideLimit - 1e-6)
-        this.eliminate(f, "エリア外ゲージが5秒に到達");
+        this.eliminate(f, "エリア外ゲージが5秒に到達", true);
     } else {
       f.outsideTime = Math.max(0, f.outsideTime - RULES.outsideRecovery * dt);
     }
@@ -1094,12 +1125,15 @@ export class BattleEngine {
       for (const f of this.state.fighters) {
         if (
           f.mode === "dead" ||
-          isInvulnerable(f) ||
           Math.hypot(f.x - bomb.x, f.z - bomb.z) > bomb.radius + 0.3 ||
           f.y > 3
         )
           continue;
-        f.damage += 10;
+        if (isInvulnerable(f)) {
+          if (f.mode === "step") this.matchStats.dodgeBomb(f);
+          continue;
+        }
+        this.matchStats.damage(f, 10);
         const dir = normalize({ x: f.x - bomb.x + 0.01, z: f.z - bomb.z });
         this.receiveHit(f, null, { x: dir.x * 4, y: 6, z: dir.z * 4 }, 0.32, 0.065);
       }
@@ -1107,19 +1141,25 @@ export class BattleEngine {
     this.state.bombs = this.state.bombs.filter((bomb) => bomb.timer > -0.7);
   }
 
-  private eliminate(f: Fighter, reason: string): void {
+  private eliminate(f: Fighter, reason: string, environmental = false): void {
     if (f.mode === "dead") return;
     this.breakGrab(f);
     this.setMode(f, "dead");
     f.inputBuffer = null;
     f.eliminatedAt = this.state.elapsed;
     f.eliminationReason = reason;
-    const attacker = this.state.fighters.find((other) => other.id === f.lastAttacker);
-    if (attacker && attacker.id !== f.id) attacker.kills++;
+    const spendsStock = this.state.mode !== "training";
+    this.matchStats.recordFall(
+      f,
+      this.state.fighters,
+      this.state.elapsed,
+      spendsStock,
+      environmental,
+    );
     this.effect("ko", { x: f.x, y: Math.max(-2, f.y), z: f.z }, f.color, 1.2, 1.8);
     // Training rebuilds everyone for ever (see resolveOutcome) and keeps no lives.
-    if (this.state.mode !== "training") f.stocks = Math.max(0, f.stocks - 1);
-    if (this.state.mode !== "training" && f.stocks > 0) {
+    if (spendsStock) f.stocks = Math.max(0, f.stocks - 1);
+    if (spendsStock && f.stocks > 0) {
       f.respawnTimer = RULES.respawnDelay;
       this.announce(`${this.title(f)} DOWN — 残り${f.stocks}`, 1.8);
     } else this.announce(this.title(f) + " OUT", 1.8);
@@ -1199,10 +1239,12 @@ export class BattleEngine {
     // Still in the match: alive, or down with a life left to come back on.
     const contenders = state.fighters.filter((f) => f.stocks > 0);
     if (contenders.length <= 1) {
-      state.winnerId = contenders[0]?.id ?? null;
-      state.phase = "ended";
-      this.clearBuffers();
-      this.announce(contenders[0] ? this.title(contenders[0]) + " WINS" : "DRAW", 10);
+      const survivor = contenders[0];
+      this.finishGame(
+        survivor?.id ?? null,
+        survivor ? this.title(survivor) + " WINS" : "DRAW",
+        survivor ? null : "allOut",
+      );
     } else if (state.elapsed >= (state.rules.timeLimit ?? Infinity)) {
       // A fighter waiting to respawn already lost the damage it carried with that life.
       const damage = (f: Fighter) => (f.mode === "dead" ? 0 : f.damage);
@@ -1210,16 +1252,28 @@ export class BattleEngine {
       const [first, second] = sorted;
       const tied =
         first.stocks === second.stocks && Math.abs(damage(first) - damage(second)) < 0.01;
-      state.winnerId = tied ? null : first.id;
-      state.phase = "ended";
-      this.clearBuffers();
-      this.announce(
+      this.finishGame(
+        tied ? null : first.id,
         state.options.stocks > 1
           ? "TIME UP — 残機の多い選手、同数なら蓄積ダメージの少ない選手が勝利"
           : "TIME UP — 蓄積ダメージの少ない選手が勝利",
-        10,
+        tied ? "timeUp" : null,
       );
     }
+  }
+
+  private finishGame(
+    winnerId: number | null,
+    message: string,
+    drawReason: DrawReason | null,
+  ): void {
+    const state = this.state;
+    state.winnerId = winnerId;
+    state.drawReason = drawReason;
+    state.phase = "ended";
+    if (state.set) state.set = finishSetGame(state.set, winnerId, state.playerStats);
+    this.clearBuffers();
+    this.announce(message, 10);
   }
 
   private ai(f: Fighter, dt: number): PlayerInput {

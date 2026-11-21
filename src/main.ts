@@ -5,7 +5,7 @@ import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
 import { createMatchStore, playableOptions } from "./game/matchStore";
-import type { MatchOptions } from "./game/match";
+import { humanSlots, padIndex, type MatchOptions } from "./game/match";
 import { PadHub } from "./game/pads";
 import type { StageInfo } from "./game/rules";
 import { stageInfoFor } from "./game/stages";
@@ -38,11 +38,8 @@ const startMatch = (mode: MatchMode, options: MatchOptions) => {
   matchOptions = options;
   const count = mode === "rumble" ? 4 : 2;
   const playable = playableOptions(options, count, (pad) => pads.isConnected(pad));
-  input?.reset();
-  input?.newMatch();
-  lostPad = null;
-  ui.setPadNotice(null);
-  engine.start(mode, playable.options, currentStage());
+  engine.start(mode, playable.options);
+  prepareGame();
 };
 /** The mode the title menu shows, for the line-up of fighters behind it. */
 let titleMode: MatchMode = "duel";
@@ -75,12 +72,35 @@ let manualStepping = false;
 /** The pad (1-based) whose loss paused the match, until it is back or the match goes on. */
 let lostPad: number | null = null;
 
+/** A set keeps its starting line-up, including during a disconnect between games. */
+const missingSetPad = (): number | null => {
+  if (!engine.state.set) return null;
+  for (const { device } of humanSlots(engine.state.options, 2)) {
+    const pad = padIndex(device);
+    if (pad !== null && !pads.isConnected(pad)) return pad + 1;
+  }
+  return null;
+};
+const prepareGame = () => {
+  input?.reset();
+  input?.newMatch();
+  lostPad = null;
+  ui.setPadNotice(null);
+  const missing = missingSetPad();
+  if (missing !== null) padLost(missing);
+  ui.update(engine.state);
+};
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
   if (engine.state.phase === "paused") resume();
   else engine.pause();
 };
 const resume = () => {
+  const missing = missingSetPad();
+  if (missing !== null) {
+    padLost(missing);
+    return;
+  }
   lostPad = null;
   ui.setPadNotice(null);
   engine.resume();
@@ -89,7 +109,10 @@ const resume = () => {
 const padLost = (padNumber: number) => {
   lostPad = padNumber;
   engine.pause();
-  ui.setPadNotice(`パッド${padNumber} の接続が切れました。つなぎ直してから再開してください。`);
+  ui.setPadNotice(
+    `パッド${padNumber} の接続が切れました。つなぎ直してから再開してください。`,
+    engine.state.set !== null,
+  );
 };
 /** V / the top-bar camera button / the settings dialog all write the same stored setting. */
 const toggleCameraFollow = () => {
@@ -101,19 +124,28 @@ const ui = new GameUI(overlay, {
   onStart: (mode, options) => {
     sound.unlock();
     startMatch(mode, options);
-    ui.update(engine.state);
   },
   onPause: () => engine.pause(),
   onResume: resume,
   onRestart: () => {
     sound.unlock();
-    startMatch(selectedMode, matchOptions);
-    ui.update(engine.state);
+    if (engine.state.set) {
+      engine.start(engine.state.mode);
+      prepareGame();
+    } else startMatch(selectedMode, matchOptions);
+  },
+  onNextGame: () => {
+    if (!engine.nextSetGame()) return;
+    sound.unlock();
+    prepareGame();
   },
   onMenu: () => {
     input?.reset();
+    lostPad = null;
+    ui.setPadNotice(null);
     renderer?.setSpotlight(null);
     showTitle();
+    ui.update(engine.state);
   },
   onPreview: (mode) => {
     titleMode = mode;
@@ -135,7 +167,14 @@ const ui = new GameUI(overlay, {
 ui.update(engine.state);
 pads.subscribe((connected) => {
   ui.setPads(connected);
-  // The pad that went away during the match is back (another pad connecting changes nothing).
+  // Notice immediately if the set's roster is missing a pad. Results can still be browsed.
+  if (engine.state.phase !== "ended") {
+    const missing = missingSetPad();
+    if (missing !== null) {
+      padLost(missing);
+      return;
+    }
+  }
   if (lostPad !== null && connected.includes(lostPad - 1)) {
     lostPad = null;
     ui.setPadNotice(null);
@@ -207,7 +246,7 @@ async function boot() {
             ...inspect,
             start: (mode: MatchMode) => {
               startMatch(mode, match.get());
-              engine.state.phase = "playing";
+              if (engine.state.phase === "countdown") engine.state.phase = "playing";
             },
             engine,
             renderer,

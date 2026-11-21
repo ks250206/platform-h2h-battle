@@ -1,6 +1,8 @@
 import type { AccessoryId, PaletteId, Species } from "./characters";
 import type { AiLevel, MatchOptions } from "./match";
+import type { PlayerMatchStats } from "./matchStats";
 import type { EffectiveRules } from "./rules";
+import type { SetMatch } from "./setMatch";
 import type { StageId } from "./stages";
 
 export type { Species } from "./characters";
@@ -22,6 +24,7 @@ export type FighterMode =
   | "dead";
 export type MatchMode = "duel" | "rumble" | "training";
 export type Phase = "menu" | "countdown" | "playing" | "paused" | "ended";
+export type DrawReason = "allOut" | "timeUp";
 export type Vec2 = { x: number; z: number };
 
 /**
@@ -85,6 +88,7 @@ export interface Fighter {
   pendingLaunch: { x: number; y: number; z: number } | null;
   diInput: Vec2;
   lastAttacker: number | null;
+  lastHitAt: number;
   kills: number;
   eliminatedAt: number | null;
   eliminationReason: string | null;
@@ -180,6 +184,8 @@ export interface GameState {
   bombs: Bomb[];
   effects: Effect[];
   winnerId: number | null;
+  drawReason: DrawReason | null;
+  set: SetMatch | null;
   message: string;
   messageTime: number;
   seed: number;
@@ -188,6 +194,9 @@ export interface GameState {
   options: MatchOptions;
   /** The rules it runs with: lives, time limit and gimmicks after the mode and stage had a say. */
   rules: EffectiveRules;
+  /** Running totals for this game, indexed by fighter slot. */
+  playerStats: PlayerMatchStats[];
+  /** Match-wide counters. `dodges` counts human step inputs that started a step. */
   stats: { hits: number; clashes: number; dodges: number; maxDamage: number };
 }
 

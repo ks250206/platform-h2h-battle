@@ -16,6 +16,7 @@ import {
   type TimeRule,
 } from "./rules";
 import { DEFAULT_STAGE, isStageId, type StageId } from "./stages";
+import { sanitizeSetFormat, type SetFormat } from "./setMatch";
 
 /** How well a CPU fighter plays. */
 export type AiLevel = "easy" | "normal" | "hard";
@@ -42,6 +43,8 @@ export interface MatchOptions {
    * CPU. Slot 0 is always a human, and no device drives two slots.
    */
   controls: Partial<Record<number, ControlDevice>>;
+  /** The selected 1v1 format. Other modes use a single game. */
+  setFormat: SetFormat;
   /** Lives per fighter. Training ignores it: everyone there respawns for ever. */
   stocks: number;
   /** Strength of every CPU that has no override. */
@@ -64,6 +67,7 @@ export interface MatchOptions {
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
   controls: { 0: "keyboard" },
+  setFormat: "single",
   difficulty: "normal",
   overrides: {},
   ...presetRules(DEFAULT_PRESET),
@@ -148,6 +152,7 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
   }
   return {
     controls: sanitizeControls(source.controls),
+    setFormat: sanitizeSetFormat(source.setFormat),
     stocks: (STOCK_CHOICES as readonly number[]).includes(source.stocks as number)
       ? (source.stocks as number)
       : DEFAULT_MATCH_OPTIONS.stocks,
