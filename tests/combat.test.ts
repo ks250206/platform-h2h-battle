@@ -653,12 +653,33 @@ describe("air dodge", () => {
     expect(player.facing).toBe(0);
   });
 
-  test("an upward velocity is never reduced by the air dodge", () => {
+  test("the air dodge neither cuts an upward velocity nor floats it higher", () => {
     const { engine, player } = fixture();
     airborne(engine, player, 2, 6);
     engine.update(DT, stepInput());
     expect(player.mode).toBe("step");
-    expect(player.vy).toBeCloseTo(6 - RULES.gravity * RULES.airStepGravity * DT, 8);
+    // Still rising faster than the hover speed: ordinary gravity, as if no dodge had happened.
+    expect(player.vy).toBeCloseTo(6 - RULES.gravity * DT, 8);
+  });
+
+  test("a jump is no higher with an air dodge on the way up", () => {
+    const apex = (dodge: boolean) => {
+      const { engine, player } = fixture();
+      engine.update(DT, { ...emptyInput(), jump: true });
+      expect(player.grounded).toBe(false);
+      if (dodge) engine.update(DT, stepInput());
+      let top = player.y;
+      for (let frame = 0; frame < 120 && !player.grounded; frame++) {
+        engine.update(DT);
+        top = Math.max(top, player.y);
+      }
+      return top;
+    };
+    const plain = apex(false);
+    const dodged = apex(true);
+    expect(plain).toBeGreaterThan(1.4);
+    // The hover only softens the very top of the arc.
+    expect(dodged).toBeLessThan(plain + 0.15);
   });
 
   test("only one air dodge per airtime, and landing gives it back", () => {

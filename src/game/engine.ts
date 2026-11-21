@@ -440,6 +440,14 @@ export class BattleEngine {
     return f.mode === "step" && f.stepDelay <= 0 && f.airStepUsed && !f.grounded;
   }
 
+  /**
+   * The air dodge holds a fighter up, it does not carry one higher: while still rising faster than
+   * the hover speed (a dodge right after a jump or a rising slash) gravity pulls at full strength.
+   */
+  private gravityScale(f: Fighter): number {
+    return this.isAirStepping(f) && f.vy <= RULES.airStepHover ? RULES.airStepGravity : 1;
+  }
+
   private updateMode(f: Fighter, input: PlayerInput, dt: number): void {
     if (f.mode === "step" && f.stepDelay > 0) {
       f.stepDelay = Math.max(0, f.stepDelay - dt);
@@ -529,7 +537,7 @@ export class BattleEngine {
         f.airThrustUsed = true;
     }
     if (!f.grounded) {
-      f.vy -= RULES.gravity * (this.isAirStepping(f) ? RULES.airStepGravity : 1) * dt;
+      f.vy -= RULES.gravity * this.gravityScale(f) * dt;
       f.y += f.vy * dt;
       if (previousY >= -0.08 && f.y <= 0 && f.vy <= 0 && canStandAt(this.state, f.x, f.z)) {
         f.y = 0;
