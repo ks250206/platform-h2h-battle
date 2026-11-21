@@ -18,7 +18,10 @@ export type Phase = "menu" | "countdown" | "playing" | "paused" | "ended";
 export type Species = "fox" | "rabbit" | "bear" | "raccoon";
 export type Vec2 = { x: number; z: number };
 
-/** World coordinates: +Y up, +Z toward camera. Facing 0 is +Z. */
+/**
+ * World coordinates: +Y up, ground on X/Z. The camera looks down from the +X/+Z side, so screen
+ * up is world (-0.6, -0.8) and screen right is (0.8, -0.6) (see coordinates.ts). Facing 0 is +Z.
+ */
 export interface Fighter {
   id: number;
   name: string;

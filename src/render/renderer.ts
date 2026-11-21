@@ -10,11 +10,48 @@ import {
 } from "@pixi/3d";
 import { Application, Container, Graphics, RendererType, Sprite, Text, Texture } from "pixi.js";
 import type { WebGLRenderer } from "pixi.js";
+import { CAMERA_FORWARD, CAMERA_OFFSET, CAMERA_RIGHT } from "../game/coordinates";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
 import { createFighterMesh, MeshLibrary, poseFighter } from "./meshes";
 import type { FighterMesh } from "./meshes";
 
 const TAU = Math.PI * 2;
+/** Oblique look-down perspective camera; its direction is CAMERA_OFFSET (shared with input). */
+const CAMERA_FOV = 37;
+const CAMERA_NEAR = 0.3;
+const CAMERA_FAR = 180;
+/**
+ * Camera distance multiplier = max(height fit, width fit). The height fit keeps the arena plus
+ * knock-out margin inside the band the HUD leaves free (match heading on top; fighter cards,
+ * key legend or touch controls at the bottom); the width fit keeps it across a portrait screen.
+ */
+const CAMERA_FIT_HEIGHT = 0.76;
+const CAMERA_FIT_WIDTH = 1.25;
+/** Pixel rows the HUD covers above and below the arena, following styles.css / touch.css. */
+function hudBand(height: number, touch: boolean): { top: number; bottom: number } {
+  // Short touch screens move the fighter cards to the top; the touch controls hug the corners.
+  if (touch && height <= 570) return { top: 150, bottom: 70 };
+  // Otherwise cards sit at the bottom, above the touch controls on touch screens.
+  const bottom = touch ? Math.min(330, height * 0.4) : Math.min(220, height * 0.3);
+  return { top: Math.min(120, height * 0.2), bottom };
+}
+const CAMERA_DISTANCE = Math.hypot(CAMERA_OFFSET.x, CAMERA_OFFSET.y, CAMERA_OFFSET.z);
+/** World height the view spans at the look-at target, per unit of camera scale. */
+const VIEW_HEIGHT = 2 * Math.tan((CAMERA_FOV * Math.PI) / 360) * CAMERA_DISTANCE;
+/**
+ * The camera's screen-up axis: the ground's screen-up tilted by the elevation. Panning along it
+ * (rather than along the ground) slides the picture without changing the distance to the arena.
+ */
+const CAMERA_UP = {
+  x: (CAMERA_FORWARD.x * CAMERA_OFFSET.y) / CAMERA_DISTANCE,
+  y: Math.hypot(CAMERA_OFFSET.x, CAMERA_OFFSET.z) / CAMERA_DISTANCE,
+  z: (CAMERA_FORWARD.z * CAMERA_OFFSET.y) / CAMERA_DISTANCE,
+};
+/** Menu pans as fractions of the view; negative moves the arena right / up on screen. */
+const MENU_PAN_RIGHT = -0.17;
+const MENU_PAN_UP = -0.2;
+/** Fighter facing (0 is +Z) that looks straight back at the camera. */
+const FACING_CAMERA = Math.atan2(-CAMERA_FORWARD.x, -CAMERA_FORWARD.z);
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
 
 /** Only affects rendering quality. Simulation, input, UI and test timing stay unchanged. */
@@ -91,8 +128,12 @@ export class ArenaRenderer {
   private width = 1280;
   private height = 720;
   private time = 0;
-  private cameraOffset = 0;
-  private cameraHeightOffset = 0;
+  private cameraScale = 1;
+  /** Eased view pan along the camera's screen-right / screen-up axes, in fractions of the view. */
+  private panRight = 0;
+  private panUp = 0;
+  /** In play: the pan that centres the arena in the band between the top and bottom HUD. */
+  private hudPanUp = 0;
   private lastElapsed = 0;
   private destroyed = false;
   private readonly software: boolean;
@@ -142,9 +183,10 @@ export class ArenaRenderer {
     this.labels.eventMode = "none";
     app.stage.addChild(this.view, this.labels);
     this.view.root.addChild(this.scenery, this.scene);
-    this.view.camera.mode = "orthographic";
-    this.view.camera.near = 0.1;
-    this.view.camera.far = 200;
+    this.view.camera.mode = "perspective";
+    this.view.camera.fov = CAMERA_FOV;
+    this.view.camera.near = CAMERA_NEAR;
+    this.view.camera.far = CAMERA_FAR;
     const sun = new DirectionalLight({ color: 0xffe9c0, intensity: 2.2, castShadow: false });
     sun.position.set(-10, 22, 14);
     this.view.root.addChild(sun);
@@ -290,17 +332,21 @@ export class ArenaRenderer {
 
   private buildScenery(): void {
     const a = this.assets;
+    // Sites are [screen right, screen up (away from camera), height, size] on the ground, so the
+    // islands frame the arena from behind and the sides and never sit in the foreground.
     const sites = [
-      [-17, -6, -13, 1.4],
-      [16, -8, -17, 2.1],
-      [-19, -7, 11, 1.7],
-      [18, -9, 8, 2.4],
-      [3, -9, -23, 1.6],
-      [-10, -10, -27, 1.1],
+      [-20, 9, -6, 1.4],
+      [21, 12, -8, 2.1],
+      [-25, 21, -8, 1.7],
+      [24, 25, -9, 2.2],
+      [-5, 30, -9, 1.6],
+      [10, 27, -10, 1.1],
     ];
-    sites.forEach(([x, y, z, size], i) => {
+    sites.forEach(([right, up, y, size], i) => {
+      const x = CAMERA_RIGHT.x * right! + CAMERA_FORWARD.x * up!;
+      const z = CAMERA_RIGHT.z * right! + CAMERA_FORWARD.z * up!;
       const root = new Container3D();
-      root.position.set(x!, y!, z!);
+      root.position.set(x, y!, z);
       root.scale.set(size!);
       this.scenery.addChild(root);
       const rock = a.mesh(root, a.cone, a.material(0x27494f), 0, -0.8, 0, 1.5, 2, 1.3);
@@ -311,18 +357,19 @@ export class ArenaRenderer {
         a.mesh(root, a.cone, a.material(0x87a58e), 0.1, 1.05, 0, 0.66, 1.2, 0.62);
         a.mesh(root, a.cone, a.material(0x9eb496), 0.1, 1.46, 0, 0.47, 0.91, 0.47);
       }
-      this.floaters.push({ root, x: x!, y: y!, z: z!, phase: i * 1.45 });
+      this.floaters.push({ root, x, y: y!, z, phase: i * 1.45 });
     });
     for (let i = 0; i < 24; i++) {
       const angle = (i / 24) * TAU;
       const distance = 14 + (i % 5) * 3;
+      // The ring of specks is pushed away from the camera to fill the visible backdrop.
       const spark = a.mesh(
         this.scenery,
         a.pebble,
         a.material(0xa0b7a1, 0.45, 0.2),
-        Math.sin(angle) * distance,
+        CAMERA_FORWARD.x * 6 + Math.sin(angle) * distance,
         -3 - (i % 4),
-        Math.cos(angle) * distance,
+        CAMERA_FORWARD.z * 6 + Math.cos(angle) * distance,
         0.035 + (i % 3) * 0.014,
       );
       this.floaters.push({
@@ -374,7 +421,13 @@ export class ArenaRenderer {
     this.zone.position.set(safe.x, 0.045, safe.z);
     this.zoneRing.scale.set(safe.radius);
     this.zoneCore.scale.set(safe.radius, 1, safe.radius);
-    const marker = this.view.worldToScreen({ x: safe.x, y: 0.1, z: safe.z - safe.radius + 0.4 });
+    // Label the far edge of the ring, the one leaning away from the camera.
+    const far = safe.radius - 0.4;
+    const marker = this.view.worldToScreen({
+      x: safe.x + CAMERA_FORWARD.x * far,
+      y: 0.1,
+      z: safe.z + CAMERA_FORWARD.z * far,
+    });
     if (marker) this.zoneMarker.position.set(marker.x, marker.y);
     for (const [i, line] of this.windLines.entries()) {
       line.visible = state.arena.windActive;
@@ -417,7 +470,9 @@ export class ArenaRenderer {
   private updateFighter(f: Fighter, dt: number, state: GameState): void {
     const view = this.fighterView(f);
     poseFighter(view.mesh, f, dt);
-    if (state.phase === "menu") view.mesh.root.rotation.y = f.human ? -0.42 : 0.36;
+    // Showcase pose: face the camera, each turned a little toward the other (human is on the left).
+    if (state.phase === "menu")
+      view.mesh.root.rotation.y = FACING_CAMERA + (f.human ? 0.42 : -0.36);
     const onPlatform =
       Math.abs(f.x) <= state.arena.halfSize && Math.abs(f.z) <= state.arena.halfSize;
     view.mesh.shadow.visible &&= onPlatform;
@@ -571,12 +626,14 @@ export class ArenaRenderer {
     this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
-    const menuOffset = state.phase === "menu" && this.width >= 900 ? -4.2 : 0;
-    const menuHeightOffset = state.phase === "menu" && this.width < 650 ? -8 : 0;
-    this.cameraOffset += (menuOffset - this.cameraOffset) * Math.min(1, dt * 4);
-    this.cameraHeightOffset += (menuHeightOffset - this.cameraHeightOffset) * Math.min(1, dt * 4);
-    this.view.camera.position.set(this.cameraOffset, 20 + this.cameraHeightOffset, 25);
-    this.view.camera.lookAt({ x: this.cameraOffset, y: this.cameraHeightOffset, z: 0 });
+    // On the menu the arena slides right of the title panel (desktop) or above the menu copy (phone).
+    const menu = state.phase === "menu";
+    const sidePanel = this.width >= 900 || (this.height <= 570 && this.width > this.height);
+    const panRight = menu && sidePanel ? MENU_PAN_RIGHT : 0;
+    const panUp = !menu ? this.hudPanUp : this.width < 650 ? MENU_PAN_UP : 0;
+    this.panRight += (panRight - this.panRight) * Math.min(1, dt * 4);
+    this.panUp += (panUp - this.panUp) * Math.min(1, dt * 4);
+    this.placeCamera();
     for (const floater of this.floaters) {
       floater.root.position.set(
         floater.x,
@@ -648,10 +705,32 @@ export class ArenaRenderer {
       Math.sqrt(pixelBudget / (this.width * this.height)),
     );
     this.setSceneResolution();
-    // The whole platform remains visible in portrait; desktop preserves room for the HUD.
-    this.view.camera.orthographicSize = Math.max(11.3, 9.2 * aspect);
-    this.view.camera.position.set(this.cameraOffset, 20 + this.cameraHeightOffset, 25);
-    this.view.camera.lookAt({ x: this.cameraOffset, y: this.cameraHeightOffset, z: 0 });
+    const touch = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+    const { top, bottom } = hudBand(this.height, touch);
+    this.cameraScale = Math.max(
+      (CAMERA_FIT_HEIGHT * this.height) / (this.height - top - bottom),
+      CAMERA_FIT_WIDTH / aspect,
+    );
+    this.hudPanUp = (top - bottom) / 2 / this.height;
+    this.placeCamera();
+  }
+
+  /** The only place the camera is positioned: pan the look-at target, then the fixed offset. */
+  private placeCamera(): void {
+    const s = this.cameraScale;
+    const up = this.panUp * VIEW_HEIGHT * s;
+    const right = ((this.panRight * VIEW_HEIGHT * s) / this.height) * this.width;
+    const target = {
+      x: CAMERA_RIGHT.x * right + CAMERA_UP.x * up,
+      y: CAMERA_UP.y * up,
+      z: CAMERA_RIGHT.z * right + CAMERA_UP.z * up,
+    };
+    this.view.camera.position.set(
+      target.x + CAMERA_OFFSET.x * s,
+      target.y + CAMERA_OFFSET.y * s,
+      target.z + CAMERA_OFFSET.z * s,
+    );
+    this.view.camera.lookAt(target);
   }
 
   private adjustResolution(state: GameState): void {
