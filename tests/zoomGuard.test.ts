@@ -183,6 +183,73 @@ describe("zoom guard", () => {
     expect(scrollTo).not.toHaveBeenCalled();
     expect(document.documentElement.hasAttribute("data-zoomed")).toBe(false);
   });
+
+  test("keeps maximum-scale=1 across slow frames and restores via fallback if zoom never clamps", () => {
+    vi.useFakeTimers();
+    try {
+      const viewport = Object.assign(new EventTarget(), {
+        scale: 1.8,
+        offsetLeft: 0,
+        offsetTop: 0,
+        width: 390,
+      });
+      const frames: Map<number, FrameRequestCallback> = new Map();
+      let nextFrameId = 1;
+      const win = {
+        visualViewport: viewport,
+        scrollTo: vi.fn(),
+        requestAnimationFrame: (cb: FrameRequestCallback) => {
+          const id = nextFrameId++;
+          frames.set(id, cb);
+          return id;
+        },
+        cancelAnimationFrame: (id: number) => {
+          frames.delete(id);
+        },
+      };
+      const destroy = installZoomGuard(win, document);
+      cleanup.push(destroy);
+
+      const meta = document.createElement("meta");
+      meta.name = "viewport";
+      meta.content = "width=device-width, initial-scale=1, viewport-fit=cover";
+      document.head.append(meta);
+      try {
+        const resetButton = document.querySelector<HTMLButtonElement>(".zoom-notice button")!;
+        resetButton.click();
+        const locked = "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1";
+        expect(meta.getAttribute("content")).toBe(locked);
+
+        // Even after 2s of a stalled frame, maximum-scale=1 stays intact until 2 frames paint.
+        vi.advanceTimersByTime(2000);
+        expect(meta.getAttribute("content")).toBe(locked);
+
+        // Paint frame 1, advance 1s: still locked waiting for frame 2.
+        const [f1] = [...frames.entries()];
+        frames.delete(f1[0]);
+        f1[1](16);
+        vi.advanceTimersByTime(1000);
+        expect(meta.getAttribute("content")).toBe(locked);
+
+        // Paint frame 2: fallback timer now starts (1500ms).
+        const [f2] = [...frames.entries()];
+        frames.delete(f2[0]);
+        f2[1](32);
+        vi.advanceTimersByTime(1499);
+        expect(meta.getAttribute("content")).toBe(locked);
+
+        // Once the fallback expires, zoomability is restored even if scale stayed enlarged.
+        vi.advanceTimersByTime(1);
+        expect(meta.getAttribute("content")).toBe(
+          "width=device-width, initial-scale=1, viewport-fit=cover",
+        );
+      } finally {
+        meta.remove();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("BattleInput touch controls", () => {

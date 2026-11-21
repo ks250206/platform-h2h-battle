@@ -5,9 +5,12 @@ interface ZoomWindow {
   > | null;
   ongesturestart?: unknown;
   scrollTo(x: number, y: number): void;
+  requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+  cancelAnimationFrame?: (handle: number) => void;
 }
 
 const READABLE_SURFACE = "dialog[open], .match-options.rules-open #match-rules-panel";
+const RESTORE_FALLBACK_MS = 1500;
 
 export function installZoomGuard(win: ZoomWindow = window, doc: Document = document): () => void {
   const root = doc.documentElement;
@@ -65,8 +68,15 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
   }
 
   let savedViewport: { meta: Element; content: string } | null = null;
+  let restoreToken = 0;
+  let restoreFrame: number | null = null;
   let restoreTimer: ReturnType<typeof setTimeout> | null = null;
   const clearRestoreTimer = () => {
+    restoreToken += 1;
+    if (restoreFrame !== null) {
+      win.cancelAnimationFrame?.(restoreFrame);
+      restoreFrame = null;
+    }
     if (restoreTimer !== null) {
       clearTimeout(restoreTimer);
       restoreTimer = null;
@@ -78,6 +88,32 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
       savedViewport.meta.setAttribute("content", savedViewport.content);
     }
     savedViewport = null;
+  };
+  const scheduleRestoreFallback = () => {
+    const token = restoreToken;
+    const startTimer = () => {
+      if (token !== restoreToken) return;
+      if (viewport && viewport.scale <= 1.02) {
+        restoreViewport();
+        return;
+      }
+      restoreTimer = setTimeout(restoreViewport, RESTORE_FALLBACK_MS);
+    };
+    const scheduleFrame = win.requestAnimationFrame;
+    if (!scheduleFrame) {
+      startTimer();
+      return;
+    }
+    // Wait for at least two painted frames before starting the fallback timer so a slow
+    // WebGL/compositor frame cannot remove maximum-scale=1 before the browser clamps zoom.
+    restoreFrame = scheduleFrame.call(win, () => {
+      if (token !== restoreToken) return;
+      restoreFrame = scheduleFrame.call(win, () => {
+        if (token !== restoreToken) return;
+        restoreFrame = null;
+        startTimer();
+      });
+    });
   };
 
   const notice = doc.createElement("aside");
@@ -99,8 +135,8 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
           : `${baseContent}, maximum-scale=1`;
         meta.removeAttribute("content");
         meta.setAttribute("content", locked);
-        // Keep maximum-scale=1 long enough for the browser to clamp zoom, then restore zoomability.
-        restoreTimer = setTimeout(restoreViewport, 350);
+        // Keep maximum-scale=1 until visualViewport settles or the post-frame fallback elapses.
+        scheduleRestoreFallback();
       }
       scrollHome();
     },
