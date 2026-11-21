@@ -1541,6 +1541,10 @@ kbd {
   margin-top: 0;
   font-size: clamp(20px, 5vw, 29px);
 }
+.result-eyebrow {
+  justify-content: center;
+  margin-bottom: 4px;
+}
 .modal-panel > .result-score {
   margin: 0 0 6px;
   font-size: 13px;
@@ -1552,6 +1556,10 @@ kbd {
 }
 .modal-panel > .result-exit-note {
   margin: -6px 0 9px;
+}
+.modal-panel > .pause-exit-note {
+  margin: 8px 0 0;
+  text-align: center;
 }
 .result-actions {
   display: flex;

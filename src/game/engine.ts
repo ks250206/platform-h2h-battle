@@ -146,7 +146,7 @@ function makeFighter(id: number, count: number, options: MatchOptions): Fighter 
     pendingLaunch: null,
     diInput: { x: 0, z: 0 },
     lastAttacker: null,
-    lastHitAt: 0,
+    lastHitAt: -Infinity,
     kills: 0,
     eliminatedAt: null,
     eliminationReason: null,

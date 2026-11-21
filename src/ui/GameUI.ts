@@ -550,11 +550,22 @@ export class GameUI {
       </section>
 
       <section class="pause-screen modal-scrim" role="dialog" aria-modal="true" aria-label="一時停止" hidden>
-        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p>次の一撃を、じっくり考えよう。</p><p class="pause-notice" role="status" hidden></p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="secondary-button" data-action="settings">グラフィック設定</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel pause-panel">
+          <div class="eyebrow">TAKE A BREATH</div>
+          <h2>ひと休み。</h2>
+          <p>次の一撃を、じっくり考えよう。</p>
+          <p class="pause-notice" role="status" hidden></p>
+          <button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button>
+          <button class="secondary-button" data-action="restart">はじめから</button>
+          <button class="secondary-button" data-action="settings">グラフィック設定</button>
+          <button class="text-button" data-action="menu">タイトルへ戻る</button>
+          <p class="pause-exit-note" hidden>タイトルに戻ると、勝利数を加算せずにこのセットを終了します。</p>
+        </div>
       </section>
 
       <section class="result-screen modal-scrim" role="dialog" aria-modal="true" aria-label="対戦結果" hidden>
         <div class="modal-panel result-panel">
+          <div class="eyebrow result-eyebrow">MATCH RESULT</div>
           <h2 class="result-title">試合結果</h2>
           <p class="result-winner" hidden></p>
           <p class="result-score" hidden></p>
@@ -1398,11 +1409,13 @@ export class GameUI {
     this.result.hidden = state.phase !== "ended";
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
     if (changedPhase && state.phase === "ended") this.drawResult(state);
-    if (changedPhase && state.phase === "paused")
+    if (changedPhase && state.phase === "paused") {
       setText(
         this.query('.pause-screen [data-action="restart"]'),
         state.set ? "セットを最初から" : "はじめから",
       );
+      this.query(".pause-exit-note").hidden = !state.set;
+    }
     if (changedPhase && !this.dialog.open && !this.settingsDialog.open) {
       if (state.phase === "paused")
         this.pausePanel.querySelector<HTMLButtonElement>('[data-action="resume"]')?.focus();
@@ -1570,6 +1583,10 @@ export class GameUI {
     const set = state.set;
     const complete = set?.phase === "complete";
     const between = set?.phase === "betweenGames";
+    setText(
+      this.query(".result-eyebrow"),
+      complete ? "SET WINNER" : between ? "SET GAME" : "MATCH RESULT",
+    );
     const winnerId = complete ? set.winnerId : state.winnerId;
     const winner = state.fighters.find((f) => f.id === winnerId);
     const badge = this.query(".result-winner");
@@ -1627,7 +1644,7 @@ export class GameUI {
     this.query(".result-stat-picker").hidden = !set;
     this.query("#result-game").innerHTML = playerResults(state.fighters, state.playerStats);
     this.query("#result-set").innerHTML = set ? playerResults(state.fighters, set.totals) : "";
-    this.showResultStats(false);
+    this.showResultStats(complete);
     this.query<HTMLDetailsElement>(".result-stat-note").open = false;
     this.query(".result-panel").scrollTop = 0;
     setText(this.query('[data-stat="hits"]'), String(state.stats.hits));

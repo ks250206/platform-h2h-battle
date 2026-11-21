@@ -1,9 +1,11 @@
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import { BattleEngine } from "../src/game/engine";
-import { BUTTON, freshPadMemory, readPad, type PadSnapshot } from "../src/game/gamepad";
+import { BUTTON, type PadSnapshot } from "../src/game/gamepad";
+import { BattleInput } from "../src/game/input";
 import { DEFAULT_MATCH_OPTIONS, type MatchOptions } from "../src/game/match";
 import { createMatchStore } from "../src/game/matchStore";
-import { formatAccuracy } from "../src/game/matchStats";
+import { formatAccuracy, MatchStats } from "../src/game/matchStats";
+import { PadHub } from "../src/game/pads";
 import { finishSetGame } from "../src/game/setMatch";
 import { ATTACKS, RULES } from "../src/game/tuning";
 import { emptyInput, type Fighter, type MatchMode } from "../src/game/types";
@@ -216,12 +218,73 @@ describe("set play", () => {
     expect(createMatchStore(storage).get().setFormat).toBe("single");
   });
 
-  test("a held pad confirm is consumed at gameplay takeover and a fresh press jumps", () => {
-    const held: PadSnapshot = { axes: [], buttons: [{ pressed: true, value: 1 }] };
-    const released: PadSnapshot = { axes: [], buttons: [] };
-    expect(held.buttons[BUTTON.A]?.pressed).toBe(true);
-    expect(readPad(held, held, freshPadMemory()).commands.jump).toBe(false);
-    expect(readPad(held, released, freshPadMemory()).commands.jump).toBe(true);
+  test("Next Game consumes held A and Start until the pad player presses them again", () => {
+    const element = Object.assign(new EventTarget(), {
+      append() {},
+      remove() {},
+      querySelector: (): EventTarget => element,
+      querySelectorAll: () => [],
+      style: { transform: "" },
+    });
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("document", {
+      createElement: () => element,
+      getElementById: () => element,
+      querySelector: () => null,
+    });
+    try {
+      const pads = new PadHub();
+      const released: PadSnapshot = { axes: [], buttons: [] };
+      const held: PadSnapshot = {
+        axes: [],
+        buttons: Array.from({ length: BUTTON.START + 1 }, (_, i) => {
+          const pressed = i === BUTTON.A || i === BUTTON.START;
+          return { pressed, value: Number(pressed) };
+        }),
+      };
+      const engine = fight("duel", { setFormat: "bo3", controls: { 0: "pad1" } });
+      const onPause = vi.fn(() => engine.pause());
+      const input = new BattleInput(element as unknown as HTMLCanvasElement, pads, {
+        toWorld: () => null,
+        onPause,
+        onGesture() {},
+        onCameraToggle() {},
+        onPadLost() {},
+        rumble: () => false,
+      });
+      const sample = () => {
+        input.updateVisibility(engine.state);
+        return input.sample(engine.state);
+      };
+
+      pads.current[0] = released;
+      sample();
+      win(engine, 0);
+      pads.current[0] = held;
+      expect(sample()).toEqual({});
+
+      expect(engine.nextSetGame()).toBe(true);
+      input.reset();
+      input.newMatch();
+      expect(engine.state.phase).toBe("countdown");
+      expect(sample()[0]?.jump).toBe(false);
+      for (let i = Math.ceil(engine.state.countdown / DT) + 1; i > 0; i--) {
+        engine.update(DT, sample());
+      }
+      expect(engine.state.phase).toBe("playing");
+      expect(sample()[0]?.jump).toBe(false);
+      expect(onPause).not.toHaveBeenCalled();
+
+      pads.current[0] = released;
+      sample();
+      pads.current[0] = held;
+      expect(sample()[0]?.jump).toBe(true);
+      expect(onPause).toHaveBeenCalledTimes(1);
+      expect(engine.state.phase).toBe("paused");
+      input.destroy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -301,6 +364,19 @@ describe("per-player match stats", () => {
     expect(engine.state.playerStats).toMatchObject([
       { damageDealt: 6, kos: 1, swings: 0 },
       { damageTaken: 6, stocksLost: 1, opponentLosses: 1, environmentLosses: 0 },
+    ]);
+  });
+
+  test("a hit at elapsed zero credits a subsequent ring-out to the attacker", () => {
+    const engine = fight();
+    const [attacker, target] = engine.state.fighters;
+    const stats = new MatchStats(engine.state.playerStats);
+    stats.recordLaunch(target, attacker.id, engine.state.elapsed);
+    drop(target);
+    tick(engine);
+    expect(engine.state.playerStats).toMatchObject([
+      { kos: 1 },
+      { stocksLost: 1, opponentLosses: 1, environmentLosses: 0 },
     ]);
   });
 
@@ -410,6 +486,26 @@ describe("per-player match stats", () => {
     tick(engine, 5);
     expect(engine.state.playerStats[0]).toMatchObject({ damageTaken: 0, dodges: 2 });
     expect(engine.state.playerStats[1]).toMatchObject({ swings: 1, landedSwings: 0 });
+  });
+
+  test("a sword hit cancels dodge credit when step invulnerability ends during the same swing", () => {
+    const engine = fight();
+    const [target, attacker] = engine.state.fighters;
+    at(target, 0, 0);
+    at(attacker, 0, -1.1);
+    engine.update(DT, { ...emptyInput(), step: true });
+    target.modeTime = RULES.stepInvulEnd - DT * 1.5;
+    target.stepDirection = { x: 0, z: 0 };
+    ready(attacker);
+
+    tick(engine);
+    expect(engine.state.playerStats[0]).toMatchObject({ damageTaken: 0, dodges: 1 });
+    tick(engine);
+    expect(engine.state.playerStats[0]).toMatchObject({
+      damageTaken: ATTACKS.sweep.damage,
+      dodges: 0,
+    });
+    expect(engine.state.playerStats[1]).toMatchObject({ swings: 1, landedSwings: 1 });
   });
 
   test("timed protection during a step is not credited as a successful dodge", () => {

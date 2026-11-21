@@ -70,9 +70,12 @@ export class MatchStats {
 
   swordHit(attacker: Fighter, target: Fighter, damage: number): void {
     const swing = this.swings[attacker.id];
-    if (swing?.id === attacker.swingId && !swing.landed) {
-      swing.landed = true;
-      this.players[attacker.id].landedSwings++;
+    if (swing?.id === attacker.swingId) {
+      if (!swing.landed) {
+        swing.landed = true;
+        this.players[attacker.id].landedSwings++;
+      }
+      if (swing.dodgedBy.delete(target.id)) this.players[target.id].dodges--;
     }
     this.damage(target, damage, attacker.id);
   }
