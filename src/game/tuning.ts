@@ -118,7 +118,17 @@ export const RULES = {
   respawnDelay: 1.4,
   respawnHeight: 6,
   respawnInvulnerable: 2.5,
+  /**
+   * Input buffer (seconds): an attack, step, jump or grab pressed while the fighter cannot do it
+   * (recovery, cancel lag, a step, clash, hitstun, hitstop, or in the air for a jump or grab)
+   * fires on the first tick it becomes legal, if that comes within this long of the press. Counted
+   * in fixed ticks (`INPUT_BUFFER_TICKS`), so it is the same at any render rate.
+   */
+  inputBuffer: 0.1,
 } as const;
+
+/** `RULES.inputBuffer` in fixed simulation ticks: 6 at 60 Hz. */
+export const INPUT_BUFFER_TICKS = Math.round(RULES.inputBuffer / RULES.fixedStep);
 
 /** How a CPU of each strength plays. `normal` reproduces the original CPU. */
 export interface AiProfile {
