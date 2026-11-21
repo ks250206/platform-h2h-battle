@@ -221,6 +221,8 @@ export class ArenaRenderer {
   private focusUp = 0;
   private viewScale = 0;
   private lastElapsed = 0;
+  /** Humans in the match being drawn: decides between "YOU" and player numbers. */
+  private humanCount = 1;
   private destroyed = false;
   private readonly software: boolean;
   private readonly sun: DirectionalLight;
@@ -609,8 +611,23 @@ export class ArenaRenderer {
     this.lastElapsed = state.elapsed;
   }
 
+  /**
+   * What floats over a human: "YOU" for a lone player, the player number when several share the
+   * screen. Empty for a CPU.
+   */
+  private playerTag(f: Fighter): string {
+    if (!f.human) return "";
+    return this.humanCount > 1 ? `P${f.player ?? 1}` : "YOU";
+  }
+
+  /** A lone player is the sunny one; several each wear their fighter's colour. */
+  private tagColor(f: Fighter): number {
+    return this.humanCount > 1 ? f.color : PALETTE.label.you;
+  }
+
   private fighterView(f: Fighter): FighterView {
-    const identity = `${f.species}/${f.color}/${f.human}`;
+    const tag = this.playerTag(f);
+    const identity = `${f.species}/${f.color}/${tag}`;
     let view = this.fighters.get(f.id);
     if (view && view.identity !== identity) {
       this.destroyFighter(view);
@@ -618,17 +635,23 @@ export class ArenaRenderer {
       view = undefined;
     }
     if (view) return view;
-    const rig = createFighterRig(this.assets, this.rigAssets, this.scene, f);
+    const rig = createFighterRig(
+      this.assets,
+      this.rigAssets,
+      this.scene,
+      f,
+      this.humanCount > 1 ? f.color : undefined,
+    );
     const motion = new FighterMotion();
     // On the pale floor a white smear would vanish: each blade trails its owner's colour.
     const trail = new SwordTrail(this.scene, f.color);
     const label = new Text({
-      text: f.human ? "YOU" : f.name,
+      text: tag || f.name,
       style: {
         fontFamily: "system-ui, sans-serif",
         fontSize: 11,
         fontWeight: "800",
-        fill: f.human ? PALETTE.label.you : PALETTE.label.text,
+        fill: f.human ? this.tagColor(f) : PALETTE.label.text,
         letterSpacing: 1,
         dropShadow: { color: PALETTE.label.shadow, alpha: 0.65, blur: 3, distance: 1 },
       },
@@ -659,8 +682,9 @@ export class ArenaRenderer {
     applyFrame(view.rig, frame, shown, this.time);
     view.trail.update(frame.bladeBase, frame.bladeTip, f.mode === "dead" ? 0 : frame.trail, dt);
     for (const event of frame.events) this.spawnImpact(event);
-    // Showcase pose: face the camera, each turned a little toward the other (human is on the left).
-    if (state.phase === "menu") view.rig.root.rotation.y = FACING_CAMERA + (f.human ? 0.42 : -0.36);
+    // Showcase pose: face the camera, each turned a little toward the other (slot 0 is on the left).
+    if (state.phase === "menu")
+      view.rig.root.rotation.y = FACING_CAMERA + (f.id === 0 ? 0.42 : -0.36);
     // The blob is a stand-in for a shadow; with real shadow maps it would double up.
     // Back from a knock-out: the body blinks for as long as nothing can touch it.
     if (f.invulnerable > 1) view.protected = true;
@@ -675,12 +699,12 @@ export class ArenaRenderer {
     view.stamina.visible = labelVisible;
     if (point) {
       view.label.position.set(point.x, point.y);
-      view.label.text = f.human ? "YOU" : `${f.name}  ${Math.round(f.damage)}%`;
+      view.label.text = this.playerTag(f) || `${f.name}  ${Math.round(f.damage)}%`;
       view.label.style.fill =
         f.outsideTime > 0.5
           ? PALETTE.label.outside
           : f.human
-            ? PALETTE.label.you
+            ? this.tagColor(f)
             : PALETTE.label.text;
       view.stamina
         .clear()
@@ -879,6 +903,7 @@ export class ArenaRenderer {
         this.fighters.delete(id);
       }
     }
+    this.humanCount = state.fighters.reduce((count, f) => count + (f.human ? 1 : 0), 0);
     for (const fighter of state.fighters) this.updateFighter(fighter, visualDelta, state);
     const bombIds = new Set(state.bombs.map((b) => b.id));
     for (const [id, view] of this.bombs) {
