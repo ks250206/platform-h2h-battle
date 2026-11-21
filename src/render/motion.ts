@@ -23,9 +23,13 @@ import {
   wrapAngle,
 } from "./math3";
 import type { V3 } from "./math3";
+import { cancelLag, exposure, whiffed } from "./combatCues";
 import {
   airPose,
   attackPose,
+  cancelHold,
+  cancelPose,
+  CHECK,
   CLASH,
   CROSSES_BODY,
   getUpPose,
@@ -67,7 +71,10 @@ export interface MotionFrame {
   /** World-space blade ends, for the trail and contact effects. */
   bladeBase: V3;
   bladeTip: V3;
-  /** 0 when the blade is at rest, 1 through the cutting part of a swing. */
+  /**
+   * 1 exactly while the swing is live (`active`), 0 otherwise: the trail and the floor sparks
+   * never start in the wind-up or carry on into the recovery.
+   */
   trail: number;
   /** Yaw / pitch of each tail segment relative to the previous one. */
   tail: { yaw: number; pitch: number }[];
@@ -251,9 +258,9 @@ export class FighterMotion {
       // heaved up, and that takes a good part of the wind-up.
       if (f.mode === "windup" && this.previousMode === "charge" && this.blend < 1 && f.attack)
         duration = Math.min(0.26, ATTACKS[f.attack].startup * 0.55);
-      // Stopping a swing takes as long as the simulation says it does: a blade arrested late in
-      // its wind-up is lowered slowly, not snapped back.
-      if (f.mode === "cancel") duration = clamp(f.modeDuration, 0.1, 0.34);
+      // A cancel yanks the blade back into the check within the first part of its lag (a sharp,
+      // distinct reaction, but never a snap); holding and rising out of it is `cancelPose`.
+      if (f.mode === "cancel") duration = clamp(f.modeDuration * 0.45, 0.11, 0.15);
       this.from = clonePose(this.base);
       this.blend = duration > 0 ? 0 : 1;
       this.blendDuration = duration;
@@ -343,9 +350,9 @@ export class FighterMotion {
       pose.dir = norm(dir, pose.dir);
     }
 
-    // Trembling under a fully charged blade.
-    if (f.mode === "charge") {
-      const strain = f.charge * f.charge * 0.011;
+    // Trembling under a fully charged blade, and against a late-cancelled one while it is held.
+    const strain = target.strain;
+    if (strain > 0) {
       pose.grip.x += Math.sin(this.clock * 47) * strain;
       pose.grip.y += Math.sin(this.clock * 61 + 1.3) * strain;
       pose.chestRoll += Math.sin(this.clock * 39) * strain * 1.2;
@@ -448,11 +455,17 @@ export class FighterMotion {
     this.previousAt = at;
 
     // --- Tail, ears, scarf ------------------------------------------------------------------
+    // Ears flat and tail down while open to a punish: an animal caught out, not one on guard.
+    const open = exposure(f);
     const sway = Math.sin(this.clock * 1.7) * 0.1 + Math.sin(this.gait * TAU) * this.speed * 0.05;
     let drive = clamp(-yawRate * 0.07 - this.velocity.x * 0.07, -1.1, 1.1) + sway;
     const tail: { yaw: number; pitch: number }[] = [];
     const lift = this.tailPitch.step(
-      clamp(-vertical * 0.07 + this.speed * 0.05 - (f.mode === "hitstun" ? 0.5 : 0), -0.9, 0.9),
+      clamp(
+        -vertical * 0.07 + this.speed * 0.05 - (f.mode === "hitstun" ? 0.5 : 0) - open * 0.45,
+        -0.9,
+        0.9,
+      ),
       step,
     );
     for (let i = 0; i < TAIL_SEGMENTS; i++) {
@@ -460,7 +473,11 @@ export class FighterMotion {
       tail.push({ yaw: drive * (i === 0 ? 0.7 : 0.9), pitch: lift * (0.5 + i * 0.25) });
     }
     const ears = this.earSpring.step(
-      clamp(this.velocity.z * 0.06 - vertical * 0.05 + pose.chestPitch * 0.3, -0.7, 0.9),
+      clamp(
+        this.velocity.z * 0.06 - vertical * 0.05 + pose.chestPitch * 0.3 + open * 0.45,
+        -0.7,
+        0.9,
+      ),
       step,
     );
     const scarf = {
@@ -526,12 +543,14 @@ export class FighterMotion {
     legs: number;
     /** How much the idle carry (sword lag, air trunk) applies. */
     carry: number;
+    /** Amplitude of a trembling grip: a full charge, or a late cancel being held. */
+    strain: number;
   } {
     const progress = f.modeDuration > 0 ? clamp01(f.modeTime / f.modeDuration) : 0;
     const guard = this.sided(
       this.atEase > 0.001 ? blendPose(GUARD, SHOULDER, easeInOut(this.atEase)) : GUARD,
     );
-    const result = { pose: guard, at: 0, cutting: 0, planted: 1, legs: 1, carry: 1 };
+    const result = { pose: guard, at: 0, cutting: 0, planted: 1, legs: 1, carry: 1, strain: 0 };
     const attack = f.attack;
     switch (f.mode) {
       case "charge":
@@ -559,12 +578,13 @@ export class FighterMotion {
                 ? 1 + progress
                 : 2 + progress;
         result.pose = this.sided(attackPose(attack, at, f.charge));
+        if (f.mode === "recovery") result.pose = this.exposedPose(result.pose, f, progress);
         result.at = at;
-        // The cut proper: the end of the wind-up, the whole active window, the follow-through.
-        result.cutting =
-          f.mode === "charge" ? 0 : clamp01((at - 0.72) / 0.2) * clamp01((2.42 - at) / 0.3);
+        // The cut is exactly the active window: no trail before the blade can hit, none after.
+        result.cutting = f.mode === "active" ? 1 : 0;
         result.planted = f.mode === "charge" ? 0.85 : 0;
         result.carry = f.mode === "charge" ? 0.5 : 0.15;
+        if (f.mode === "charge") result.strain = f.charge * f.charge * 0.011;
         // The riser authors its own airborne legs until it has topped out.
         result.legs = attack === "rising" && at >= 1 && at < 2.5 ? 0 : 1;
         return result;
@@ -628,15 +648,11 @@ export class FighterMotion {
         return result;
       }
       case "cancel": {
-        // Arresting the blade: the knees and back take the load, then let it go.
-        const heavy = clamp01((f.modeDuration - RULES.cancelDuration) / 0.2);
-        const brace = Math.sin(progress * Math.PI);
-        const braced = clonePose(guard);
-        braced.hip.y -= (0.05 + 0.08 * heavy) * brace;
-        braced.hipPitch += 0.06 * heavy * brace;
-        braced.chestPitch += (0.06 + 0.1 * heavy) * brace;
-        braced.headPitch -= 0.05 * heavy * brace;
-        result.pose = braced;
+        // Recoiling from the called-off cut, held for as long as the lag lasts, then the guard.
+        const lag = cancelLag(f);
+        result.pose = cancelPose(guard, this.sided(CHECK), progress, lag);
+        // Straining against the blade's momentum while a late cancel holds the check.
+        if (progress <= cancelHold(lag)) result.strain = lag * 0.014;
         result.planted = 0.3;
         result.carry = 0.6;
         return result;
@@ -655,6 +671,29 @@ export class FighterMotion {
         return result;
       }
     }
+  }
+
+  /**
+   * A recovery stays over-committed until the fighter can act: hips low, trunk folded over the
+   * spent blade, head down. It eases in behind the follow-through and holds to the last frame,
+   * so the guard comes back only when idle begins. A whiff, the opening a punish is for, lurches
+   * on after the blade and wobbles; a swing that connected sags less.
+   */
+  private exposedPose(pose: Pose, f: Fighter, progress: number): Pose {
+    const open = exposure(f) * clamp01(progress / 0.25);
+    if (open <= 0) return pose;
+    const p = clonePose(pose);
+    p.hip.y -= 0.07 * open;
+    p.hipPitch += 0.06 * open;
+    p.chestPitch += 0.2 * open;
+    p.headPitch += 0.14 * open;
+    if (whiffed(f)) {
+      const lurch = Math.sin(clamp01(progress / 0.45) * Math.PI);
+      p.hip.z += 0.09 * lurch;
+      p.chestPitch += 0.1 * lurch;
+      p.chestRoll += Math.sin(progress * TAU * 1.5) * 0.07 * (1 - progress);
+    }
+    return p;
   }
 
   /** A low, driving dodge: one leg pushes, the other reaches. */

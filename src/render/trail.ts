@@ -5,6 +5,14 @@ import type { V3 } from "./math3";
 
 const SEGMENTS = 30;
 const LIFE = 0.17;
+/**
+ * Once the cut is over the ribbon is not left to fade on its own: it ages this many times faster
+ * and at half strength, so it is gone within about two frames of the recovery starting and never
+ * lingers looking like a live blade (`spentLife`).
+ */
+export const SPENT_DRAIN = 5;
+/** Seconds a ribbon outlives its cut: everything is gone this long after the strength drops. */
+export const spentLife = (): number => LIFE / SPENT_DRAIN;
 
 interface Sample {
   base: V3;
@@ -25,6 +33,8 @@ export class SwordTrail {
   private readonly samples: Sample[] = [];
   private lastBase: V3 | null = null;
   private lastTip: V3 | null = null;
+  /** The cut has ended: what is left of the ribbon drains fast and dim. */
+  private spent = false;
 
   constructor(parent: Container3D, color: number) {
     const normals = new Float32Array(this.positions.length);
@@ -59,12 +69,19 @@ export class SwordTrail {
     parent.addChild(this.mesh);
   }
 
-  /** `base` and `tip` are world positions of the cutting edge; `strength` 0 lets it fade out. */
+  /**
+   * `base` and `tip` are world positions of the cutting edge. `strength` is 1 while the swing is
+   * live; at 0 no new ribbon is laid and what is left drains away within `spentLife()`.
+   */
   update(base: V3, tip: V3, strength: number, dt: number): void {
-    for (const sample of this.samples) sample.age += dt;
+    const cutting = strength > 0.02;
+    if (cutting) this.spent = false;
+    else if (this.samples.length) this.spent = true;
+    const aging = this.spent ? dt * SPENT_DRAIN : dt;
+    for (const sample of this.samples) sample.age += aging;
     while (this.samples.length && this.samples[this.samples.length - 1]!.age > LIFE)
       this.samples.pop();
-    if (strength > 0.02 && dt > 0) {
+    if (cutting && dt > 0) {
       if (this.lastBase && this.lastTip && this.samples.length) {
         // Slow frames would leave a faceted fan: fill the gap along the arc the blade swung.
         const from = norm(sub(this.lastTip, this.lastBase));
@@ -101,6 +118,7 @@ export class SwordTrail {
     const count = this.samples.length;
     this.mesh.visible = count >= 2;
     if (count < 2) return;
+    const dim = this.spent ? 0.5 : 1;
     for (let i = 0; i <= SEGMENTS; i++) {
       const sample = this.samples[Math.min(i, count - 1)]!;
       const life = Math.min(1, sample.age / LIFE);
@@ -113,7 +131,7 @@ export class SwordTrail {
       this.positions[p + 3] = sample.tip.x;
       this.positions[p + 4] = sample.tip.y;
       this.positions[p + 5] = sample.tip.z;
-      const fade = i >= count ? 0 : (1 - life) * (1 - life);
+      const fade = i >= count ? 0 : (1 - life) * (1 - life) * dim;
       const c = i * 8;
       this.colors[c] = this.colors[c + 1] = this.colors[c + 2] = 1;
       this.colors[c + 3] = fade * 0.12;
@@ -124,9 +142,15 @@ export class SwordTrail {
     this.geometry.attributes.aColor!.buffer.update();
   }
 
+  /** Whether any of the ribbon is still on screen. */
+  get visible(): boolean {
+    return this.mesh.visible;
+  }
+
   clear(): void {
     this.samples.length = 0;
     this.lastBase = this.lastTip = null;
+    this.spent = false;
     this.mesh.visible = false;
   }
 

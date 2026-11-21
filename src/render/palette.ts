@@ -127,6 +127,10 @@ export const PALETTE = {
     bolt: 0x2f7bff,
     boltCore: 0xa8ecff,
     flash: 0xffffff,
+    /** A called-off swing: the halo breaking into dark shards (never the pale dust of a jump). */
+    snuff: 0x4b3fa8,
+    /** An invulnerable dodge: ink rings and speed lines, no sparks, so it never reads as a hit. */
+    evade: 0x2a2550,
   },
 
   label: {
@@ -145,6 +149,14 @@ export const PALETTE = {
     leather: 0x8a5a44,
     gold: 0xffc93c,
     steel: 0xeef3ff,
+    /**
+     * Blade states, told apart by brightness as much as by hue: a dark spent blade while the
+     * fighter is open to a punish, a warm breathing glow while the swing can still be called off,
+     * and a white-hot core in a hot glow only while it can hit.
+     */
+    bladeSpent: 0x4b4f7c,
+    bladeWarm: 0xffb300,
+    bladeHot: 0xff5a1f,
     fuller: 0x9aa6d6,
     iron: 0x6b6fa3,
     grip: 0x45315a,

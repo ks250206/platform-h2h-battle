@@ -698,6 +698,52 @@ export const CLASH = make({
   footRYaw: -0.3,
 });
 
+/**
+ * A swing called off: the body recoils from its own cut, hips thrown back and low, chest leaning
+ * away, the front heel braking, and the blade yanked back down behind and held just off the
+ * floor. Everything moves away from where the cut was going, the opposite of a follow-through,
+ * so a cancel never reads as a finished swing.
+ */
+export const CHECK = make({
+  hip: v3(0, -0.15, -0.14),
+  hipPitch: -0.08,
+  lowerYaw: -0.34,
+  chestYaw: -0.5,
+  chestPitch: -0.12,
+  headYaw: 0.4,
+  headPitch: 0.08,
+  gripAt: v3(-0.3, 0.8, -0.1),
+  dir: dirYE(-160, -6),
+  footL: v3(0.17, 0, 0.3),
+  footLYaw: 0.4,
+  footLPitch: -0.38,
+  footR: v3(-0.21, 0, -0.24),
+  footRYaw: -0.32,
+});
+
+/** Share of a cancel (0-1) spent holding the check before the fighter rises into its guard. */
+export const cancelHold = (lag: number): number => 0.48 + 0.3 * lag;
+
+/**
+ * The cancel lag, start to finish (`progress` 0-1 of the cancel). The check is held while the
+ * lag lasts, lower and longer for a late cancel (`lag` 0-1), and the guard is only reached as
+ * the fighter becomes free to act, so the extra lag of a late cancel shows rather than hides.
+ */
+export function cancelPose(guard: Pose, checked: Pose, progress: number, lag: number): Pose {
+  const hold = cancelHold(lag);
+  const braced = make(
+    {
+      hip: v3(checked.hip.x, checked.hip.y - 0.08 * lag, checked.hip.z - 0.04 * lag),
+      chestPitch: checked.chestPitch - 0.08 * lag,
+      headPitch: checked.headPitch + 0.04 * lag,
+      footLPitch: checked.footLPitch - 0.1 * lag,
+    },
+    checked,
+  );
+  if (progress <= hold) return braced;
+  return blendPose(braced, guard, easeInOut((progress - hold) / (1 - hold)));
+}
+
 const GRAB_READY = make(
   {
     hip: v3(0, -0.1, -0.04),

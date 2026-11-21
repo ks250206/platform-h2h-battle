@@ -6,6 +6,7 @@ import {
   DirectionalLight,
   Mesh3D,
   Plane,
+  TorusGeometry,
   Vector3,
   View3D,
 } from "@pixi/3d";
@@ -26,6 +27,7 @@ import {
 import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
+import { combatCue } from "./combatCues";
 import { MeshLibrary } from "./meshes";
 import { norm, qLook } from "./math3";
 import { FighterMotion } from "./motion";
@@ -192,6 +194,10 @@ interface Impact {
   cracks: Mesh3D[];
   sparks: Spark[];
   bolts: Bolt[];
+  /** Rings opening from radius `from` to `to` over the impact's life. */
+  rings: { mesh: Mesh3D; from: number; to: number }[];
+  /** Speed lines sliding along the floor, thinning as they go. */
+  streaks: { mesh: Mesh3D; vx: number; vz: number; length: number }[];
   flash: Mesh3D | null;
   age: number;
   life: number;
@@ -239,6 +245,19 @@ export class ArenaRenderer {
   private readonly windLines: Mesh3D[] = [];
   private readonly rigAssets = new RigAssets();
   private readonly impacts: Impact[] = [];
+  /** A thicker ring than the library's, for the invulnerable-dodge rings. */
+  private readonly evadeRing = new TorusGeometry({
+    radius: 1,
+    tube: 0.05,
+    radialSegments: 4,
+    tubularSegments: 40,
+  });
+  /**
+   * Each slot's dodge count (`playerStats`) when last drawn. It rises exactly when a sword or a
+   * bomb passes through a fighter's invulnerable step, on whatever tick that happened, so the
+   * dodge is shown even when several ticks fall between two frames.
+   */
+  private readonly dodgesSeen = new Map<number, number>();
   /** Camera shake energy; decays every frame. */
   private shake = 0;
   /** Development aid: a fixed close-up camera for inspecting animation. */
@@ -689,7 +708,9 @@ export class ArenaRenderer {
         ? { ...f, mode: "idle", attack: null, hitstop: 0 }
         : f;
     const frame = view.motion.update(shown, dt, { floor: onPlatform, atEase });
-    applyFrame(view.rig, frame, shown, this.time);
+    // How the combat state reads (combatCues.ts): read from this frame's state, never smoothed.
+    const cue = combatCue(shown, this.time);
+    applyFrame(view.rig, frame, shown, this.time, cue);
     view.trail.update(frame.bladeBase, frame.bladeTip, f.mode === "dead" ? 0 : frame.trail, dt);
     for (const event of frame.events) this.spawnImpact(event);
     if (state.phase === "menu") {
@@ -711,6 +732,7 @@ export class ArenaRenderer {
     view.rig.squash.visible = !view.protected || Math.floor(this.time * 11) % 2 === 0;
     view.rig.shadow.visible &&= onPlatform && !this.shadowsActive;
     view.rig.footRing.visible &&= onPlatform;
+    view.rig.brokenRing.visible &&= onPlatform;
     view.rig.badge.visible &&= onPlatform;
     view.rig.heading.visible &&= onPlatform && state.phase !== "menu";
     const point = this.view.worldToScreen({
@@ -855,12 +877,18 @@ export class ArenaRenderer {
             ? effect.size > 1.15
               ? PALETTE.fx.hitHeavy
               : PALETTE.fx.hit
-            : effect.kind === "jump" || effect.kind === "land" || effect.kind === "cancel"
-              ? PALETTE.fx.dust
-              : effect.color;
+            : effect.kind === "cancel"
+              ? PALETTE.fx.snuff
+              : effect.kind === "jump" || effect.kind === "land"
+                ? PALETTE.fx.dust
+                : effect.color;
     const material = a.material(color, 1, 0.55);
     const count =
-      effect.kind === "ko" || effect.kind === "bomb" ? 12 : effect.kind === "clash" ? 10 : 6;
+      effect.kind === "ko" || effect.kind === "bomb"
+        ? 12
+        : effect.kind === "clash" || effect.kind === "cancel"
+          ? 10
+          : 6;
     const particles = Array.from({ length: count }, (_, i) =>
       a.mesh(root, i % 2 ? a.cube : a.pebble, material, 0, 0, 0, 0.08, 0.08, 0.08),
     );
@@ -883,6 +911,11 @@ export class ArenaRenderer {
   private updateEffect(effect: Effect): void {
     const view = this.effectView(effect);
     const progress = Math.max(0, Math.min(1, 1 - effect.life / effect.duration));
+    if (effect.kind === "cancel") {
+      view.root.position.set(effect.x, effect.y + 0.04, effect.z);
+      this.updateCancelEffect(view, progress);
+      return;
+    }
     const large = effect.kind === "bomb" || effect.kind === "ko";
     const radius = effect.size * (large ? 2.2 : 1.1) * ease(progress);
     const remaining = Math.max(0.01, 1 - progress);
@@ -911,6 +944,85 @@ export class ArenaRenderer {
     }
   }
 
+  /**
+   * A called-off swing: the charge halo breaks into dark shards that drift apart and sink, low
+   * round the feet. It never expands into a ring or throws particles up, so it reads neither as a
+   * hit nor as the dust of a jump, and it leaves the fighter's broken foot ring behind it.
+   */
+  private updateCancelEffect(view: EffectView, progress: number): void {
+    view.ring.visible = false;
+    const remaining = Math.max(0.01, 1 - progress);
+    const radius = 0.62 + 0.3 * ease(progress);
+    for (const [i, shard] of view.particles.entries()) {
+      const angle = (i / view.particles.length) * TAU;
+      shard.position.set(
+        Math.sin(angle) * radius,
+        0.28 * (1 - progress) + 0.03,
+        Math.cos(angle) * radius,
+      );
+      // Each shard lies along the circle it broke from (its long side is local X).
+      shard.rotation.set(0, angle, 0);
+      shard.scale.set(0.2 * remaining, 0.04, 0.05);
+    }
+  }
+
+  /**
+   * An invulnerable dodge: two ink rings opening round the dodger where the blade (or blast)
+   * passed through, and speed lines left behind along the step. No sparks, flash or shake, so it
+   * can never be mistaken for a hit or a clash.
+   */
+  private spawnEvade(f: Fighter): void {
+    if (this.impacts.length > 40) return;
+    const a = this.assets;
+    const root = new Container3D();
+    root.position.set(f.x, Math.max(0, f.y), f.z);
+    this.scene.addChild(root);
+    const impact = this.blankImpact(root);
+    impact.life = 0.34;
+    const material = a.material(PALETTE.fx.evade, 0.85, 0.3);
+    for (const [height, from, to] of [
+      [0.95, 0.4, 1.05],
+      [0.45, 0.3, 0.8],
+    ] as const) {
+      const ring = a.mesh(root, this.evadeRing, material, 0, height, 0, from);
+      impact.rings.push({ mesh: ring, from, to });
+    }
+    const travel = Math.hypot(f.stepDirection.x, f.stepDirection.z);
+    const back =
+      travel > 0.01
+        ? { x: -f.stepDirection.x / travel, z: -f.stepDirection.z / travel }
+        : { x: -Math.sin(f.facing), z: -Math.cos(f.facing) };
+    const yaw = Math.atan2(back.x, back.z);
+    for (let i = 0; i < 4; i++) {
+      const across = (i - 1.5) * 0.22;
+      const line = a.mesh(
+        root,
+        a.cube,
+        material,
+        back.x * 0.5 + back.z * across,
+        0.35 + (i % 2) * 0.5,
+        back.z * 0.5 - back.x * across,
+        0.035,
+        0.035,
+        0.6,
+      );
+      line.rotation.y = yaw;
+      impact.streaks.push({ mesh: line, vx: back.x * 2.4, vz: back.z * 2.4, length: 0.6 });
+    }
+    this.impacts.push(impact);
+  }
+
+  /** Shows the invulnerable dodges made since the last frame (`dodgesSeen`). */
+  private showDodges(state: GameState): void {
+    for (const f of state.fighters) {
+      const count = state.playerStats[f.id]?.dodges ?? 0;
+      const seen = this.dodgesSeen.get(f.id);
+      this.dodgesSeen.set(f.id, count);
+      if (seen !== undefined && count > seen && f.mode !== "dead" && state.phase !== "menu")
+        this.spawnEvade(f);
+    }
+  }
+
   render(state: GameState, dt: number, showHitboxes = false): void {
     if (this.destroyed) return;
     if (this.previousTrainingState && this.previousTrainingState !== state) {
@@ -922,6 +1034,7 @@ export class ArenaRenderer {
       this.impacts.length = 0;
       for (const effect of this.effects.values()) effect.root.destroy({ children: true });
       this.effects.clear();
+      this.dodgesSeen.clear();
       this.shake = 0;
     }
     this.previousTrainingState = state.mode === "training" && state.phase !== "menu" ? state : null;
@@ -986,6 +1099,7 @@ export class ArenaRenderer {
       }
     }
     for (const effect of state.effects) this.updateEffect(effect);
+    this.showDodges(state);
     this.updateImpacts(visualDelta);
     const showDebug = state.mode === "training" && state.phase !== "menu" && showHitboxes;
     if (showDebug) {
@@ -1250,6 +1364,8 @@ export class ArenaRenderer {
       cracks: [],
       sparks: [],
       bolts: [],
+      rings: [],
+      streaks: [],
       flash: null,
       age: 0,
       life: 0.5,
@@ -1397,6 +1513,17 @@ export class ArenaRenderer {
           segment.scale.set(thick, length, thick);
           from = to;
         });
+      }
+      for (const ring of impact.rings) {
+        const radius = ring.from + (ring.to - ring.from) * ease(t);
+        ring.mesh.visible = t < 0.85;
+        ring.mesh.scale.set(radius, 1.6 * (1 - t) + 0.2, radius);
+      }
+      for (const streak of impact.streaks) {
+        const p = streak.mesh.position;
+        streak.mesh.position.set(p.x + streak.vx * dt, p.y, p.z + streak.vz * dt);
+        const thin = Math.max(0.001, 1 - t);
+        streak.mesh.scale.set(0.035 * thin, 0.035 * thin, streak.length * (0.5 + 0.5 * thin));
       }
       if (impact.flash) {
         const pop = impact.age / 0.07;
@@ -1610,6 +1737,7 @@ export class ArenaRenderer {
     for (const impact of this.impacts) impact.root.destroy({ children: true });
     this.impacts.length = 0;
     this.rigAssets.destroy();
+    this.evadeRing.destroy(true);
     this.stageShapes.destroy();
     this.assets.destroy();
     this.skyTexture.destroy(true);
