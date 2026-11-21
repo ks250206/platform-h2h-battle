@@ -97,6 +97,23 @@ const frames = (page: Page, count: number) =>
       }),
     count,
   );
+/**
+ * Holds a pad button for one animation frame inside the page, then releases it for two frames.
+ * Keeping the hold to one frame prevents slow software-WebGL CI runners from crossing NAV_DELAY
+ * (380ms) and firing an unintended menu auto-repeat step.
+ */
+const tapPad = (page: Page, index: number, which: number) =>
+  page.evaluate(
+    ([i, b]) =>
+      new Promise<void>((resolve) => {
+        window.__padButton(i, b, true);
+        requestAnimationFrame(() => {
+          window.__padButton(i, b, false);
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      }),
+    [index, which] as const,
+  );
 const device = (page: Page, slot: number) =>
   page.locator(`.player-row[data-slot="${slot}"] .player-device`);
 
@@ -259,13 +276,8 @@ test("a pad alone picks a look: Y opens, the d-pad and A choose, B cancels, Star
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
   await page.evaluate(() => window.__padConnect(0));
   await frames(page, 5);
-  /** One full press: the menu reads the pads once a frame. */
-  const press = async (which: number) => {
-    await button(page, 0, which, true);
-    await frames(page, 4);
-    await button(page, 0, which, false);
-    await frames(page, 4);
-  };
+  /** One single-frame press: never crosses NAV_DELAY even on slow CI frames. */
+  const press = (which: number) => tapPad(page, 0, which);
   const saved = () =>
     page.evaluate(() => JSON.parse(localStorage.getItem("bramble.match.v1") ?? "{}"));
   const focused = () =>
@@ -430,12 +442,7 @@ test("a pad walks the title menu to the stage buttons and picks a stage", async 
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
   await page.evaluate(() => window.__padConnect(0));
   await frames(page, 5);
-  const press = async (which: number) => {
-    await button(page, 0, which, true);
-    await frames(page, 3);
-    await button(page, 0, which, false);
-    await frames(page, 3);
-  };
+  const press = (which: number) => tapPad(page, 0, which);
   const focusedStage = () =>
     page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.stage ?? null);
   // The pad joins first (its A is the join shortcut until it plays), then steers the menu.

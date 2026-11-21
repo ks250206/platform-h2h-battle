@@ -2685,13 +2685,14 @@ kbd {
   }
   /* Portrait: the column sits on the bottom of the band, under the arena, and grows upwards. */
   .menu-content {
-    top: max(70px, calc(env(safe-area-inset-top) + 56px));
+    top: max(62px, calc(env(safe-area-inset-top) + 48px));
     left: 26px;
     right: 26px;
-    bottom: max(62px, calc(env(safe-area-inset-bottom) + 40px));
+    bottom: max(42px, calc(env(safe-area-inset-bottom) + 26px));
     width: auto;
     max-width: 420px;
     margin: 0 auto;
+    padding-bottom: 4px;
   }
   .menu-content::after {
     flex: 0 0 0;
@@ -2701,9 +2702,9 @@ kbd {
   }
   /* The headline drops to one line to make room for the match options. */
   h1 {
-    font-size: 26px;
-    line-height: 1.4;
-    margin: 13px 0 9px;
+    font-size: 22px;
+    line-height: 1.3;
+    margin: 6px 0 6px;
   }
   h1 br {
     display: none;
@@ -2718,17 +2719,38 @@ kbd {
     display: none;
   }
   .mode-option {
-    padding-top: 9px;
-    padding-bottom: 11px;
+    padding-top: 6px;
+    padding-bottom: 7px;
   }
   .mode-description {
-    margin-bottom: 12px;
+    margin: 5px 0 7px;
+    font-size: 10px;
   }
   .match-options {
-    margin-bottom: 14px;
+    margin-bottom: 8px;
+    padding: 7px 10px;
+  }
+  .match-options-head {
+    margin-bottom: 4px;
+  }
+  .match-options-body {
+    gap: 4px;
+  }
+  .match-set-format .segmented button {
+    font-size: 9px;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  .stage-detail {
+    display: grid;
+    padding: 5px 8px;
+    gap: 2px;
+  }
+  .stage-detail p {
+    line-height: 1.45;
   }
   .start-button {
-    padding: 16px 20px;
+    padding: 12px 18px;
   }
   .menu-features {
     display: none;
@@ -2736,18 +2758,13 @@ kbd {
   .arena-caption {
     display: none;
   }
-  /* No room for the card beside the preview: the stage's words go under its buttons, as prose
-     (the chips say the same in symbols). */
-  .stage-detail {
-    display: grid;
-  }
   .stage-detail .gimmick-chips {
     display: none;
   }
   .menu-bottom {
     left: 24px;
     right: 24px;
-    bottom: max(20px, env(safe-area-inset-bottom));
+    bottom: max(12px, env(safe-area-inset-bottom));
     font-size: 7px;
   }
   .menu-bottom span:nth-child(2) {
