@@ -30,6 +30,8 @@ export interface Fighter {
   species: Species;
   color: number;
   human: boolean;
+  /** 1-based player number among the humans of this match (slot order); null for a CPU. */
+  player: number | null;
   x: number;
   y: number;
   z: number;
@@ -154,6 +156,9 @@ export interface PlayerInput {
   cancel: boolean;
   grab: boolean;
 }
+
+/** One input per human fighter, keyed by fighter id. */
+export type PlayerInputs = Partial<Record<number, PlayerInput>>;
 
 export const emptyInput = (): PlayerInput => ({
   move: { x: 0, z: 0 },

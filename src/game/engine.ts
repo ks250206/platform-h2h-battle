@@ -1,4 +1,10 @@
-import { DEFAULT_MATCH_OPTIONS, levelFor, sanitizeMatchOptions, type MatchOptions } from "./match";
+import {
+  DEFAULT_MATCH_OPTIONS,
+  humanSlots,
+  levelFor,
+  sanitizeMatchOptions,
+  type MatchOptions,
+} from "./match";
 import { AI_LEVELS, ATTACKS, RULES } from "./tuning";
 import {
   angleDelta,
@@ -21,6 +27,7 @@ import {
   type GameState,
   type MatchMode,
   type PlayerInput,
+  type PlayerInputs,
   type Vec2,
 } from "./types";
 
@@ -54,12 +61,15 @@ const CAST = [
 ];
 
 function makeFighter(id: number, count: number, options: MatchOptions): Fighter {
+  // Player numbers follow slot order: the first human slot is P1.
+  const player = humanSlots(options, count).findIndex((slot) => slot.id === id) + 1;
   const theta =
     count === 2 ? (id === 0 ? -Math.PI / 2 : Math.PI / 2) : (id * Math.PI) / 2 - Math.PI / 2;
   return {
     ...CAST[id],
     id,
-    human: id === 0,
+    human: player > 0,
+    player: player > 0 ? player : null,
     x: Math.sin(theta) * 3.5,
     z: Math.cos(theta) * 3.5,
     y: 0,
@@ -112,8 +122,9 @@ export class BattleEngine {
   private nextBomb = RULES.bombStart as number;
   private inputs = new Map<number, PlayerInput>();
   private timeRemainder = 0;
-  private pendingInput = emptyInput();
-  private options: MatchOptions = { ...DEFAULT_MATCH_OPTIONS, overrides: {} };
+  /** Each human's input, with button presses held until a simulation tick has consumed them. */
+  private pending = new Map<number, PlayerInput>();
+  private options: MatchOptions = sanitizeMatchOptions(DEFAULT_MATCH_OPTIONS);
 
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
@@ -152,7 +163,11 @@ export class BattleEngine {
       messageTime: 0,
       seed,
       pausedFrom: "playing",
-      options: { ...this.options, overrides: { ...this.options.overrides } },
+      options: {
+        ...this.options,
+        controls: { ...this.options.controls },
+        overrides: { ...this.options.overrides },
+      },
       stats: { hits: 0, clashes: 0, dodges: 0, maxDamage: 0 },
     };
   }
@@ -167,12 +182,12 @@ export class BattleEngine {
     this.bombId = 0;
     this.timeRemainder = 0;
     this.inputs.clear();
-    this.pendingInput = emptyInput();
+    this.pending.clear();
   }
 
   pause(): void {
     if (this.state.phase === "playing" || this.state.phase === "countdown") {
-      this.pendingInput = emptyInput();
+      this.pending.clear();
       this.state.pausedFrom = this.state.phase;
       this.state.phase = "paused";
     }
@@ -186,41 +201,54 @@ export class BattleEngine {
   }
 
   /** Fixed substeps keep sword contacts stable across refresh rates and slow frames. */
-  update(dt: number, input: PlayerInput = emptyInput()): void {
+  /**
+   * `input` is one input per human fighter keyed by fighter id. A bare `PlayerInput` is taken as
+   * the first human's, which is all a single-player match needs.
+   */
+  update(dt: number, input: PlayerInput | PlayerInputs = emptyInput()): void {
     if (!Number.isFinite(dt) || dt <= 0) return;
     if (
       this.state.phase === "paused" ||
       this.state.phase === "menu" ||
       this.state.phase === "ended"
     ) {
-      this.pendingInput = emptyInput();
+      this.pending.clear();
       this.timeRemainder = 0;
       return;
     }
-    this.pendingInput = {
-      ...input,
-      attackPressed: input.attackPressed ?? this.pendingInput.attackPressed,
-      jump: input.jump || this.pendingInput.jump,
-      step: input.step || this.pendingInput.step,
-      cancel: input.cancel || this.pendingInput.cancel,
-      grab: input.grab || this.pendingInput.grab,
-    };
+    const humans = this.state.fighters.filter((f) => f.human);
+    const given: PlayerInputs =
+      "move" in input ? (humans[0] ? { [humans[0].id]: input as PlayerInput } : {}) : input;
+    for (const f of humans) {
+      const now = given[f.id] ?? emptyInput();
+      const held = this.pending.get(f.id) ?? emptyInput();
+      this.pending.set(f.id, {
+        ...now,
+        attackPressed: now.attackPressed ?? held.attackPressed,
+        jump: now.jump || held.jump,
+        step: now.step || held.step,
+        cancel: now.cancel || held.cancel,
+        grab: now.grab || held.grab,
+      });
+    }
     this.timeRemainder += Math.min(dt, 0.1);
     while (this.timeRemainder >= RULES.fixedStep - 1e-8) {
-      this.tick(RULES.fixedStep, this.pendingInput);
-      this.pendingInput = {
-        ...input,
-        attackPressed: null,
-        jump: false,
-        step: false,
-        cancel: false,
-        grab: false,
-      };
+      this.tick(RULES.fixedStep, this.pending);
+      for (const f of humans) {
+        this.pending.set(f.id, {
+          ...(given[f.id] ?? emptyInput()),
+          attackPressed: null,
+          jump: false,
+          step: false,
+          cancel: false,
+          grab: false,
+        });
+      }
       this.timeRemainder -= RULES.fixedStep;
     }
   }
 
-  private tick(dt: number, playerInput: PlayerInput): void {
+  private tick(dt: number, playerInputs: ReadonlyMap<number, PlayerInput>): void {
     const state = this.state;
     if (state.phase === "paused" || state.phase === "ended" || state.phase === "menu") return;
     if (state.phase === "countdown") {
@@ -240,7 +268,7 @@ export class BattleEngine {
     this.inputs.clear();
     for (const f of state.fighters) {
       if ((f.mode as Fighter["mode"]) === "dead") continue;
-      this.inputs.set(f.id, f.human ? playerInput : this.ai(f, dt));
+      this.inputs.set(f.id, f.human ? (playerInputs.get(f.id) ?? emptyInput()) : this.ai(f, dt));
     }
     for (const f of state.fighters) {
       if ((f.mode as Fighter["mode"]) === "dead") continue;

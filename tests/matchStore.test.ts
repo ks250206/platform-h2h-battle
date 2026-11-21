@@ -22,6 +22,7 @@ describe("match options store", () => {
   test("starts from the defaults when nothing is saved", () => {
     expect(loadMatchOptions(memoryStorage())).toEqual(DEFAULT_MATCH_OPTIONS);
     expect(createMatchStore(memoryStorage()).get()).toEqual({
+      controls: { 0: "keyboard" },
       stocks: 3,
       difficulty: "normal",
       overrides: {},
@@ -41,11 +42,13 @@ describe("match options store", () => {
     const store = createMatchStore(storage);
     store.set({ stocks: 1, difficulty: "hard", overrides: { 2: "easy" } });
     expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!)).toEqual({
+      controls: { 0: "keyboard" },
       stocks: 1,
       difficulty: "hard",
       overrides: { 2: "easy" },
     });
     expect(createMatchStore(storage).get()).toEqual({
+      controls: { 0: "keyboard" },
       stocks: 1,
       difficulty: "hard",
       overrides: { 2: "easy" },
@@ -61,12 +64,14 @@ describe("match options store", () => {
   test("bad fields are replaced one by one, good ones kept", () => {
     const stored = JSON.stringify({ stocks: 9, difficulty: "hard", overrides: "x" });
     expect(loadMatchOptions(memoryStorage(stored))).toEqual({
+      controls: { 0: "keyboard" },
       stocks: 3,
       difficulty: "hard",
       overrides: {},
     });
     const other = JSON.stringify({ stocks: 2, difficulty: "insane", overrides: { 1: "mega" } });
     expect(loadMatchOptions(memoryStorage(other))).toEqual({
+      controls: { 0: "keyboard" },
       stocks: 2,
       difficulty: "normal",
       overrides: {},

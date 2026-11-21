@@ -7,7 +7,24 @@ export const AI_LEVEL_IDS: readonly AiLevel[] = ["easy", "normal", "hard"];
 /** Lives per fighter the menu offers. */
 export const STOCK_CHOICES = [1, 2, 3, 4, 5] as const;
 
+/** What a human plays with. One keyboard (with the mouse, or the touch screen) and up to four pads. */
+export type ControlDevice = "keyboard" | "pad1" | "pad2" | "pad3" | "pad4";
+export const CONTROL_DEVICES: readonly ControlDevice[] = [
+  "keyboard",
+  "pad1",
+  "pad2",
+  "pad3",
+  "pad4",
+];
+/** Fighter slots a match can have: 2 in a duel, 4 in a rumble. */
+export const MAX_FIGHTERS = 4;
+
 export interface MatchOptions {
+  /**
+   * Which device drives which fighter, keyed by fighter id (0-3). A slot without an entry is a
+   * CPU. Slot 0 is always a human, and no device drives two slots.
+   */
+  controls: Partial<Record<number, ControlDevice>>;
   /** Lives per fighter. Training ignores it: everyone there respawns for ever. */
   stocks: number;
   /** Strength of every CPU that has no override. */
@@ -17,6 +34,7 @@ export interface MatchOptions {
 }
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
+  controls: { 0: "keyboard" },
   stocks: 3,
   difficulty: "normal",
   overrides: {},
@@ -28,6 +46,48 @@ export function levelFor(options: MatchOptions, fighterId: number): AiLevel {
 }
 
 const isLevel = (value: unknown): value is AiLevel => AI_LEVEL_IDS.includes(value as AiLevel);
+const isDevice = (value: unknown): value is ControlDevice =>
+  CONTROL_DEVICES.includes(value as ControlDevice);
+
+/** The gamepad index (0-3) a device stands for, or null for the keyboard. */
+export function padIndex(device: ControlDevice): number | null {
+  return device === "keyboard" ? null : Number(device.slice(3)) - 1;
+}
+
+/**
+ * The human slots of a match with `fighterCount` fighters, in slot order. Slots beyond the count
+ * are ignored (a duel has two), and slot 0 always has a device.
+ */
+export function humanSlots(
+  options: MatchOptions,
+  fighterCount: number,
+): { id: number; device: ControlDevice }[] {
+  const slots: { id: number; device: ControlDevice }[] = [];
+  for (let id = 0; id < Math.min(fighterCount, MAX_FIGHTERS); id++) {
+    const device = options.controls[id];
+    if (device) slots.push({ id, device });
+  }
+  if (slots[0]?.id !== 0) slots.unshift({ id: 0, device: firstFree(slots.map((s) => s.device)) });
+  return slots;
+}
+
+const firstFree = (taken: readonly ControlDevice[]): ControlDevice =>
+  CONTROL_DEVICES.find((device) => !taken.includes(device)) ?? "keyboard";
+
+function sanitizeControls(raw: unknown): Partial<Record<number, ControlDevice>> {
+  const controls: Partial<Record<number, ControlDevice>> = {};
+  const taken: ControlDevice[] = [];
+  if (raw && typeof raw === "object") {
+    for (let id = 0; id < MAX_FIGHTERS; id++) {
+      const device = (raw as Record<string, unknown>)[id];
+      if (!isDevice(device) || taken.includes(device)) continue;
+      controls[id] = device;
+      taken.push(device);
+    }
+  }
+  if (!controls[0]) controls[0] = firstFree(taken);
+  return controls;
+}
 
 /** Keeps every valid field of `raw` and replaces each missing, corrupt or out-of-range one. */
 export function sanitizeMatchOptions(raw: unknown): MatchOptions {
@@ -40,6 +100,7 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
     }
   }
   return {
+    controls: sanitizeControls(source.controls),
     stocks: (STOCK_CHOICES as readonly number[]).includes(source.stocks as number)
       ? (source.stocks as number)
       : DEFAULT_MATCH_OPTIONS.stocks,

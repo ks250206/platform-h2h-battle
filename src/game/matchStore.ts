@@ -20,6 +20,7 @@ function browserStorage(): MatchStorage | null {
 
 const copy = (options: MatchOptions): MatchOptions => ({
   ...options,
+  controls: { ...options.controls },
   overrides: { ...options.overrides },
 });
 
