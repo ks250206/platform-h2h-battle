@@ -36,6 +36,7 @@ const startMatch = (mode: MatchMode, options: MatchOptions) => {
   const playable = playableOptions(options, count, (pad) => pads.isConnected(pad));
   input?.reset();
   input?.newMatch();
+  lostPad = null;
   ui.setPadNotice(null);
   engine.start(mode, playable.options);
 };
@@ -56,6 +57,8 @@ settings.subscribe((next) => {
 });
 /** Development only: freezes the real-time loop so tooling can advance frames by hand. */
 let manualStepping = false;
+/** The pad (1-based) whose loss paused the match, until it is back or the match goes on. */
+let lostPad: number | null = null;
 
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
@@ -63,11 +66,13 @@ const pause = () => {
   else engine.pause();
 };
 const resume = () => {
+  lostPad = null;
   ui.setPadNotice(null);
   engine.resume();
 };
 /** A pad of the running match went away: pause and say which one. */
 const padLost = (padNumber: number) => {
+  lostPad = padNumber;
   engine.pause();
   ui.setPadNotice(`パッド${padNumber} の接続が切れました。つなぎ直してから再開してください。`);
 };
@@ -108,8 +113,11 @@ const ui = new GameUI(overlay, {
 ui.update(engine.state);
 pads.subscribe((connected) => {
   ui.setPads(connected);
-  // The pad that went away during the match is back.
-  if (engine.state.phase === "paused") ui.setPadNotice(null);
+  // The pad that went away during the match is back (another pad connecting changes nothing).
+  if (lostPad !== null && connected.includes(lostPad - 1)) {
+    lostPad = null;
+    ui.setPadNotice(null);
+  }
 });
 const padMenu = new PadMenu(overlay, pads, {
   phase: () => engine.state.phase,

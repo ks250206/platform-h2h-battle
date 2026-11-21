@@ -200,10 +200,10 @@ export class BattleEngine {
     this.state.phase = "menu";
   }
 
-  /** Fixed substeps keep sword contacts stable across refresh rates and slow frames. */
   /**
-   * `input` is one input per human fighter keyed by fighter id. A bare `PlayerInput` is taken as
-   * the first human's, which is all a single-player match needs.
+   * Advances the match in fixed substeps, which keeps sword contacts stable across refresh rates
+   * and slow frames. `input` is one input per human fighter keyed by fighter id. A bare
+   * `PlayerInput` is taken as the first human's, which is all a single-player match needs.
    */
   update(dt: number, input: PlayerInput | PlayerInputs = emptyInput()): void {
     if (!Number.isFinite(dt) || dt <= 0) return;
@@ -255,7 +255,15 @@ export class BattleEngine {
       state.countdown = Math.max(0, state.countdown - dt);
       if (state.countdown <= 0) {
         state.phase = "playing";
-        this.announce(state.mode === "training" ? "練習開始 — 相手は動きません" : "FIGHT");
+        // The practice partner stands still unless a second player has taken it.
+        const stillPartner = state.fighters.some((f) => !f.human);
+        this.announce(
+          state.mode !== "training"
+            ? "FIGHT"
+            : stillPartner
+              ? "練習開始 — 相手は動きません"
+              : "練習開始",
+        );
       }
       return;
     }

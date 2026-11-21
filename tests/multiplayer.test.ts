@@ -150,6 +150,19 @@ describe("several humans, one input each", () => {
     expect(pair.engine.state.message).not.toBe(warning);
     expect(pair.fighters.map((f) => f.mode)).toEqual(["idle", "idle"]);
   });
+
+  test("training says the partner stands still only when a CPU plays it", () => {
+    const opening = (controls: Controls) => {
+      const engine = new BattleEngine(4242);
+      engine.start("training", { controls });
+      for (let frame = 0; frame < 600 && engine.state.phase === "countdown"; frame++)
+        engine.update(DT);
+      expect(engine.state.phase).toBe("playing");
+      return engine.state.message;
+    };
+    expect(opening({ 0: "keyboard" })).toBe("練習開始 — 相手は動きません");
+    expect(opening({ 0: "keyboard", 1: "pad1" })).toBe("練習開始");
+  });
 });
 
 describe("humans stay human", () => {

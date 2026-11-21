@@ -17,7 +17,7 @@ export interface GameUICallbacks {
   onRestart: () => void;
   onMenu: () => void;
   onSound: (enabled: boolean) => void;
-  /** The remembered 対戦設定 (lives and CPU strength). */
+  /** The remembered 対戦設定 (who plays what, lives and CPU strength). */
   match: MatchStore;
   graphics: GraphicsSettingsBinding;
 }
@@ -324,7 +324,7 @@ export class GameUI {
           <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。</p>
           <section class="pad-help" aria-labelledby="pad-help-title">
             <h3 id="pad-help-title">GAMEPAD / パッド</h3>
-            <p class="pad-help-lead">パッドは4台まで、何人でも参加できます。キーボードとマウス（タッチ）はひとり分。タイトルでパッドの <kbd>A</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
+            <p class="pad-help-lead">パッドは4台まで、何人でも参加できます。キーボードとマウス（タッチ）はひとり分。タイトルでパッドの <kbd>A</kbd> か <kbd>Start</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
             <dl class="pad-table">
               <div><dt><kbd>RB</kbd></dt><dd>横振り</dd></div>
               <div><dt><kbd>RT</kbd></dt><dd>振り下ろし</dd></div>
