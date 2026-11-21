@@ -145,8 +145,8 @@ export class PadMenu {
         return {
           key: "ended",
           scopes: [panel],
-          primary: "[data-action='restart']",
-          start: click(".result-screen [data-action='restart']"),
+          primary: "[data-pad-primary]",
+          start: click(".result-screen [data-pad-primary]"),
         };
       }
       default:
