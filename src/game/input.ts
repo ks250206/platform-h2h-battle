@@ -13,7 +13,6 @@ import { humanSlots, padIndex, type ControlDevice } from "./match";
 import {
   anyPressed,
   isDown,
-  readStick,
   freshPadMemory,
   readPad,
   readStick,

@@ -29,6 +29,9 @@
 .tutorial-dialog::backdrop {
   background: var(--scrim);
 }
+#interface:has(.tutorial-dialog[open]) .pause-screen {
+  visibility: hidden;
+}
 .tutorial-dialog h2 {
   font-size: 1.4rem;
   margin-bottom: 12px;

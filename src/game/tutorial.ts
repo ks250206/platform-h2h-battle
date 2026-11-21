@@ -19,7 +19,7 @@ export const LESSONS = [
     recap: "突きは速くて長い。振り下ろしは重く、ためると威力と吹き飛びが増す。",
     steps: [
       "発生が速く、遠くに届く突きを短押しで当てる",
-      "間合いを詰め、重い振り下ろしを最大までためて当てる",
+      "間合いを詰め、重い振り下ろしを約0.9秒ためて当てる",
     ],
   },
   {
@@ -135,7 +135,7 @@ export class TutorialBattle extends BattleEngine {
     }
     if (id === "zone") {
       // The third warning of a short match announces a circle disjoint from the current one.
-      state.elapsed = 50;
+      state.elapsed = 49.05;
       state.arena.safeZone = safeZoneAt(state.arena.stageId, state.elapsed, state.rules.timeLimit);
       const zone = state.arena.safeZone;
       p.x = zone.x - zone.radius - 1;
@@ -192,7 +192,11 @@ export class TutorialBattle extends BattleEngine {
     const [p, rival] = this.state.fighters;
     const input = inputs.get(p.id) ?? emptyInput();
     if (this.awaitingAirStep) {
-      if (!input.step) return;
+      if (!input.step) {
+        if (input.jump || input.attackPressed || input.grab || input.cancel)
+          this.feedback = "空中で一時停止中：まずは足場方向へ回避を押そう。";
+        return;
+      }
       this.awaitingAirStep = false;
     }
     const before = {
@@ -203,8 +207,6 @@ export class TutorialBattle extends BattleEngine {
       bufferedStep: p.inputBuffer?.action === "step" && p.inputBuffer.age < INPUT_BUFFER_TICKS,
       x: p.x,
       z: p.z,
-      outside: p.outsideTime,
-      damage: p.damage,
       hits: this.state.playerStats[0].landedSwings,
       stocks: rival.stocks,
       ko: p.kills,
@@ -234,19 +236,26 @@ export class TutorialBattle extends BattleEngine {
         else if (this.step === 2) {
           const aim = input.aim;
           const heading = Math.atan2(rival.x - p.x, rival.z - p.z);
-          if (p.mode === "charge" && before.mode !== "charge") this.aimed = false;
-          if (aim && length(aim) > 0.05 && (p.mode === "charge" || p.mode === "windup"))
-            this.aimed =
-              Math.abs(angleDelta(Math.atan2(aim.x, aim.z), heading)) < 0.35 &&
-              Math.abs(angleDelta(p.facing, heading)) < 0.35;
-          if (this.aimed && hit) this.advance();
+          const facingRival = Math.abs(angleDelta(p.facing, heading)) < 0.35;
+          if (!facingRival) this.aimed = false;
+          else if (
+            aim &&
+            length(aim) > 0.05 &&
+            !input.step &&
+            (before.mode === "idle" || before.mode === "charge" || before.mode === "windup")
+          )
+            this.aimed = Math.abs(angleDelta(Math.atan2(aim.x, aim.z), heading)) < 0.35;
+          if (hit) {
+            if (this.aimed) this.advance();
+            else this.feedback = "相手へ照準（ロックオンまたは照準操作）を合わせて当てよう。";
+          }
         }
         break;
       case "attacks":
         if (
           hit &&
           ((this.step === 0 && p.attack === "thrust" && p.charge < 0.2) ||
-            (this.step === 1 && p.attack === "overhead" && p.charge === 1))
+            (this.step === 1 && p.attack === "overhead" && p.charge >= 0.85))
         )
           this.advance();
         else if (hit)
@@ -346,8 +355,8 @@ export class TutorialBattle extends BattleEngine {
         const zone = this.state.arena.safeZone;
         if (
           this.step === 0 &&
-          p.outsideTime > before.outside &&
-          p.damage > before.damage &&
+          p.outsideTime >= 0.6 &&
+          p.damage > 0 &&
           zone.motion === "warning" &&
           zone.destination
         ) {
@@ -363,12 +372,12 @@ export class TutorialBattle extends BattleEngine {
             this.enteredPreview = true;
           if (
             this.enteredPreview &&
-            zone.motion === "travel" &&
+            (zone.motion === "travel" || zone.motion === "hold") &&
             inside(p, this.destination) &&
             inside(p, zone)
           )
             this.advance();
-          else if (zone.motion === "hold")
+          else if (zone.motion === "hold" && !inside(p, zone))
             this.fail("予告された移動が終わりました。破線の円内に入り、実線の円が来るまで待とう。");
         }
         break;

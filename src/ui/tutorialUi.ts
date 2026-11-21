@@ -101,8 +101,9 @@ export class TutorialUi {
     this.hud.className = "tutorial-hud";
     this.hud.hidden = true;
     this.hud.innerHTML =
-      '<strong></strong><p aria-live="polite"></p><small></small><div><button data-tutor="retry">やり直す</button><button data-tutor="catalog">課題一覧</button></div>';
-    root.append(this.dialog, this.hud);
+      '<strong></strong><p aria-live="polite"></p><small></small><div><button type="button" data-tutor="retry">やり直す</button><button type="button" data-tutor="catalog">課題一覧</button></div>';
+    root.append(this.dialog);
+    root.querySelector(".game-hud")!.append(this.hud);
     const signal = this.abort.signal;
     root.addEventListener(
       "click",
@@ -220,6 +221,8 @@ export class TutorialUi {
       this.dialog.close();
       if (this.battle && this.battle.status !== "playing") this.show("result");
       else if (this.resumeOnBack) this.hooks.resume();
+      else if (this.battle?.state.phase === "paused")
+        this.root.querySelector<HTMLButtonElement>('.pause-panel [data-action="resume"]')?.focus();
       this.resumeOnBack = false;
     }
   }

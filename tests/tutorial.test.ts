@@ -29,7 +29,7 @@ function until(
   for (let i = 0; !predicate() && i < limit && b.status === "playing"; i++) tick(b, input);
   expect(predicate(), `${b.lesson.id} step ${b.step}, ${b.status}: ${b.feedback}`).toBe(true);
 }
-function swing(b: TutorialBattle, attack: AttackId, held = 0, aim = right) {
+function swing(b: TutorialBattle, attack: AttackId, held = 0, aim: PlayerInput["aim"] = right) {
   tick(b, { attackPressed: attack, attackHeld: attack, aim });
   tick(b, { attackHeld: attack, aim }, held);
   tick(b, { aim });
@@ -84,13 +84,18 @@ describe("independent lessons on the real fixed-step simulation", () => {
     tick(b, {}, 110);
     expect(b.state.stats.hits).toBe(1);
     expect(b.step).toBe(2);
+    expect(b.feedback).toContain("照準");
     approach(b, 2);
-    swing(b, "overhead");
-    until(b, () => b.status === "success", { aim: right });
+    // With lock-on off, releasing the aim key or stick leaves the fighter facing the rival.
+    tick(b, { aim: left }, 20);
+    tick(b, { aim: right }, 20);
+    tick(b);
+    swing(b, "overhead", 0, null);
+    until(b, () => b.status === "success");
     success(b);
   });
 
-  test("a tap and a full charge must land with two distinct swords", () => {
+  test("a tapped thrust and a near-full overhead count, but a tapped overhead gives feedback", () => {
     const b = lesson("attacks");
     tick(b, { aim: left }, 20);
     swing(b, "thrust", 0, left);
@@ -105,8 +110,11 @@ describe("independent lessons on the real fixed-step simulation", () => {
     swing(b, "overhead");
     waitIdle(b);
     expect(b.step).toBe(1);
+    expect(b.feedback).toContain("ためて");
     approach(b, 2);
-    swing(b, "overhead", 56);
+    swing(b, "overhead", 45);
+    expect(b.state.fighters[0].charge).toBeGreaterThanOrEqual(0.85);
+    expect(b.state.fighters[0].charge).toBeLessThan(1);
     until(b, () => b.status === "success", { aim: right });
     success(b);
   });
@@ -240,6 +248,21 @@ describe("independent lessons on the real fixed-step simulation", () => {
     expect(b.state).toEqual(initial);
     expect([...b.completed]).toEqual(["cancel"]);
   });
+  test.each([{ jump: true }, { attackPressed: "thrust" }, { grab: true }, { cancel: true }] as const)(
+    "the recovery air pause explains how to continue after %j",
+    (action) => {
+      const b = lesson("recovery");
+      tick(b, { jump: true });
+      const elapsed = b.state.elapsed;
+      tick(b, action);
+      expect(b.feedback).toContain("足場方向へ回避");
+      expect(b.state.elapsed).toBe(elapsed);
+      expect(b.step).toBe(1);
+      tick(b, { step: true, move: left });
+      expect(b.feedback).toBe("");
+      expect(b.step).toBe(2);
+    },
+  );
   test("landing before spending a recovery attack is a retry", () => {
     const b = lesson("recovery");
     tick(b, { jump: true });
@@ -252,8 +275,15 @@ describe("independent lessons on the real fixed-step simulation", () => {
   test("zone requires real exposure, entering the announced destination, and safety during travel", () => {
     const b = lesson("zone");
     const p = b.state.fighters[0];
-    tick(b, {}, 10);
+    expect(b.state.arena.safeZone.startsIn).toBeGreaterThan(2.9);
+    tick(b);
+    expect(b.step).toBe(0);
     expect(p.outsideTime).toBeGreaterThan(0);
+    tick(b, {}, 34);
+    expect(p.outsideTime).toBeLessThan(0.6);
+    expect(b.step).toBe(0);
+    until(b, () => b.step === 1);
+    expect(p.outsideTime).toBeGreaterThanOrEqual(0.6);
     expect(p.damage).toBeCloseTo(p.outsideTime * RULES.outsideDamage);
     expect(b.step).toBe(1);
     expect(b.state.arena.safeZone.motion).toBe("warning");
@@ -274,6 +304,24 @@ describe("independent lessons on the real fixed-step simulation", () => {
     }
     expect(b.state.arena.safeZone.motion, b.feedback).toBe("travel");
     expect(p.outsideTime).toBe(0);
+    success(b);
+  });
+  test("waiting just inside the far edge of the destination succeeds on the arrival tick", () => {
+    const b = lesson("zone");
+    until(b, () => b.step === 1);
+    const p = b.state.fighters[0];
+    const zone = b.state.arena.safeZone;
+    const destination = zone.destination!;
+    // Set up the last half-second of travel, with arrival between two simulation ticks.
+    b.state.elapsed += zone.startsIn + zone.travelLeft - 0.5 + dt / 2;
+    const edge = destination.x + destination.radius;
+    p.x = edge + RULES.moveSpeed * dt - 0.001;
+    p.z = destination.z;
+    tick(b, { move: left });
+    expect(p.x).toBeCloseTo(edge - 0.001, 6);
+    expect(b.state.arena.safeZone.motion).toBe("travel");
+    until(b, () => b.state.arena.safeZone.motion === "hold");
+    expect(p.x).toBeCloseTo(edge - 0.001, 6);
     success(b);
   });
   test("staying outside loses a stock without completing the zone objective", () => {
@@ -556,6 +604,10 @@ test("title, lesson navigation, disconnect, retries, summary and normal-mode han
     expect(battle().state.phase).toBe("paused");
     expect(battle().step).toBe(1);
     expect(battle().state.fighters).toEqual(beforeDisconnect);
+    click(".tutorial-pause-link");
+    action("back");
+    expect(battle().state.phase).toBe("paused");
+    expect(document.activeElement).toBe(element(".pause-panel [data-action=resume]"));
     nextPress(BUTTON.START);
     expect(battle().state.fighters[0].grounded).toBe(true);
     expect(battle().state.fighters[0].x).toBe(beforeDisconnect[0].x);
