@@ -105,6 +105,7 @@ const prepareGame = () => {
   ui.setPadNotice(null);
   const missing = missingRequiredPad();
   if (missing !== null) padLost(missing);
+  input?.updateVisibility(engine.state);
   updateUI();
 };
 const pause = () => {
@@ -129,6 +130,7 @@ const resume = () => {
     input?.newMatch(true);
   }
   engine.resume();
+  input?.updateVisibility(engine.state);
 };
 /** A pad of the running match went away: pause and say which one. */
 const padLost = (padNumber: number) => {
@@ -159,6 +161,7 @@ const settleLadder = () => {
 };
 const updateUI = () => {
   settleLadder();
+  input?.updateVisibility(engine.state);
   ui.update(engine.state, ladder?.progress);
   trainingUI.update();
   tutorialUi.update();
