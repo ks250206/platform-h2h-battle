@@ -27,6 +27,12 @@ let selectedMode: MatchMode = "duel";
 // that is not connected leaves its slot to a CPU; a restart checks again).
 const match = createMatchStore();
 let matchOptions: MatchOptions = match.get();
+// The title shows the stage that is picked there: at once, and again on every return to it.
+engine.menu({ stage: matchOptions.stage });
+match.subscribe((next, previous) => {
+  if (next.stage !== previous.stage && engine.state.phase === "menu")
+    engine.menu({ stage: next.stage });
+});
 const pads = new PadHub();
 /** Starts (or restarts) a match with what can play right now. */
 const startMatch = (mode: MatchMode, options: MatchOptions) => {
@@ -96,7 +102,7 @@ const ui = new GameUI(overlay, {
   },
   onMenu: () => {
     input?.reset();
-    engine.menu();
+    engine.menu({ stage: match.get().stage });
   },
   onSound: (enabled) => {
     sound.unlock();

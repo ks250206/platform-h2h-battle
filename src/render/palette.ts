@@ -27,6 +27,67 @@ export const PALETTE = {
   /** Multiplied into the baked shade of a tile's side walls, so their shadows lean violet. */
   floorSideTint: [0.84, 0.76, 1] as const,
 
+  /**
+   * The other stages keep the garden's language (pale checkerboard to fight on, sunny yellow for
+   * a rim that can fall away) and each add one material of their own: jade and sandstone for the
+   * ruins, meadow green and timber for the bridges, steel, navy belts and brass for the factory.
+   */
+  ruins: {
+    light: 0xf7edd3,
+    dark: 0xe0cda2,
+    /** The two rows round the pit that never fall. */
+    rimLight: 0xc8f2e4,
+    rimDark: 0x96dfca,
+    outerLight: 0xfff0b3,
+    outerDark: 0xffd97a,
+    unsafe: 0xc2bccf,
+    inlay: 0x6fc9b3,
+    /** The kerb along the pit's mouth and the shaft below it. */
+    curb: 0x1f8f86,
+    wall: 0x5c4bb0,
+    abyss: 0x1d1648,
+    glow: 0x58f0d8,
+    pillar: 0xf1e4c0,
+    pillarShade: 0xcbb98e,
+    shard: 0x8a78e6,
+  },
+  bridges: {
+    islandLight: 0xe6f8d6,
+    islandDark: 0xb6e6a4,
+    plazaLight: 0xfff3d2,
+    plazaDark: 0xffd99a,
+    plankLight: 0xf0bd7c,
+    plankDark: 0xd99c58,
+    unsafe: 0xbfc0cf,
+    rock: 0x8f80e6,
+    arch: 0x9a6a45,
+    rope: 0x5b4636,
+    lamp: 0xffd23f,
+    banner: 0xff6f61,
+    pole: 0x6b6fa3,
+  },
+  factory: {
+    light: 0xe8ecf8,
+    dark: 0xbec7e2,
+    /** The calm middle, inside the rotary belt. */
+    coreLight: 0xfff1c6,
+    coreDark: 0xffdc90,
+    edgeLight: 0xfff0b3,
+    edgeDark: 0xffd97a,
+    belt: 0x5a5f98,
+    beltDark: 0x4a4f86,
+    /** Belt arrows and rails: the brightest things on the floor, so the flow reads at any size. */
+    chevron: 0xffd83a,
+    rail: 0xf2b23a,
+    unsafe: 0xbdbfd2,
+    beltUnsafe: 0x77799a,
+    iron: 0x6b6fa3,
+    ironDark: 0x4b4f7c,
+    brass: 0xe9a93a,
+    flame: 0xff9f1c,
+    flameCore: 0xfff0a0,
+  },
+
   island: {
     rock: 0x8f80e6,
     top: 0xfff2c4,

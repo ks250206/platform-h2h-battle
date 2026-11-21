@@ -1,5 +1,7 @@
 // Match options the player chooses before a fight. Importable in node (tests): no DOM access.
 
+import { DEFAULT_STAGE, isStageId, type StageId } from "./stages";
+
 /** How well a CPU fighter plays. */
 export type AiLevel = "easy" | "normal" | "hard";
 export const AI_LEVEL_IDS: readonly AiLevel[] = ["easy", "normal", "hard"];
@@ -31,6 +33,8 @@ export interface MatchOptions {
   difficulty: AiLevel;
   /** Per-CPU strength keyed by fighter id (1-3). A missing id follows `difficulty`. */
   overrides: Partial<Record<number, AiLevel>>;
+  /** Where the match is fought (see stages.ts). Every mode, training included, uses it. */
+  stage: StageId;
 }
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
@@ -38,6 +42,7 @@ export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
   stocks: 3,
   difficulty: "normal",
   overrides: {},
+  stage: DEFAULT_STAGE,
 };
 
 /** The strength a given CPU fighter plays at. */
@@ -106,5 +111,7 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
       : DEFAULT_MATCH_OPTIONS.stocks,
     difficulty: isLevel(source.difficulty) ? source.difficulty : DEFAULT_MATCH_OPTIONS.difficulty,
     overrides,
+    // Options saved before stages existed have no stage: they play on the garden, as they did.
+    stage: isStageId(source.stage) ? source.stage : DEFAULT_MATCH_OPTIONS.stage,
   };
 }

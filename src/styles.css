@@ -89,6 +89,18 @@ summary:focus-visible {
 [hidden] {
   display: none !important;
 }
+/* Read out, not shown: the words behind a symbol. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 ::selection {
   background: var(--sun);
   color: var(--ink);
@@ -400,6 +412,92 @@ h1 > span {
 .match-options .segmented button[aria-pressed="true"] {
   background: var(--sun);
 }
+/* ステージ: four short names to pick from. What the pick means (the stage's name, what fighting
+   there is about, what each gimmick does there) is on the card beside the 3D preview; where that
+   card has no room (phones), the same words sit right under the buttons instead. */
+.stage-detail {
+  display: none;
+  gap: 3px;
+  margin: 0 0 2px;
+  padding: 6px 9px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--violet) 8%, transparent);
+}
+.stage-info p {
+  margin: 0;
+}
+.stage-detail-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.stage-detail-name strong {
+  font-size: 11.5px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+}
+.stage-detail-name span {
+  font-size: 7.5px;
+  font-weight: 650;
+  letter-spacing: 0.18em;
+  color: var(--violet);
+}
+.stage-summary,
+.stage-rules {
+  font-size: 9.5px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.stage-summary {
+  color: var(--ink);
+}
+.gimmick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 1px 0;
+  padding: 0;
+  list-style: none;
+}
+.gimmick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.gimmick-chip b {
+  font-weight: 800;
+  color: var(--violet);
+}
+/* Held back on this stage: the one to read before picking it. */
+.gimmick-chip[data-state="limited"] {
+  border-color: color-mix(in srgb, var(--sun) 65%, var(--ink));
+  background: color-mix(in srgb, var(--sun) 38%, var(--paper));
+}
+.gimmick-chip[data-state="limited"] b {
+  color: var(--ink);
+}
+.gimmick-chip[data-state="off"] {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-soft);
+}
+.gimmick-chip[data-state="off"] b {
+  color: var(--ink-soft);
+}
+/* Training runs no timed gimmick, so the chips would promise what does not happen. */
+.stage-info.practice .gimmick-chips {
+  display: none;
+}
 /* One row per fighter: who plays it (keyboard, a pad or the CPU), then a P badge or CPU strength. */
 .player-rows {
   display: grid;
@@ -636,25 +734,37 @@ h1 > span {
   border-radius: 50%;
   background: var(--pink);
 }
+/* The stage card: beside the 3D preview, naming the stage it shows and what to expect there. */
 .arena-caption {
   position: absolute;
-  right: 6.5%;
-  bottom: 18%;
+  right: 4.5%;
+  bottom: 62px;
+  display: grid;
+  gap: 5px;
+  width: 318px;
+  color: var(--ink);
+  padding: 11px 16px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.caption-head {
   display: flex;
   align-items: center;
   gap: 13px;
-  color: var(--ink);
   font-size: 9px;
   letter-spacing: 0.17em;
-  padding: 9px 18px 10px 16px;
-  border-radius: 16px;
-  background: var(--paper);
-  box-shadow: var(--shadow-sm);
+}
+.caption-text {
+  flex: 1;
 }
 .caption-cross {
   color: var(--coral);
   font-size: 19px;
   font-weight: 300;
+}
+.caption-title {
+  display: block;
 }
 .arena-caption small {
   display: block;
@@ -1703,6 +1813,56 @@ kbd {
   font-size: 10px;
   color: var(--ink-soft);
 }
+/* The stages: what each one plays like and which gimmicks it keeps. */
+.stage-help {
+  margin: 4px 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.stage-help h3 {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  margin-bottom: 8px;
+  color: var(--violet);
+  font-weight: 600;
+}
+.stage-help-lead {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.stage-help-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+  margin: 10px 0 0;
+}
+.stage-help-item dt {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.stage-help-item dt small {
+  margin-left: 8px;
+  font-size: 7.5px;
+  font-weight: 650;
+  letter-spacing: 0.17em;
+  color: var(--violet);
+}
+.stage-help-item dd {
+  margin: 4px 0 0;
+}
+.stage-help-item p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+.stage-help-item .stage-help-rules {
+  margin-top: 3px;
+  color: var(--ink-soft);
+}
 
 @media (min-width: 1700px) {
   .menu-content {
@@ -1737,7 +1897,8 @@ kbd {
     font-size: 37px;
   }
   .arena-caption {
-    right: 5%;
+    right: 3.5%;
+    width: 290px;
   }
   .keyboard-legend,
   .pad-legend {
@@ -1815,6 +1976,12 @@ kbd {
     top: 81px;
   }
 }
+/* The stage row took the taglines' line on a short desktop screen. */
+@media (max-height: 760px) and (min-width: 701px) {
+  .menu-features {
+    display: none;
+  }
+}
 @media (max-width: 700px) {
   .topbar {
     top: max(19px, env(safe-area-inset-top));
@@ -1870,13 +2037,13 @@ kbd {
   h1 br {
     display: none;
   }
+  /* The stage's own words (under its buttons, below) take the tagline's place on a phone. */
   .menu-description {
-    font-size: 11px;
-    line-height: 1.8;
-    margin-bottom: 14px;
+    display: none;
   }
+  /* Four player rows: the headline makes way too, so the stage stays in view above them. */
   .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow,
-  .menu-content:has(.match-options.four-players:not(.practice)) .menu-description {
+  .menu-content:has(.match-options.four-players:not(.practice)) h1 {
     display: none;
   }
   .mode-option {
@@ -1896,6 +2063,14 @@ kbd {
     display: none;
   }
   .arena-caption {
+    display: none;
+  }
+  /* No room for the card beside the preview: the stage's words go under its buttons, as prose
+     (the chips say the same in symbols). */
+  .stage-detail {
+    display: grid;
+  }
+  .stage-detail .gimmick-chips {
     display: none;
   }
   .menu-bottom {
@@ -2028,9 +2203,13 @@ kbd {
     max-height: calc(100dvh - 30px);
   }
   .help-columns,
-  .help-tips {
+  .help-tips,
+  .stage-help-list {
     grid-template-columns: 1fr;
     gap: 22px;
+  }
+  .stage-help-list {
+    gap: 12px;
   }
   .help-head h2 {
     font-size: 25px;
@@ -2112,7 +2291,12 @@ kbd {
     top: 50%;
     left: calc(100% + 20px);
     width: 300px;
+    max-height: calc(100dvh - 60px);
     margin: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    pointer-events: auto;
     background: var(--paper);
     transform: translateY(-50%);
   }
@@ -2124,8 +2308,13 @@ kbd {
     grid-template-columns: 58px 1fr 1fr;
     gap: 5px;
   }
-  .arena-caption,
-  .match-options.practice {
+  .arena-caption {
+    display: none;
+  }
+  .stage-detail {
+    display: grid;
+  }
+  .stage-detail .gimmick-chips {
     display: none;
   }
   .menu-content > .eyebrow {

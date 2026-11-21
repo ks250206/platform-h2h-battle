@@ -5,6 +5,8 @@ import type { GraphicsSettings, MsaaSamples, SettingsStore, ShadowLevel } from "
 import { AI_LEVEL_IDS, humanSlots, padIndex, STOCK_CHOICES } from "../game/match";
 import type { AiLevel, ControlDevice, MatchOptions } from "../game/match";
 import { playableOptions, type MatchStore } from "../game/matchStore";
+import { GIMMICK_IDS, GIMMICK_LABELS, STAGE_LIST, STAGES } from "../game/stages";
+import type { GimmickState, StageDefinition, StageId } from "../game/stages";
 import type { PlayerLock } from "../game/input";
 import { PAD_COUNT } from "../game/pads";
 import type { TitleButton } from "./padMenu";
@@ -140,6 +142,37 @@ function playerRowMarkup(id: number): string {
   return `<div class="player-row" data-slot="${id}"><span class="player-name" data-fighter="${id}"><i aria-hidden="true"></i>${name}</span><select class="player-device" data-slot-device="${id}" aria-label="${name}の操作"></select><span class="player-badge" hidden></span><select class="player-level" data-slot-level="${id}" data-override="${id}" aria-label="${name}の強さ" hidden>${(["auto", ...AI_LEVEL_IDS] as const).map((level) => `<option value="${level}">${level === "auto" ? "おまかせ" : levelLabels[level]}</option>`).join("")}</select><span class="player-still" hidden>動かない</span></div>`;
 }
 
+/** How a gimmick behaves on a stage, as the mark on its chip. */
+const gimmickMarks: Record<GimmickState, { mark: string; label: string }> = {
+  on: { mark: "○", label: "あり" },
+  limited: { mark: "△", label: "制限つき" },
+  off: { mark: "×", label: "なし" },
+};
+
+/** One chip per gimmick: 崩落 △ … with what it does here as the tooltip and for screen readers. */
+function gimmickChipsMarkup(stage: StageDefinition): string {
+  return GIMMICK_IDS.map((id) => {
+    const rule = stage.gimmicks[id];
+    const { mark, label } = gimmickMarks[rule.state];
+    return `<li class="gimmick-chip" data-state="${rule.state}" title="${GIMMICK_LABELS[id]}: ${rule.note}"><span>${GIMMICK_LABELS[id]}</span><b aria-hidden="true">${mark}</b><span class="visually-hidden">${label}（${rule.note}）</span></li>`;
+  }).join("");
+}
+
+/**
+ * What a stage is about and what its gimmicks do there. The title screen has it twice and shows
+ * one: on the card beside the 3D preview where there is room, else under the stage buttons.
+ */
+const stageInfoMarkup = (): string =>
+  `<p class="stage-summary"></p><ul class="gimmick-chips" aria-label="このステージのギミック"></ul><p class="stage-rules"></p>`;
+
+/** The stage list of the help dialog: name, what it plays like, and its gimmick rules. */
+function stageHelpMarkup(): string {
+  return STAGE_LIST.map(
+    (stage) =>
+      `<div class="stage-help-item" data-stage-help="${stage.id}"><dt>${stage.name}<small>${stage.title}</small></dt><dd><p>${stage.summary}</p><p class="stage-help-rules">${stage.gimmickNote}</p></dd></div>`,
+  ).join("");
+}
+
 function matchOptionsMarkup(): string {
   const segment = (attribute: string, value: string | number, label: string, extra = "") =>
     `<button type="button" data-${attribute}="${value}" aria-pressed="false"${extra}>${label}</button>`;
@@ -147,6 +180,14 @@ function matchOptionsMarkup(): string {
           <section class="match-options" aria-labelledby="match-options-title">
             <div class="match-options-head"><h2 id="match-options-title">対戦設定</h2><span>MATCH RULES</span></div>
             <div class="match-options-body">
+              <div class="match-option stage-option">
+                <span class="match-option-label" id="match-stage-label">ステージ</span>
+                <div class="segmented match-segmented stage-picker" role="group" aria-labelledby="match-stage-label">${STAGE_LIST.map((stage) => segment("stage", stage.id, stage.label, ` aria-label="${stage.name}" aria-describedby="stage-detail" title="${stage.name} / ${stage.title}"`)).join("")}</div>
+              </div>
+              <div class="stage-detail stage-info" id="stage-detail" aria-live="polite">
+                <p class="stage-detail-name"><strong></strong><span></span></p>
+                ${stageInfoMarkup()}
+              </div>
               <div class="match-option match-rule">
                 <span class="match-option-label" id="match-stocks-label">残機</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-stocks-label">${STOCK_CHOICES.map((n) => segment("stocks", n, String(n), ` aria-label="${n}機"`)).join("")}</div>
@@ -285,7 +326,10 @@ export class GameUI {
           <div class="menu-links"><button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button><button class="menu-controls-link" data-action="settings">グラフィック設定 <span>↗</span></button></div>
           <div class="menu-features flex items-center"><span>重い一撃</span><i></i><span>自由なフェイント</span><i></i><span>一瞬の読み合い</span></div>
         </div>
-        <div class="arena-caption"><span class="caption-cross">+</span><div>THE FLOATING GARDEN<small>浮遊庭園 / 終わりゆく足場</small></div><span class="caption-line"></span></div>
+        <aside class="arena-caption stage-info" aria-label="選択中のステージ" aria-live="polite">
+          <div class="caption-head"><span class="caption-cross">+</span><div class="caption-text"><span class="caption-title">THE FLOATING GARDEN</span><small class="caption-name">浮遊庭園 / 終わりゆく足場</small></div><span class="caption-line"></span></div>
+          ${stageInfoMarkup()}
+        </aside>
         <div class="menu-bottom"><span>01 / BRAMBLE</span><span>NO SHIELD. FIND YOUR OPENING.</span><span>v0.1</span></div>
       </main>
 
@@ -320,6 +364,11 @@ export class GameUI {
             <section><h3>ATTACK / 大剣の4つの技</h3><dl class="key-list"><div><dt><kbd>J</kbd> 振り下ろし</dt><dd>重い一撃 / 空中ではメテオ</dd></div><div><dt><kbd>I</kbd> 振り上げ</dt><dd>斜め上へ上昇 / 復帰にも</dd></div><div><dt><kbd>K</kbd> 横振り</dt><dd>広い横幅 / 横ステップを狩る</dd></div><div><dt><kbd>L</kbd> 突き</dt><dd>前へ踏み込む / 空中の横復帰</dd></div><div><dt><kbd>U</kbd> つかむ</dt><dd>近距離でつかみ、移動方向に投げる</dd></div></dl></section>
           </div>
           <div class="help-callout"><span class="callout-icon">${icons.sword}</span><div><strong>長押しでためる。<kbd>Q</kbd> でフェイント。</strong><p>ため中はキャンセルやステップに移れる。振りかぶり中は向きをゆっくり直せて、Qで止めることもできるが、スタミナは戻らず、遅く止めるほど隙が残る。斬りかかった剣は向きが固まり、最後まで振り抜く。</p></div></div>
+          <section class="stage-help" aria-labelledby="stage-help-title">
+            <h3 id="stage-help-title">STAGES / ステージ</h3>
+            <p class="stage-help-lead">タイトルの「対戦設定」で選べます。どのモードでも、稽古でも使えます。</p>
+            <dl class="stage-help-list">${stageHelpMarkup()}</dl>
+          </section>
           <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>光る円の内側が安全地帯。</strong>外では%とゲージが増加。5秒分たまるとアウト、内側ではゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
           <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。</p>
           <section class="pad-help" aria-labelledby="pad-help-title">
@@ -421,6 +470,8 @@ export class GameUI {
     };
     pressed("[data-stocks]", (b) => Number(b.dataset.stocks) === options.stocks);
     pressed("[data-difficulty]", (b) => b.dataset.difficulty === options.difficulty);
+    pressed("button[data-stage]", (b) => b.dataset.stage === options.stage);
+    this.syncStage(STAGES[options.stage], training);
 
     const connected = (pad: number) => this.connectedPads.includes(pad);
     const { options: playable, substitutes } = playableOptions(options, count, connected);
@@ -473,6 +524,36 @@ export class GameUI {
         : `未接続のパッドの枠は CPU が戦います`
       : `<span class="pad-key">A</span>パッドのボタンを押して参加<span class="hint-dot"></span><span class="pad-key">B</span>抜ける`;
     if (hint.innerHTML !== markup) hint.innerHTML = markup;
+  }
+
+  /**
+   * The chosen stage in words, before the match starts: its name, what fighting there is about,
+   * and what each gimmick does there. The caption beside the 3D preview names it too.
+   */
+  private syncStage(stage: StageDefinition, training: boolean): void {
+    // Training has no timed gimmicks; a belt is part of the floor and keeps running there.
+    const belts = stage.gimmicks.conveyor.state !== "off";
+    const rules = training
+      ? belts
+        ? "稽古では崩落・安全地帯・爆撃・風は起きません。コンベアだけは動き続けます。"
+        : "稽古では崩落・安全地帯・爆撃・風は起きません。"
+      : stage.gimmickNote;
+    const changed = this.host.dataset.stage !== stage.id;
+    this.host.dataset.stage = stage.id;
+    if (changed) {
+      setText(this.query(".stage-detail-name strong"), stage.name);
+      setText(this.query(".stage-detail-name span"), stage.title);
+      setText(this.query(".caption-title"), stage.title);
+      setText(this.query(".caption-name"), `${stage.name} / ${stage.tagline}`);
+    }
+    for (const info of this.host.querySelectorAll<HTMLElement>(".stage-info")) {
+      if (changed) {
+        setText(info.querySelector<HTMLElement>(".stage-summary")!, stage.summary);
+        info.querySelector<HTMLElement>(".gimmick-chips")!.innerHTML = gimmickChipsMarkup(stage);
+      }
+      info.classList.toggle("practice", training);
+      setText(info.querySelector<HTMLElement>(".stage-rules")!, rules);
+    }
   }
 
   /** The connected pads (indices 0-3), for the title's device choices. */
@@ -651,7 +732,7 @@ export class GameUI {
   private handleClick = (event: MouseEvent): void => {
     // Buttons only: the host itself carries data-mode (the running match's mode).
     const target = (event.target as Element).closest<HTMLElement>(
-      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty]",
+      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty], button[data-stage]",
     );
     if (!target) return;
     const shadow = target.dataset.shadow as ShadowLevel | undefined;
@@ -665,6 +746,10 @@ export class GameUI {
     }
     if (target.dataset.difficulty) {
       this.match.set({ difficulty: target.dataset.difficulty as AiLevel });
+      return;
+    }
+    if (target.dataset.stage) {
+      this.match.set({ stage: target.dataset.stage as StageId });
       return;
     }
     const mode = target.dataset.mode as MatchMode | undefined;
@@ -853,10 +938,17 @@ export class GameUI {
     const arenaStatus = this.query(".arena-status");
     const nextCollapse = Math.max(0, Math.ceil(state.arena.nextCollapse - state.elapsed));
     arenaStatus.classList.toggle("warning", state.arena.warningRing);
-    if (state.mode === "training") setText(arenaStatus, "PRACTICE FIELD  ·  ギミックなし");
+    if (state.mode === "training")
+      setText(
+        arenaStatus,
+        // A belt is part of the floor: it runs in practice too.
+        STAGES[state.arena.stageId].gimmicks.conveyor.state === "off"
+          ? "PRACTICE FIELD  ·  ギミックなし"
+          : "PRACTICE FIELD  ·  コンベアだけ動く",
+      );
     else if (state.arena.warningRing) setText(arenaStatus, `外周崩壊まで ${nextCollapse} 秒`);
     else if (state.arena.safeZone.active) setText(arenaStatus, "SAFE ZONE MOVING  ·  光の円へ");
-    else setText(arenaStatus, "THE FLOATING GARDEN");
+    else setText(arenaStatus, STAGES[state.arena.stageId].title);
 
     const announcement = this.query(".center-announcement");
     setText(announcement, state.message);
