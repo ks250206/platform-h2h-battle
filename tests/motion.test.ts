@@ -255,6 +255,27 @@ describe("fighter motion", () => {
     expect(fastest).toBeLessThan(0.7);
   });
 
+  test("an air dodge is one somersault that ends upright", () => {
+    const { frames } = simulate(1.4, (frame) => ({
+      jump: frame === 2,
+      step: frame === 14,
+      move: frame === 14 ? { x: 1, z: 0 } : { x: 0, z: 0 },
+    }));
+    const dodging = frames.filter((entry) => entry.fighter.mode === "step");
+    expect(dodging.length).toBeGreaterThan(10);
+    expect(dodging.every((entry) => !entry.fighter.grounded)).toBe(true);
+    const spin = (entry: (typeof frames)[number]) =>
+      Math.hypot(
+        entry.frame.skeleton.tumble.x,
+        entry.frame.skeleton.tumble.y,
+        entry.frame.skeleton.tumble.z,
+      );
+    // Half way through it is upside down; by the end it has come all the way round.
+    expect(Math.max(...dodging.map(spin))).toBeGreaterThan(Math.PI);
+    expect(spin(frames[frames.length - 1]!)).toBeLessThan(0.05);
+    for (const { frame } of frames) expect(finite(frame)).toBe(true);
+  });
+
   test("hit-stop freezes the pose with the simulation", () => {
     const { frames } = simulate(1.2, tap("overhead"), (engine) => {
       // Put the practice dummy in the blade's path so the swing connects.
