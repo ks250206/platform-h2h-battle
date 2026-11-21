@@ -384,17 +384,42 @@ export class BattleEngine {
     }
   }
 
-  /** One fixed tick older; a press past `INPUT_BUFFER_TICKS` is dropped and never fires. */
+  /**
+   * One fixed tick older; a press past `INPUT_BUFFER_TICKS` is dropped and never fires. A jump or
+   * grab freed by a landing gets one tick more (`landingGrace`, see `graceLanding`).
+   */
   private ageBuffer(f: Fighter): void {
     if (!f.inputBuffer) return;
     f.inputBuffer.age++;
-    if (f.inputBuffer.age > INPUT_BUFFER_TICKS) f.inputBuffer = null;
+    const limit = INPUT_BUFFER_TICKS + (f.inputBuffer.landingGrace ? 1 : 0);
+    if (f.inputBuffer.age > limit) f.inputBuffer = null;
+  }
+
+  /**
+   * Called on the tick `physics` lands `f`. Input runs before physics, so a jump or grab freed by
+   * this landing is first tried on the next tick, one tick later than a press freed by recovery
+   * ending (which `updateMode` does before input). The grace lets a press made up to
+   * `INPUT_BUFFER_TICKS` ticks before the landing tick still fire, and no older one. It applies
+   * only when the landing is what frees the press: an idle fighter waiting on a jump or grab.
+   */
+  private graceLanding(f: Fighter): void {
+    const held = f.inputBuffer;
+    if (held && f.mode === "idle" && (held.action === "jump" || held.action === "grab"))
+      held.landingGrace = true;
+  }
+
+  /**
+   * Drops a press made before an interruption (a hit, being grabbed, a clash or an explicit cancel)
+   * so it cannot fire out of the new lockout; presses made during that lockout buffer as usual.
+   */
+  private interruptBuffer(f: Fighter): void {
+    f.inputBuffer = null;
   }
 
   /** Keeps this tick's highest-priority press, replacing whatever was buffered before. */
   private holdPress(f: Fighter, input: PlayerInput): void {
     const [press] = pressedActions(input);
-    if (press) f.inputBuffer = { ...press, age: 0, pressedIn: f.mode };
+    if (press) f.inputBuffer = { ...press, age: 0, pressedIn: f.mode, landingGrace: false };
   }
 
   /**
@@ -455,6 +480,7 @@ export class BattleEngine {
         this.startStep(f, input.move, true);
       } else if (input.cancel) {
         this.setMode(f, "cancel", RULES.cancelDuration);
+        this.interruptBuffer(f);
         f.attack = null;
         f.charge = 0;
         f.staminaDelay = RULES.staminaDelay;
@@ -516,6 +542,7 @@ export class BattleEngine {
   private cancelWindup(f: Fighter): void {
     const progress = clamp(f.modeTime / f.modeDuration, 0, 1);
     this.setMode(f, "cancel", RULES.cancelDuration + RULES.windupCancelPenalty * progress);
+    this.interruptBuffer(f);
     f.attack = null;
     f.charge = 0;
     f.staminaDelay = RULES.staminaDelay;
@@ -658,6 +685,7 @@ export class BattleEngine {
         f.airRisingUsed = false;
         f.airThrustUsed = false;
         f.airStepUsed = false;
+        this.graceLanding(f);
         this.effect("land", f, 0xbed9cc, 0.3);
       }
     } else {
@@ -718,6 +746,7 @@ export class BattleEngine {
     for (const f of active) {
       if (!clashed.has(f.id)) continue;
       this.setMode(f, "clash", 0.28);
+      this.interruptBuffer(f);
       f.hitstop = RULES.clashHitstop;
       const dir = forward(f);
       f.vx = -dir.x * 2.8;
@@ -826,6 +855,7 @@ export class BattleEngine {
       target.pendingLaunch = null;
       target.attack = null;
       this.setMode(target, "grabbed", RULES.grabHold);
+      this.interruptBuffer(target);
     }
   }
 
@@ -841,6 +871,7 @@ export class BattleEngine {
     f.attack = null;
     f.charge = 0;
     this.setMode(f, "hitstun", duration);
+    this.interruptBuffer(f);
     // Multiple simultaneous impacts combine without removing the previous contact.
     if (f.pendingLaunch) {
       f.pendingLaunch.x += impulse.x * 0.55;

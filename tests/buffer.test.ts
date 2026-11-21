@@ -183,6 +183,34 @@ describe("buffered actions out of attack recovery", () => {
     expect(player.swingId).toBe(swings + 1);
   });
 
+  test("a tapped attack still taps when a different attack is held as it fires", () => {
+    const { engine, player } = fixture();
+    swingUntilRecoveryLeft(engine, player, 4);
+    const swings = player.swingId;
+    const stamina = player.stamina;
+    // B (overhead) goes down and stays down; A (thrust) is tapped and released over it.
+    ticks(engine, 1, hold("overhead"));
+    ticks(engine, 1, press({ attackPressed: "thrust", attackHeld: "overhead" }));
+    expect(player.inputBuffer).toMatchObject({ action: "attack", attack: "thrust" });
+    ticks(engine, 1, press({ attackHeld: "overhead" }));
+    expect(player.mode).toBe("recovery");
+    ticks(engine, 1, press({ attackHeld: "overhead" }));
+    expect(player.mode).toBe("charge");
+    expect(player.attack).toBe("thrust");
+    // A is not the held button, so it commits on the next tick as a tap.
+    ticks(engine, 1, press({ attackHeld: "overhead" }));
+    expect(player.mode).toBe("windup");
+    expect(player.attack).toBe("thrust");
+    expect(player.charge).toBeLessThan(0.05);
+    expect(player.swingId).toBe(swings + 1);
+    expect(player.stamina).toBe(stamina - ATTACKS.thrust.stamina);
+    // Holding B afterwards never charges it or swings again: it was never pressed while free.
+    ticks(engine, 150, press({ attackHeld: "overhead" }));
+    expect(player.mode).toBe("idle");
+    expect(player.swingId).toBe(swings + 1);
+    expect(player.inputBuffer).toBeNull();
+  });
+
   test("an attack button released before the buffer fires still taps", () => {
     const { engine, player } = fixture();
     lockFor(player, 5);
@@ -271,6 +299,77 @@ describe("landing", () => {
     ticks(engine, 1);
     expect(player.grounded).toBe(false);
     expect(player.vy).toBeGreaterThan(RULES.jumpSpeed - 1);
+    expect(player.inputBuffer).toBeNull();
+  });
+
+  /** Ticks from a fall of `airborne(player, 2, 0)` until the tick `physics` lands it. */
+  function landingTick(): number {
+    const { engine, player } = fixture();
+    airborne(player, 2, 0);
+    return untilLanded(engine, player);
+  }
+
+  /**
+   * Presses `input` `lead` ticks before the landing tick (0 = on it), plays up to and including the
+   * landing tick, then the first grounded tick.
+   */
+  function pressBeforeLanding(lead: number, input: PlayerInput) {
+    const landing = landingTick();
+    expect(landing).toBeGreaterThan(INPUT_BUFFER_TICKS + 1);
+    const { engine, player } = fixture();
+    airborne(player, 2, 0);
+    ticks(engine, landing - lead - 1);
+    ticks(engine, 1, input);
+    ticks(engine, lead);
+    expect(player.grounded).toBe(true);
+    expect(player.mode).toBe("idle");
+    ticks(engine, 1);
+    return { engine, player };
+  }
+
+  test.each([0, 1, INPUT_BUFFER_TICKS])(
+    "a jump pressed %i ticks before the landing tick jumps on the first grounded tick",
+    (lead) => {
+      const { player } = pressBeforeLanding(lead, press({ jump: true }));
+      expect(player.grounded).toBe(false);
+      expect(player.vy).toBeGreaterThan(RULES.jumpSpeed - 1);
+      expect(player.inputBuffer).toBeNull();
+    },
+  );
+
+  test("a jump pressed one tick before the landing window expires and never fires", () => {
+    const { engine, player } = pressBeforeLanding(INPUT_BUFFER_TICKS + 1, press({ jump: true }));
+    expect(player.grounded).toBe(true);
+    expect(player.inputBuffer).toBeNull();
+    ticks(engine, 30);
+    expect(player.grounded).toBe(true);
+    expect(player.vy).toBe(0);
+  });
+
+  test("the landing window for a grab has the same edges", () => {
+    const edge = pressBeforeLanding(INPUT_BUFFER_TICKS, press({ grab: true }));
+    expect(edge.player.mode).toBe("grab");
+    const late = pressBeforeLanding(INPUT_BUFFER_TICKS + 1, press({ grab: true }));
+    expect(late.player.mode).toBe("idle");
+    expect(late.player.stamina).toBe(RULES.maxStamina);
+  });
+
+  test("the landing grace never lengthens a window that recovery, not the landing, closes", () => {
+    const landing = landingTick();
+    const { engine, player } = fixture();
+    airborne(player, 2, 0);
+    // Recovery ends the tick after the landing tick, so recovery, not the landing, frees the jump,
+    // and a press INPUT_BUFFER_TICKS + 1 ticks before that is too old.
+    lockFor(player, landing + 1);
+    ticks(engine, landing - INPUT_BUFFER_TICKS - 1);
+    ticks(engine, 1, press({ jump: true }));
+    ticks(engine, INPUT_BUFFER_TICKS);
+    expect(player.grounded).toBe(true);
+    expect(player.mode).toBe("recovery");
+    expect(player.inputBuffer?.landingGrace).toBe(false);
+    ticks(engine, 1);
+    expect(player.mode).toBe("idle");
+    expect(player.grounded).toBe(true);
     expect(player.inputBuffer).toBeNull();
   });
 
@@ -501,6 +600,7 @@ describe("cancel", () => {
     expect(player.inputBuffer?.action).toBe("grab");
     ticks(engine, 1, press({ attackHeld: "overhead", cancel: true }));
     expect(player.mode).toBe("cancel");
+    expect(player.inputBuffer).toBeNull();
 
     const second = fixture();
     ticks(second.engine, 1, tap("overhead"));
@@ -572,6 +672,118 @@ describe("hitstop, hitstun and timing", () => {
     expect(fired).not.toBeNull();
     expect(Math.round(fired! / TICK)).toBe(INPUT_BUFFER_TICKS + 1);
     expect(startAt(INPUT_BUFFER_TICKS + 1)).toBeNull();
+  });
+});
+
+describe("an interruption drops presses made before it", () => {
+  /** Plays ticks until `f` has left `mode`, pressing `input` once `left` ticks of it remain. */
+  function pressLateIn(
+    engine: BattleEngine,
+    f: Fighter,
+    mode: FighterMode,
+    left: number,
+    input: PlayerInput,
+  ) {
+    for (let i = 0; i < 240 && !(f.mode === mode && f.hitstop <= 0); i++) ticks(engine, 1);
+    for (let i = 0; i < 240; i++) {
+      if (f.modeDuration - f.modeTime <= left * TICK + 1e-9) break;
+      ticks(engine, 1);
+    }
+    expect(f.mode).toBe(mode);
+    ticks(engine, 1, input);
+    expect(f.inputBuffer).toMatchObject({ pressedIn: mode });
+    for (let i = 0; i < 240 && f.mode === mode; i++) ticks(engine, 1);
+  }
+
+  /** The partner's sweep, already cutting, right in front of the player. */
+  function partnerSwingsAt(partner: Fighter) {
+    Object.assign(partner, { z: -1.2, facing: Math.PI, mode: "active", attack: "sweep" });
+    Object.assign(partner, { modeTime: 0, modeDuration: ATTACKS.sweep.active, hitTargets: [] });
+  }
+
+  test("a hit drops a press buffered in recovery; a press in its hitstop or hitstun still buffers", () => {
+    const { engine, player, partner } = fixture();
+    lockFor(player, 40);
+    ticks(engine, 1, press({ step: true }));
+    expect(player.inputBuffer?.action).toBe("step");
+    partnerSwingsAt(partner);
+    ticks(engine, 1);
+    expect(player.mode).toBe("hitstun");
+    expect(player.hitstop).toBeGreaterThan(0);
+    expect(player.inputBuffer).toBeNull();
+    // Pressed during hitstop: held as usual (it ages out long before the hitstun ends).
+    ticks(engine, 1, press({ grab: true }));
+    expect(player.inputBuffer).toMatchObject({ action: "grab", pressedIn: "hitstun", age: 0 });
+    // Pressed late in the hitstun: fires on the tick it ends.
+    pressLateIn(engine, player, "hitstun", 3, press({ step: true }));
+    expect(player.mode).toBe("step");
+  });
+
+  test("being grabbed drops a press buffered before the catch; a press while held still buffers", () => {
+    const { engine, player, partner } = fixture();
+    lockFor(player, 40);
+    ticks(engine, 1, tap("sweep"));
+    expect(player.inputBuffer?.action).toBe("attack");
+    Object.assign(partner, { z: -2, facing: Math.PI, mode: "grab", hitTargets: [] });
+    Object.assign(partner, {
+      modeTime: RULES.grabStartup,
+      modeDuration: RULES.grabStartup + RULES.grabActive,
+    });
+    ticks(engine, 1);
+    expect(player.mode).toBe("grabbed");
+    expect(player.inputBuffer).toBeNull();
+    ticks(engine, 1, press({ step: true }));
+    expect(player.inputBuffer).toMatchObject({ action: "step", pressedIn: "grabbed" });
+  });
+
+  test("a clash drops a press buffered in the swing; a press in its hitstop or lag still buffers", () => {
+    const { engine, player, partner } = fixture();
+    const cutting = {
+      mode: "active",
+      attack: "overhead",
+      modeTime: 0,
+      modeDuration: 1,
+      hitTargets: [],
+    };
+    Object.assign(player, { z: -0.8, facing: 0, ...cutting });
+    ticks(engine, 1, press({ step: true }));
+    expect(player.mode).toBe("active");
+    expect(player.inputBuffer?.action).toBe("step");
+    Object.assign(partner, { z: 0.8, facing: Math.PI, ...cutting });
+    ticks(engine, 1);
+    expect(player.mode).toBe("clash");
+    expect(player.inputBuffer).toBeNull();
+    ticks(engine, 1, press({ grab: true }));
+    expect(player.inputBuffer).toMatchObject({ action: "grab", pressedIn: "clash" });
+    pressLateIn(engine, player, "clash", 3, tap("sweep"));
+    expect(player.mode).toBe("charge");
+    expect(player.attack).toBe("sweep");
+  });
+
+  test("cancelling a charge drops a press buffered during it; a press in cancel lag still fires", () => {
+    const { engine, player } = fixture();
+    ticks(engine, 1, hold("overhead"));
+    ticks(engine, 1, press({ attackHeld: "overhead", grab: true }));
+    expect(player.inputBuffer?.action).toBe("grab");
+    ticks(engine, 1, press({ cancel: true }));
+    expect(player.mode).toBe("cancel");
+    expect(player.inputBuffer).toBeNull();
+    pressLateIn(engine, player, "cancel", 3, press({ step: true }));
+    expect(player.mode).toBe("step");
+  });
+
+  test("cancelling a wind-up drops a press buffered during it; a press in cancel lag still fires", () => {
+    const { engine, player } = fixture();
+    ticks(engine, 1, tap("overhead"));
+    ticks(engine, 1);
+    expect(player.mode).toBe("windup");
+    ticks(engine, 1, press({ step: true }));
+    expect(player.inputBuffer?.action).toBe("step");
+    ticks(engine, 1, press({ cancel: true }));
+    expect(player.mode).toBe("cancel");
+    expect(player.inputBuffer).toBeNull();
+    pressLateIn(engine, player, "cancel", 3, tap("sweep"));
+    expect(player.mode).toBe("charge");
   });
 });
 
