@@ -56,14 +56,73 @@ test("training accepts movement, jump, charged feint, all attacks and pause", as
   await page.keyboard.press("Space");
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].y > 0.2);
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].grounded);
+  // Records the fighter's mode every frame: short-lived states are asserted from this log
+  // rather than waited for, so a slow software-rendered frame cannot make the test miss them.
+  const record = () =>
+    page.evaluate(() => {
+      const recorder = window as unknown as {
+        __modes: string[];
+        __lowestStamina: number;
+        __recording: boolean;
+      };
+      recorder.__modes = [];
+      recorder.__lowestStamina = Infinity;
+      if (recorder.__recording) return;
+      recorder.__recording = true;
+      const poll = () => {
+        const fighter = window.__BRAMBLE__!.snapshot().fighters[0];
+        recorder.__modes.push(fighter.mode);
+        recorder.__lowestStamina = Math.min(recorder.__lowestStamina, fighter.stamina);
+        requestAnimationFrame(poll);
+      };
+      requestAnimationFrame(poll);
+    });
+  const lowestStamina = () =>
+    page.evaluate(() => (window as unknown as { __lowestStamina: number }).__lowestStamina);
+  const recorded = () =>
+    page.evaluate(() => (window as unknown as { __modes: string[] }).__modes.slice());
+  const swingId = () => page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters[0].swingId);
+  const idleAgain = () =>
+    page.waitForFunction(() => {
+      const modes = (window as unknown as { __modes: string[] }).__modes;
+      const f = window.__BRAMBLE__!.snapshot().fighters[0];
+      return f.mode === "idle" && modes.some((mode) => mode !== "idle");
+    });
+
+  // Charge cancel: the attack is never committed, even though the button is released afterwards.
+  const swingBefore = await swingId();
+  await record();
   await page.keyboard.down("KeyJ");
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].charge > 0.2);
   await page.keyboard.press("KeyQ");
+  await idleAgain();
   await page.keyboard.up("KeyJ");
-  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].mode === "idle");
-  expect(
-    await page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters[0].stamina),
-  ).toBeLessThan(100);
+  expect(await recorded()).toContain("cancel");
+  expect(await recorded()).not.toContain("windup");
+  // Only the 10 prepaid for the charge is lost. Stamina starts refilling half a second later,
+  // so the lowest value seen is checked rather than the value now.
+  expect(await lowestStamina()).toBeCloseTo(90, 0);
+  expect(await swingId()).toBe(swingBefore);
+
+  // Wind-up cancel: a committed attack can still be stopped before the hit becomes active.
+  await page.waitForFunction(() => {
+    const f = window.__BRAMBLE__!.snapshot().fighters[0];
+    return f.mode === "idle" && f.stamina >= 35 && f.grounded;
+  });
+  await record();
+  await page.keyboard.press("KeyJ");
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].mode === "windup");
+  await page.keyboard.press("KeyQ");
+  await idleAgain();
+  const modes = await recorded();
+  expect(modes).toContain("windup");
+  expect(modes).toContain("cancel");
+  expect(modes).not.toContain("active");
+  expect(modes).not.toContain("recovery");
+  expect(await swingId()).toBe(swingBefore + 1);
+  // The whole cost of the overhead (25) stays spent: nothing is refunded for stopping.
+  expect(await lowestStamina()).toBeLessThanOrEqual(75.5);
+  expect(await page.evaluate(() => window.__BRAMBLE__!.snapshot().stats.hits)).toBe(0);
   for (const key of ["KeyI", "KeyJ", "KeyK", "KeyL"]) {
     await page.waitForFunction(() => {
       const f = window.__BRAMBLE__!.snapshot().fighters[0];
