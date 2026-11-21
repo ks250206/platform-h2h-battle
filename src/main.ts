@@ -133,6 +133,7 @@ const resume = () => {
 /** A pad of the running match went away: pause and say which one. */
 const padLost = (padNumber: number) => {
   lostPad = padNumber;
+  trainingUI?.onPadLost();
   engine.pause();
   const hint =
     ladder || engine instanceof TutorialBattle
@@ -237,7 +238,20 @@ const ui = new GameUI(overlay, {
     supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
   },
 });
-const trainingUI = new TrainingUI(overlay, engine, () => input?.reset(), updateUI);
+const trainingUI = new TrainingUI(
+  overlay,
+  engine,
+  () => input?.reset(),
+  updateUI,
+  () =>
+    lostPad === null &&
+    missingRequiredPad() === null &&
+    !humanSlots(engine.state.options, engine.state.fighters.length).some(({ device }) => {
+      const pad = padIndex(device);
+      return pad !== null && !pads.isConnected(pad);
+    }),
+  resume,
+);
 const leaveTutorial = () => {
   tutorialUi.leave();
   if (engine instanceof TutorialBattle) input?.newMatch();
@@ -256,7 +270,7 @@ const tutorialUi = new TutorialUi(
     deviceChanged: (device) => {
       if (!(engine instanceof TutorialBattle)) return;
       engine.state.options.controls = { 0: device };
-      input?.reset();
+      input?.switchDevice();
       input?.updateVisibility(engine.state);
       if (lostPad !== null && missingRequiredPad() === null) {
         lostPad = null;

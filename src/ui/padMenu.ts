@@ -185,15 +185,16 @@ export class PadMenu {
       }
       const previous = this.previous[index] ?? null;
       this.previous[index] = pad;
-      // Reconnecting with a button held must leave a suspended lesson paused.
-      if (!previous && this.root.hasAttribute("data-tutorial")) {
+      const title = layer.key === "menu";
+      // Reconnecting with a button or direction held must not resume pause, confirm results, or
+      // press dialog actions. Title keeps press-to-join for newly connected pads.
+      if (!previous && !title) {
         this.repeat[index] = heldNav(menuDirection(pad));
         return;
       }
       const nav = stepNav(this.repeat[index] ?? heldNav(null), menuDirection(pad), now);
       this.repeat[index] = nav.repeat;
       const pressed = (button: number) => justPressed(pad, previous, button);
-      const title = layer.key === "menu";
       if (pressed(BUTTON.START)) {
         if (!(title && this.hooks.titleButton(index, "start"))) layer.start?.();
         return;

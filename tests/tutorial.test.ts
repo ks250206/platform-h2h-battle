@@ -188,6 +188,27 @@ describe("independent lessons on the real fixed-step simulation", () => {
     success(b);
   });
 
+  test("neutral throw without directional input fails step 1 with steering guidance", () => {
+    const b = lesson("throw");
+    tick(b, { aim: right }, 14);
+    tick(b, { grab: true, aim: right });
+    until(b, () => b.step === 1);
+    until(b, () => b.status === "failed", { move: { x: 0, z: 0 } });
+    expect(b.status).toBe("failed");
+    expect(b.feedback).toContain("移動方向");
+    expect(b.completed.size).toBe(0);
+  });
+
+  test("a lesson time-up fails cleanly instead of leaving the lesson playing", () => {
+    const b = lesson("basics");
+    b.state.elapsed = b.state.rules.timeLimit! - dt / 2;
+    tick(b);
+    expect(b.state.phase).toBe("ended");
+    expect(b.status).toBe("failed");
+    expect(b.feedback).toContain("時間切れ");
+    expect(b.resultReady).toBe(true);
+  });
+
   test("a high-damage hit only advances the launch objective; a credited stock loss completes KO", () => {
     const b = lesson("ko");
     const rival = b.state.fighters[1];
@@ -248,21 +269,23 @@ describe("independent lessons on the real fixed-step simulation", () => {
     expect(b.state).toEqual(initial);
     expect([...b.completed]).toEqual(["cancel"]);
   });
-  test.each([{ jump: true }, { attackPressed: "thrust" }, { grab: true }, { cancel: true }] as const)(
-    "the recovery air pause explains how to continue after %j",
-    (action) => {
-      const b = lesson("recovery");
-      tick(b, { jump: true });
-      const elapsed = b.state.elapsed;
-      tick(b, action);
-      expect(b.feedback).toContain("足場方向へ回避");
-      expect(b.state.elapsed).toBe(elapsed);
-      expect(b.step).toBe(1);
-      tick(b, { step: true, move: left });
-      expect(b.feedback).toBe("");
-      expect(b.step).toBe(2);
-    },
-  );
+  test.each([
+    { jump: true },
+    { attackPressed: "thrust" },
+    { grab: true },
+    { cancel: true },
+  ] as const)("the recovery air pause explains how to continue after %j", (action) => {
+    const b = lesson("recovery");
+    tick(b, { jump: true });
+    const elapsed = b.state.elapsed;
+    tick(b, action);
+    expect(b.feedback).toContain("足場方向へ回避");
+    expect(b.state.elapsed).toBe(elapsed);
+    expect(b.step).toBe(1);
+    tick(b, { step: true, move: left });
+    expect(b.feedback).toBe("");
+    expect(b.step).toBe(2);
+  });
   test("landing before spending a recovery attack is a retry", () => {
     const b = lesson("recovery");
     tick(b, { jump: true });
@@ -491,6 +514,17 @@ describe("prompts exercise the game's actual input handlers", () => {
     expect(Math.hypot(...Object.values(fresh.move))).toBeCloseTo(1);
     input.newMatch();
     expect(input.playerLocks[0].on).toBe(false); // the normal session's lock preference
+
+    // Switching from keyboard/mouse to gamepad mid-lesson via a stick push keeps moving immediately.
+    b.begin("basics", "keyboard");
+    input.newMatch(true);
+    pads.current[0] = pad();
+    take();
+    pads.current[0] = { ...pad(), axes: [1, 0, 0, 0] };
+    b.state.options.controls = { 0: "pad1" };
+    input.switchDevice();
+    const switched = take();
+    expect(Math.hypot(switched.move.x, switched.move.z)).toBeGreaterThan(0.9);
     input.destroy();
   });
 });
@@ -639,6 +673,20 @@ test("title, lesson navigation, disconnect, retries, summary and normal-mode han
     key("KeyR", "keyup");
     expect(battle().state.fighters[0].mode).toBe("idle");
     expect(battle().state.fighters[0].stamina).toBe(100);
+
+    click('.tutorial-hud [data-tutor="catalog"]');
+    action("basics");
+    action("play");
+    draw();
+    // Lesson timeout uses TutorialUi's retry dialog and keeps GameUI's result screen hidden.
+    battle().state.elapsed = battle().state.rules.timeLimit! - dt / 2;
+    draw(2);
+    expect(battle().status).toBe("failed");
+    expect(document.querySelector("dialog.tutorial-dialog[open]")).toBeTruthy();
+    expect(document.querySelector<HTMLElement>(".result-screen")!.hidden).toBe(true);
+    action("retry");
+    draw();
+    expect(battle().status).toBe("playing");
 
     click('.tutorial-hud [data-tutor="catalog"]');
     action("recovery");

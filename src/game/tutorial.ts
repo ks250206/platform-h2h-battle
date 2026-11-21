@@ -4,7 +4,7 @@ import { DEFAULT_MATCH_OPTIONS, type ControlDevice } from "./match";
 import { NO_GIMMICKS } from "./rules";
 import { safeZoneAt, type ZoneCircle } from "./safeZone";
 import { INPUT_BUFFER_TICKS, RULES } from "./tuning";
-import { emptyInput, type Fighter, type PlayerInput, type Vec2 } from "./types";
+import { emptyInput, type Fighter, type GameState, type PlayerInput, type Vec2 } from "./types";
 
 export const LESSONS = [
   {
@@ -99,6 +99,7 @@ export class TutorialBattle extends BattleEngine {
   private enteredPreview = false;
   private awaitingAirStep = false;
   private aimed = false;
+  private throwSteered = false;
 
   begin(id: LessonId, device: ControlDevice): void {
     this.lesson = LESSONS.find((lesson) => lesson.id === id)!;
@@ -106,7 +107,7 @@ export class TutorialBattle extends BattleEngine {
     this.status = "playing";
     this.feedback = "";
     this.destination = null;
-    this.enteredPreview = this.awaitingAirStep = this.aimed = false;
+    this.enteredPreview = this.awaitingAirStep = this.aimed = this.throwSteered = false;
     this.start("duel", {
       ...DEFAULT_MATCH_OPTIONS,
       controls: { 0: device },
@@ -302,17 +303,22 @@ export class TutorialBattle extends BattleEngine {
           );
         break;
       case "throw":
-        if (this.step === 0 && rival.grabbedBy === p.id && p.grabbedId === rival.id) this.advance();
-        else if (
-          this.step === 1 &&
-          before.grabbed === p.id &&
-          rival.grabbedBy === null &&
-          rival.lastAttacker === p.id &&
-          rival.damage > before.rivalDamage &&
-          rival.mode === "hitstun"
-        )
+        if (this.step === 0 && rival.grabbedBy === p.id && p.grabbedId === rival.id) {
+          this.throwSteered = false;
           this.advance();
-        else if (before.mode === "grab" && p.mode === "recovery")
+        } else if (this.step === 1) {
+          if (before.grabbed === p.id && length(input.move) > 0.2) this.throwSteered = true;
+          if (
+            before.grabbed === p.id &&
+            rival.grabbedBy === null &&
+            rival.lastAttacker === p.id &&
+            rival.damage > before.rivalDamage &&
+            rival.mode === "hitstun"
+          ) {
+            if (this.throwSteered) this.advance();
+            else this.fail("移動入力なしで投げました。つかみ中に移動方向を入れて投げ先を選ぼう。");
+          }
+        } else if (before.mode === "grab" && p.mode === "recovery")
           this.feedback = "つかみが届きませんでした。相手の正面に密着してもう一度。";
         break;
       case "ko":
@@ -406,7 +412,9 @@ export class TutorialBattle extends BattleEngine {
         break;
     }
     if (this.status !== "playing") return;
+    const phase = this.state.phase as GameState["phase"];
     if (rival.mode === "dead") this.fail("課題の達成前に相手が退場しました。");
+    else if (phase === "ended") this.fail("時間切れになりました。もう一度やってみよう。");
     else if (this.state.drawReason === "timeUp" || this.state.winnerId !== null)
       this.fail("練習時間が終了しました。");
   }

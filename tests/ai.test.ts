@@ -371,19 +371,22 @@ test.each(LEVELS)(
   },
 );
 
-test.each(LEVELS)("%s waits for observed spawn protection before withholding an attack", (level) => {
-  const { engine, human, cpu } = duel(61, level);
-  Object.assign(cpu, { x: 0, z: 0, aiThink: 99 });
-  Object.assign(human, { x: 0, z: 2.8, invulnerable: 0 });
-  const delay = AI_LEVELS[level].observationTicks;
-  for (let i = 0; i <= delay; i++) think(engine, cpu);
+test.each(LEVELS)(
+  "%s waits for observed spawn protection before withholding an attack",
+  (level) => {
+    const { engine, human, cpu } = duel(61, level);
+    Object.assign(cpu, { x: 0, z: 0, aiThink: 99 });
+    Object.assign(human, { x: 0, z: 2.8, invulnerable: 0 });
+    const delay = AI_LEVELS[level].observationTicks;
+    for (let i = 0; i <= delay; i++) think(engine, cpu);
 
-  human.invulnerable = RULES.respawnInvulnerable;
-  for (let i = 0; i <= delay; i++) {
-    cpu.aiThink = 0;
-    expect(think(engine, cpu).attackPressed).toBe(i < delay ? "thrust" : null);
-  }
-});
+    human.invulnerable = RULES.respawnInvulnerable;
+    for (let i = 0; i <= delay; i++) {
+      cpu.aiThink = 0;
+      expect(think(engine, cpu).attackPressed).toBe(i < delay ? "thrust" : null);
+    }
+  },
+);
 
 test("hard punishes the observed dodge landing on either side and whiffs if that read is baited", () => {
   for (const side of [-1, 1]) {

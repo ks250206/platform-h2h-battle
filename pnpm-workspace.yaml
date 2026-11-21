@@ -4,7 +4,7 @@ overrides:
   vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
   vitest: 5.1.0
 onlyBuiltDependencies:
-  - '@tailwindcss/oxide'
+  - "@tailwindcss/oxide"
   - esbuild
 patchedDependencies:
   pixi.js@8.23.0: patches/pixi.js@8.23.0.patch

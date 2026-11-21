@@ -234,6 +234,7 @@ export class BattleEngine {
       effects: [],
       winnerId: null,
       drawReason: null,
+      finishReason: null,
       set,
       message: "",
       messageTime: 0,
@@ -1402,6 +1403,7 @@ export class BattleEngine {
         survivor?.id ?? null,
         survivor ? this.title(survivor) + " WINS" : "DRAW",
         survivor ? null : "allOut",
+        "ko",
       );
     } else if (state.elapsed >= (state.rules.timeLimit ?? Infinity)) {
       // A fighter waiting to respawn already lost the damage it carried with that life.
@@ -1416,6 +1418,7 @@ export class BattleEngine {
           ? "TIME UP — 残機の多い選手、同数なら蓄積ダメージの少ない選手が勝利"
           : "TIME UP — 蓄積ダメージの少ない選手が勝利",
         tied ? "timeUp" : null,
+        "timeUp",
       );
     }
   }
@@ -1424,10 +1427,12 @@ export class BattleEngine {
     winnerId: number | null,
     message: string,
     drawReason: DrawReason | null,
+    finishReason: "ko" | "timeUp",
   ): void {
     const state = this.state;
     state.winnerId = winnerId;
     state.drawReason = drawReason;
+    state.finishReason = finishReason;
     state.phase = "ended";
     if (state.set) state.set = finishSetGame(state.set, winnerId, state.playerStats);
     this.clearBuffers();

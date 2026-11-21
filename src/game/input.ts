@@ -597,6 +597,22 @@ export class BattleInput {
       this.reset();
     this.previousPhase = state.phase;
   }
+  /**
+   * In-play device switch (e.g. a tutorial switching from keyboard to a pad mid-lesson): clears
+   * stale keyboard/touch state without re-arming menu-takeover pad suppression, so the stick
+   * movement that selected the pad moves the fighter on the same frame.
+   */
+  switchDevice(): void {
+    this.held.clear();
+    this.clearKeyboardPresses();
+    this.mouse = null;
+    this.mouseAttack = null;
+    this.touchAttack = null;
+    this.touchMove = { x: 0, y: 0 };
+    this.joystickId = null;
+    this.padsSeen.clear();
+    this.rumbleSamples.clear();
+  }
   reset(): void {
     this.active = false;
     this.held.clear();

@@ -3,9 +3,9 @@ name: Verify game
 on:
   push:
     branches: [main]
-    paths-ignore: ['**/*.md']
+    paths-ignore: ["**/*.md"]
   pull_request:
-    paths-ignore: ['**/*.md']
+    paths-ignore: ["**/*.md"]
   workflow_dispatch:
 
 permissions:
@@ -64,7 +64,7 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - name: Run Playwright E2E (shard ${{ matrix.shard }}/4)
         env:
-          PLAYWRIGHT_SKIP_BUILD: '1'
+          PLAYWRIGHT_SKIP_BUILD: "1"
         run: pnpm exec playwright test --shard=${{ matrix.shard }}/4
       - name: Upload browser evidence
         if: always()

@@ -3,11 +3,7 @@
 // floor meshes all read the same tiles from here, so what is drawn is exactly what can be stood on.
 // Pure TypeScript, importable in node (tests): no DOM and no renderer.
 
-import {
-  GIMMICK_IDS as RULE_GIMMICK_IDS,
-  type GimmickConstraints,
-  type StageInfo,
-} from "./rules";
+import { GIMMICK_IDS as RULE_GIMMICK_IDS, type GimmickConstraints, type StageInfo } from "./rules";
 import type { ZoneCircle } from "./safeZone";
 import { RULES } from "./tuning";
 import type { Vec2 } from "./types";
@@ -234,7 +230,8 @@ export const STAGES: Record<StageId, StageDefinition> = {
       wind: { state: "on", note: "ときどき弱く吹く" },
       conveyor: { state: "off", note: "なし" },
     },
-    gimmickNote: "崩落・安全地帯・爆撃・風がすべて起きる。外周は2回崩れ、5×5タイルの足場まで狭くなる。",
+    gimmickNote:
+      "崩落・安全地帯・爆撃・風がすべて起きる。外周は2回崩れ、5×5タイルの足場まで狭くなる。",
     halfSize: RULES.arenaHalfSize,
     minHalfSize: RULES.minHalfSize,
     solid: true,

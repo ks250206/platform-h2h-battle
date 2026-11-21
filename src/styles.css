@@ -133,6 +133,8 @@ svg {
 #interface button,
 #interface a,
 #interface summary,
+#interface select,
+#interface input,
 #interface dialog {
   pointer-events: auto;
 }
@@ -243,6 +245,15 @@ svg {
   width: 360px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  pointer-events: auto;
+  padding-right: 4px;
+  padding-bottom: 12px;
+}
+.menu-content > * {
+  flex-shrink: 0;
 }
 .menu-content::before,
 .menu-content::after {

@@ -43,11 +43,14 @@ class FakeGain extends FakeNode {
 class FakeSource extends FakeNode {
   onended: (() => void) | null = null;
   startedAt = -1;
+  stoppedAt = -1;
   start(at = 0) {
     this.startedAt = at;
     this.ctx.started.push(this);
   }
-  stop() {}
+  stop(at = 0) {
+    this.stoppedAt = at;
+  }
 }
 
 class FakeOscillator extends FakeSource {

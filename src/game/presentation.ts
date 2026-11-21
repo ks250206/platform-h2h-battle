@@ -206,15 +206,16 @@ export class PresentationTracker {
       });
     }
     if (ended) {
-      // The last fall of the game, if a fall decided it; else the winner stands where it is.
+      // A non-final stock fall on the exact time-up tick is still a time-up finish, not a KO.
       const finalFall = falls.at(-1);
+      const byKo = state.finishReason ? state.finishReason === "ko" : !!finalFall;
       const winner = state.fighters.find((f) => f.id === state.winnerId);
-      const spot = finalFall ?? winner;
+      const spot = byKo ? (finalFall ?? winner) : winner;
       events.push({
         kind: "finish",
         finish: finishKind(state, context),
         winnerId: state.winnerId,
-        byKo: !!finalFall,
+        byKo,
         x: spot?.x ?? 0,
         y: spot?.y ?? 0,
         z: spot?.z ?? 0,

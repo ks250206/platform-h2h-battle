@@ -319,24 +319,27 @@ describe("live floor and match rules", () => {
     expect(engine.state.effects).toHaveLength(0);
   });
 
-  test.each([true, false])("losing the rim during get-up shows the falling pose (tech %s)", (tech) => {
-    const { engine, f, other } = fixture("garden", "duel");
-    other.hitstop = 100;
-    tumble(f);
-    f.x = 7.1;
-    engine.state.elapsed = RULES.collapseStart - 1.5 * dt;
-    engine.update(dt, { ...emptyInput(), step: tech, move: { x: -1, z: 0 } });
-    expect(f.mode).toBe(tech ? "ukemi" : "knockdown");
-    engine.update(dt);
-    expect(f.x).toBe(7.1);
-    expect(f.grounded).toBe(false);
-    const context = { floor: false, atEase: false };
-    const falling = new FighterMotion().update({ ...f, mode: "idle" }, dt, context).skeleton;
-    const pose = new FighterMotion().update(f, dt, context).skeleton;
-    // The idle pose also has a small breathing offset.
-    expect(pose.pelvis.p.y).toBeCloseTo(falling.pelvis.p.y, 2);
-    expect(pose.tumble).toEqual(falling.tumble);
-  });
+  test.each([true, false])(
+    "losing the rim during get-up shows the falling pose (tech %s)",
+    (tech) => {
+      const { engine, f, other } = fixture("garden", "duel");
+      other.hitstop = 100;
+      tumble(f);
+      f.x = 7.1;
+      engine.state.elapsed = RULES.collapseStart - 1.5 * dt;
+      engine.update(dt, { ...emptyInput(), step: tech, move: { x: -1, z: 0 } });
+      expect(f.mode).toBe(tech ? "ukemi" : "knockdown");
+      engine.update(dt);
+      expect(f.x).toBe(7.1);
+      expect(f.grounded).toBe(false);
+      const context = { floor: false, atEase: false };
+      const falling = new FighterMotion().update({ ...f, mode: "idle" }, dt, context).skeleton;
+      const pose = new FighterMotion().update(f, dt, context).skeleton;
+      // The idle pose also has a small breathing offset.
+      expect(pose.pelvis.p.y).toBeCloseTo(falling.pelvis.p.y, 2);
+      expect(pose.tumble).toEqual(falling.tumble);
+    },
+  );
 
   test.each([false, true])("outside gauge and clock continue; KO on impact = %s", (ko) => {
     const { engine, f, other } = fixture("garden", "duel");

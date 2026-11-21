@@ -1649,10 +1649,13 @@ export class GameUI {
     this.pausePanel.hidden = state.phase !== "paused";
     if (changedPhase && state.phase !== "ended") this.clearFinish();
     // A finish keeps the arena in view for a moment (the stamp, the highlight) before the result.
-    const showResult = state.phase === "ended" && performance.now() >= this.finishHoldUntil;
+    // While a tutorial lesson owns the session, its own dialog handles results and focus.
+    const tutorial = this.host.dataset.tutorial !== undefined;
+    const showResult =
+      !tutorial && state.phase === "ended" && performance.now() >= this.finishHoldUntil;
     const revealed = showResult && this.result.hidden;
     this.result.hidden = !showResult;
-    if (isClimax(state)) this.host.dataset.climax = "";
+    if (!tutorial && isClimax(state)) this.host.dataset.climax = "";
     else delete this.host.dataset.climax;
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
     const ladderLabel = ladder
@@ -1681,7 +1684,7 @@ export class GameUI {
       );
       this.query(".pause-exit-note").hidden = !state.set;
     }
-    if (changedPhase && state.phase === "ended") {
+    if (changedPhase && state.phase === "ended" && !tutorial) {
       this.result.setAttribute("aria-label", ladder ? "CPUラダーの結果" : "対戦結果");
       if (ladder) this.syncLadderResult(ladder, ladderLabel, state.message);
       else this.drawResult(state);

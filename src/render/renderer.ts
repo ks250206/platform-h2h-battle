@@ -214,7 +214,7 @@ export class ArenaRenderer {
   private readonly view: View3D;
   private readonly scene = new Container3D();
   private readonly scenery = new Container3D();
-  private previousTrainingState: GameState | null = null;
+  private previousState: GameState | null = null;
   private readonly trainingDebug = new Graphics();
   private readonly labels = new Container();
   private readonly assets = new MeshLibrary();
@@ -1031,7 +1031,11 @@ export class ArenaRenderer {
 
   render(state: GameState, dt: number, showHitboxes = false): void {
     if (this.destroyed) return;
-    if (this.previousTrainingState && this.previousTrainingState !== state) {
+    if (
+      this.previousState &&
+      this.previousState !== state &&
+      (this.previousState.phase !== "menu" || state.phase !== "menu")
+    ) {
       for (const view of this.fighters.values()) {
         view.motion = new FighterMotion();
         view.trail.clear();
@@ -1040,10 +1044,11 @@ export class ArenaRenderer {
       this.impacts.length = 0;
       for (const effect of this.effects.values()) effect.root.destroy({ children: true });
       this.effects.clear();
+      this.finishFx.clear();
       this.dodgesSeen.clear();
       this.shake = 0;
     }
-    this.previousTrainingState = state.mode === "training" && state.phase !== "menu" ? state : null;
+    this.previousState = state;
     this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
@@ -1133,6 +1138,9 @@ export class ArenaRenderer {
 
   screenToWorld(clientX: number, clientY: number): Vec2 | null {
     const rect = this.canvas.getBoundingClientRect();
+    // Cosmetic impact/KO shake must never perturb gameplay aiming: pick through the unshaken camera.
+    const shaken = this.shake > 0 && this.settings.cameraShake && !this.debugCamera;
+    if (shaken) this.placeCamera(false);
     const hit = this.view.screenToWorld(
       {
         x: ((clientX - rect.left) * this.width) / rect.width,
@@ -1140,6 +1148,7 @@ export class ArenaRenderer {
       },
       this.ground,
     );
+    if (shaken) this.placeCamera(true);
     return hit ? { x: hit.x, z: hit.z } : null;
   }
 
@@ -1245,7 +1254,7 @@ export class ArenaRenderer {
   }
 
   /** The only place the camera is positioned: pan the look-at target, then the fixed offset. */
-  private placeCamera(): void {
+  private placeCamera(applyShake = true): void {
     const s = (this.viewScale || this.cameraScale) * (1 + this.pullBack);
     const up = this.panUp * VIEW_HEIGHT * s;
     const right = ((this.panRight * VIEW_HEIGHT * s) / this.height) * this.width + this.focusRight;
@@ -1265,7 +1274,7 @@ export class ArenaRenderer {
     }
     this.view.camera.fov = CAMERA_FOV;
     // Impact shake: a decaying jolt along the screen axes, so the horizon never rolls.
-    if (this.shake > 0 && this.settings.cameraShake) {
+    if (applyShake && this.shake > 0 && this.settings.cameraShake) {
       const amount = Math.min(0.5, this.shake) * 0.55 * s;
       const jx = Math.sin(this.time * 83.1) * amount;
       const jy = Math.cos(this.time * 97.3) * amount;
@@ -1751,11 +1760,22 @@ export class ArenaRenderer {
     this.resizeObserver.disconnect();
     this.canvas.removeEventListener("webglcontextrestored", this.handleContextRestored);
 
+    for (const view of this.fighters.values()) this.destroyFighter(view);
+    this.fighters.clear();
+    for (const bomb of this.bombs.values()) {
+      bomb.root.destroy({ children: true });
+      bomb.label.destroy();
+    }
+    this.bombs.clear();
+    for (const effect of this.effects.values()) effect.root.destroy({ children: true });
+    this.effects.clear();
+    this.finishFx.clear();
+    for (const impact of this.impacts) impact.root.destroy({ children: true });
+    this.impacts.length = 0;
+
     this.view.destroy({ children: true });
     this.ssao?.destroy();
     this.fxaa?.destroy();
-    for (const impact of this.impacts) impact.root.destroy({ children: true });
-    this.impacts.length = 0;
     this.rigAssets.destroy();
     this.evadeRing.destroy(true);
     this.stageShapes.destroy();

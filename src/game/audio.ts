@@ -272,6 +272,14 @@ export class BattleAudio {
   /** Where the next tone/noise goes and how loud, set by the sound being played. */
   private target: AudioNode | null = null;
   private scale = 1;
+  /** Scheduled SFX voices for the running match, retired when a new match replaces it. */
+  private readonly voices = new Set<{
+    source: AudioScheduledSourceNode;
+    envelope: GainNode;
+    filter?: BiquadFilterNode;
+    start: number;
+    end: number;
+  }>();
 
   unlock(): void {
     if (this.disposed) return;
@@ -402,6 +410,7 @@ export class BattleAudio {
   update(state: GameState, events: readonly PresentationEvent[] = [], tutorial = false): void {
     if (this.disposed) return;
     if (state.elapsed < this.previousElapsed || state.fighters !== this.previousFighters) {
+      if (this.previousFighters !== null) this.retireVoices(false);
       this.played.clear();
       this.swords.clear();
     }
@@ -473,6 +482,41 @@ export class BattleAudio {
     this.scale = gain;
   }
 
+  /** Stops and retires previous-match SFX voices (including queued finish fanfare notes). */
+  private retireVoices(immediate: boolean): void {
+    const now = this.context?.currentTime ?? 0;
+    for (const voice of this.voices) {
+      if (voice.end <= now) {
+        voice.source.onended = null;
+        voice.source.disconnect();
+        voice.filter?.disconnect();
+        voice.envelope.disconnect();
+        continue;
+      }
+      const future = immediate || voice.start > now;
+      if (future) voice.source.onended = null;
+      try {
+        voice.envelope.gain.cancelScheduledValues(now);
+        if (future) {
+          voice.envelope.gain.setValueAtTime(0, now);
+          voice.source.stop(now);
+        } else {
+          voice.envelope.gain.setValueAtTime(Math.max(0.0001, voice.envelope.gain.value), now);
+          voice.envelope.gain.linearRampToValueAtTime(0, now + 0.02);
+          voice.source.stop(Math.min(voice.end, now + 0.025));
+        }
+      } catch {
+        // Already ended or context closed.
+      }
+      if (future) {
+        voice.source.disconnect();
+        voice.filter?.disconnect();
+        voice.envelope.disconnect();
+      }
+    }
+    this.voices.clear();
+  }
+
   private tone(
     frequency: number,
     endFrequency: number,
@@ -497,12 +541,16 @@ export class BattleAudio {
     envelope.gain.exponentialRampToValueAtTime(0.0001, start + duration);
     oscillator.connect(envelope);
     envelope.connect(this.target);
+    const end = start + duration + 0.01;
+    const entry = { source: oscillator, envelope, start, end };
+    this.voices.add(entry);
     oscillator.onended = () => {
+      this.voices.delete(entry);
       oscillator.disconnect();
       envelope.disconnect();
     };
     oscillator.start(start);
-    oscillator.stop(start + duration + 0.01);
+    oscillator.stop(end);
   }
 
   private noise(
@@ -538,13 +586,17 @@ export class BattleAudio {
     source.connect(filter);
     filter.connect(envelope);
     envelope.connect(this.target);
+    const end = now + duration + 0.01;
+    const entry = { source, envelope, filter, start: now, end };
+    this.voices.add(entry);
     source.onended = () => {
+      this.voices.delete(entry);
       source.disconnect();
       filter.disconnect();
       envelope.disconnect();
     };
     source.start(now, Math.random() * 0.5);
-    source.stop(now + duration + 0.01);
+    source.stop(end);
   }
 
   /** A short tune on the cue bus: `notes` as MIDI numbers, `gap` seconds apart from `delay`. */
@@ -771,6 +823,7 @@ export class BattleAudio {
 
   destroy(): void {
     this.disposed = true;
+    this.retireVoices(true);
     this.played.clear();
     this.swords.clear();
     this.bgm?.destroy();

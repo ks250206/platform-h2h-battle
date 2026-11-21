@@ -436,4 +436,45 @@ describe("BattleAudio on a fake AudioContext", () => {
     expect(started).toBeLessThanOrEqual(VOICE_LIMITS.impact.perFrame * 4 + 2);
     expect(started).toBeGreaterThanOrEqual(2);
   });
+
+  test("starting a new match retires queued finish fanfare voices so nothing leaks across matches", () => {
+    const { audio, ctx, frame } = setup({ bgmVolume: 0, seVolume: 1, muted: false });
+    const engine = new BattleEngine(9);
+    engine.start("duel", { stocks: 1, gimmicks: { ...NO_GIMMICKS } });
+    engine.state.phase = "playing";
+    frame(engine.state);
+    Object.assign(engine.state.fighters[1]!, { y: -20, vy: 0, grounded: false, hitstop: 0 });
+    engine.update(FRAME, emptyInput());
+    const mark = ctx.started.length;
+    frame(engine.state, [
+      {
+        kind: "finish",
+        finish: "ladderClear",
+        winnerId: 0,
+        byKo: true,
+        x: 0,
+        y: 0,
+        z: 0,
+        color: 0,
+      },
+    ]);
+    const fanfare = ctx.started.slice(mark);
+    const triggerAt = ctx.currentTime - FRAME;
+    const futureNotes = fanfare.filter((s) => s.startedAt > triggerAt + 0.5);
+    expect(futureNotes.length).toBeGreaterThanOrEqual(10);
+    // Advance briefly, then start a fresh match while fanfare chords are still scheduled ahead.
+    for (let i = 0; i < 15; i++) frame(engine.state);
+    const retireAt = ctx.currentTime;
+    engine.start("duel", { stocks: 1, gimmicks: { ...NO_GIMMICKS } });
+    frame(engine.state);
+    for (const source of fanfare) {
+      expect(source.stoppedAt).toBeGreaterThanOrEqual(0);
+      expect(source.stoppedAt).toBeLessThanOrEqual(retireAt + 0.03);
+      if (source.startedAt > retireAt) {
+        expect(source.stoppedAt).toBeCloseTo(retireAt, 6);
+        expect(source.outputs.size).toBe(0);
+      }
+    }
+    audio.destroy();
+  });
 });

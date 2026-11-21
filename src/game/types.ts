@@ -191,6 +191,8 @@ export interface GameState {
   effects: Effect[];
   winnerId: number | null;
   drawReason: DrawReason | null;
+  /** What decided a finished match (`"ko"` when ≤1 contender remained, `"timeUp"` on deadline). */
+  finishReason?: "ko" | "timeUp" | null;
   set: SetMatch | null;
   message: string;
   messageTime: number;

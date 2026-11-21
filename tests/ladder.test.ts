@@ -141,7 +141,8 @@ describe("CPU ladder", () => {
       currentPhase: "playing",
       host: {
         dataset: {},
-        querySelector: (selector: string) => (selector === ".result-subtitle" ? subtitle : element()),
+        querySelector: (selector: string) =>
+          selector === ".result-subtitle" ? subtitle : element(),
       },
       menu: element(),
       hud: element(),

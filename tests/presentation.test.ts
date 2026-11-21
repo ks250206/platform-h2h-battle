@@ -327,4 +327,60 @@ describe("presentation events", () => {
     expect(seen).toContain("collapseWarning");
     expect(seen).toContain("zoneWarning");
   });
+
+  test("a non-final stock fall on the exact time-up tick is still a time-up finish, not a KO", () => {
+    const engine = play("duel", { stocks: 3, time: "short" });
+    const tracker = new PresentationTracker();
+    tracker.update(engine.state);
+    const [winner, rival] = engine.state.fighters;
+    Object.assign(winner!, { x: -3.5, z: 2.25, damage: 10 });
+    Object.assign(rival!, {
+      x: 4.5,
+      z: -4,
+      y: -20,
+      vy: 0,
+      grounded: false,
+      hitstop: 0,
+      damage: 50,
+    });
+    engine.state.elapsed = engine.state.rules.timeLimit! - DT / 2;
+    engine.update(DT, emptyInput());
+    expect(engine.state.phase).toBe("ended");
+    expect(engine.state.finishReason).toBe("timeUp");
+    expect(rival!.stocks).toBe(2);
+    const finish = tracker.update(engine.state).find((e) => e.kind === "finish");
+    expect(finish).toMatchObject({
+      kind: "finish",
+      finish: "win",
+      winnerId: winner!.id,
+      byKo: false,
+      x: winner!.x,
+      z: winner!.z,
+    });
+  });
+
+  test("tutorial context keeps practice music and suppresses climax and finish banners", () => {
+    const engine = play("duel", { stocks: 2, time: "short" });
+    const tracker = new PresentationTracker();
+    tracker.update(engine.state, { tutorial: true });
+    expect(musicCue(engine.state, true)).toEqual({
+      scene: "practice",
+      mood: null,
+      paused: false,
+    });
+    engine.state.fighters.forEach((f) => (f.stocks = 1));
+    expect(tracker.update(engine.state, { tutorial: true }).some((e) => e.kind === "climax")).toBe(
+      false,
+    );
+    drop(engine, engine.state.fighters[1]!);
+    expect(engine.state.phase).toBe("ended");
+    expect(musicCue(engine.state, true)).toEqual({
+      scene: "practice",
+      mood: null,
+      paused: false,
+    });
+    expect(tracker.update(engine.state, { tutorial: true }).some((e) => e.kind === "finish")).toBe(
+      false,
+    );
+  });
 });

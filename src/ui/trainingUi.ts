@@ -54,6 +54,8 @@ export class TrainingUI {
     private readonly engine: BattleEngine,
     private readonly resetDevices: () => void,
     private readonly onSync: () => void,
+    private readonly canResume: () => boolean = () => true,
+    private readonly onResume: () => void = () => engine.resume(),
   ) {
     this.hud = document.createElement("aside");
     this.hud.className = "training-hud";
@@ -151,12 +153,18 @@ export class TrainingUI {
           this.engine.setTrainingDamage(slot, d.value ?? session.damage[slot] + Number(d.delta));
           this.sync();
         } else if ("record" in d || "play" in d) {
+          if (!this.canResume()) {
+            this.dialog.querySelector("[data-tape]")!.textContent =
+              "パッドが未接続のため開始できません。再接続してからお試しください。";
+            return;
+          }
           if (this.engine.beginTraining("record" in d ? "record" : "play")) this.close();
           else
             this.dialog.querySelector("[data-tape]")!.textContent =
               "記録が空です。先に1Pの入力を記録してください。";
         } else if ("reset" in d) {
           this.engine.resetTraining();
+          if (!this.canResume()) this.engine.pause();
           this.close();
         } else this.close();
       },
@@ -182,15 +190,20 @@ export class TrainingUI {
   }
 
   quickReset() {
-    if (!this.engine.training || this.engine.state.phase === "paused") return;
+    if (!this.engine.training || this.engine.state.phase === "paused" || !this.canResume()) return;
     this.engine.resetTraining();
     this.resetDevices();
     this.onSync();
   }
 
+  /** Invalidates auto-resume if a controller disconnects while the training dialog is open. */
+  onPadLost() {
+    this.resumeOnClose = false;
+  }
+
   open() {
     if (!this.engine.training || this.root.querySelector("dialog[open]")) return;
-    this.resumeOnClose = this.engine.state.phase !== "paused";
+    this.resumeOnClose = this.engine.state.phase !== "paused" && this.canResume();
     this.engine.pause();
     this.resetDevices();
     this.sync();
@@ -200,7 +213,7 @@ export class TrainingUI {
 
   private close() {
     this.resetDevices();
-    if (this.resumeOnClose) this.engine.resume();
+    if (this.resumeOnClose && this.canResume()) this.onResume();
     this.resumeOnClose = false;
     this.onSync();
     this.dialog.close();
