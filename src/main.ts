@@ -1,5 +1,6 @@
 import "./styles.css";
 import "./touch.css";
+import "./ui/fullscreen.css";
 import { BattleEngine } from "./game/engine";
 import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
@@ -9,9 +10,11 @@ import { createMatchStore, playableOptions } from "./game/matchStore";
 import { humanSlots, padIndex, type MatchOptions } from "./game/match";
 import { LadderSession } from "./game/ladder";
 import { PadHub } from "./game/pads";
+import { installZoomGuard } from "./game/zoomGuard";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { TrainingUI } from "./ui/trainingUi";
 import { GameUI } from "./ui/GameUI";
+import { FullscreenUI } from "./ui/fullscreenUi";
 import { TutorialBattle } from "./game/tutorial";
 import { TutorialUi } from "./ui/tutorialUi";
 import { PadMenu } from "./ui/padMenu";
@@ -23,6 +26,7 @@ root.innerHTML =
   '<div id="arena"></div><div id="interface"></div><div class="loading-screen"><span class="loading-paw">✦</span><strong>BRAMBLE</strong><p>浮島を準備しています…</p></div>';
 const host = document.getElementById("arena")!;
 const overlay = document.getElementById("interface")!;
+const destroyZoomGuard = installZoomGuard();
 const matchEngine = new BattleEngine();
 let engine = matchEngine;
 const sound = new BattleAudio();
@@ -246,6 +250,7 @@ const ui = new GameUI(overlay, {
     supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
   },
 });
+const fullscreenUI = new FullscreenUI(overlay);
 const trainingUI = new TrainingUI(
   overlay,
   engine,
@@ -441,6 +446,8 @@ window.addEventListener(
     input?.destroy();
     tutorialUi.destroy();
     padMenu.destroy();
+    fullscreenUI.destroy();
+    destroyZoomGuard();
     trainingUI.destroy();
     ui.destroy();
     sound.destroy();
