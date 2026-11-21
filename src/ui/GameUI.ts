@@ -294,6 +294,8 @@ interface FighterCard {
   lock: HTMLElement;
   /** What the life display last drew, so it is rebuilt only when it changes. */
   lifeKey: string;
+  /** The lock chips the card shows (their markup), so they are redrawn only when they change. */
+  lockKey: string;
   /** Who the card was drawn for (tag and look); a change rebuilds it. */
   identity: string;
 }
@@ -328,7 +330,6 @@ export class GameUI {
   private playerRowsMode: MatchMode | null = null;
   private connectedPads: number[] = [];
   private locks: PlayerLock[] = [];
-  private lockKey = "";
   /** The running match's players by fighter id: player number, colour and slot shape. */
   private players = new Map<number, PlayerMark>();
   private keyboardFighter: number | null = null;
@@ -840,21 +841,23 @@ export class GameUI {
 
   private applyLock(): void {
     const several = this.players.size > 1;
-    const key = JSON.stringify([several, this.locks, [...this.cards.keys()]]);
-    if (key !== this.lockKey) {
-      this.lockKey = key;
-      for (const [id, card] of this.cards) {
-        const chips = this.locks.filter((lock) => lock.on && lock.targetId === id);
-        card.lock.hidden = chips.length === 0;
-        card.lock.innerHTML = chips
-          .map((lock) => {
-            const player = this.players.get(lock.fighterId);
-            if (!several || !player) return '<span class="fighter-lock">LOCK</span>';
-            // Number and slot shape: two players in the same colour still have their own chip.
-            return `<span class="fighter-lock player-lock" style="--lock-color: ${player.color}">${glyph(player.slot)}P${player.number} LOCK</span>`;
-          })
-          .join("");
-      }
+    for (const [id, card] of this.cards) {
+      const chips = this.locks
+        .filter((lock) => lock.on && lock.targetId === id)
+        .map((lock) => {
+          const player = this.players.get(lock.fighterId);
+          if (!several || !player) return '<span class="fighter-lock">LOCK</span>';
+          // Number and slot shape: two players in the same colour still have their own chip.
+          return `<span class="fighter-lock player-lock" style="--lock-color: ${player.color}">${glyph(player.slot)}P${player.number} LOCK</span>`;
+        })
+        .join("");
+      // Each card remembers the chips it shows. A card drawn anew for a changed look starts
+      // without any, and a player's new colour is a different chip: both are drawn again even
+      // when every lock-on is what it was in the match before.
+      if (card.lockKey === chips) continue;
+      card.lockKey = chips;
+      card.lock.hidden = chips === "";
+      card.lock.innerHTML = chips;
     }
     // The keyboard legend follows the keyboard player's lock (or the only player's).
     const legendLock =
@@ -1067,6 +1070,7 @@ export class GameUI {
       invulnerable: q(".fighter-invulnerable"),
       lock: q(".fighter-locks"),
       lifeKey: "",
+      lockKey: "",
       identity: this.cardIdentity(fighter),
     };
   }
@@ -1200,16 +1204,16 @@ export class GameUI {
       const humans = state.fighters.filter((fighter) => fighter.human);
       const several = humans.length > 1;
       const tag = winner?.human && several ? `P${winner.player ?? 1}` : null;
-      // Who won, the way the match showed them: slot shape, tag, name and colour.
+      // Who won, the way the match showed them: slot shape, tag, name and colour. The colour is
+      // part of the markup, so the same fighter winning again in a new colour is drawn again.
       const badge = this.query(".result-winner");
       badge.hidden = !winner;
       const badgeMarkup = winner
-        ? `<span class="winner-tag">${glyph(winner.id)}${fighterTag(winner, countHumans(state.fighters))}</span><span class="winner-name">${escapeHtml(winner.name)}</span>`
+        ? `<span class="winner-tag" style="--fighter-color: ${hex(winner.color)}">${glyph(winner.id)}${fighterTag(winner, countHumans(state.fighters))}</span><span class="winner-name">${escapeHtml(winner.name)}</span>`
         : "";
       if (badge.dataset.markup !== badgeMarkup) {
         badge.dataset.markup = badgeMarkup;
         badge.innerHTML = badgeMarkup;
-        if (winner) badge.style.setProperty("--fighter-color", hex(winner.color));
       }
       this.query(".result-title").textContent = winner?.human
         ? tag
