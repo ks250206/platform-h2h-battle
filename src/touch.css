@@ -205,6 +205,16 @@
 }
 
 @media (pointer: coarse) and (max-height: 570px) {
+  /* Leave 20px + 140px for each fighter card, and room below for the touch controls. */
+  #interface .training-hud {
+    top: 76px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: min(380px, calc(100% - 332px));
+    max-height: calc(100dvh - 208px - env(safe-area-inset-bottom));
+    overflow: auto;
+  }
   #interface .fighter-cards {
     top: 76px;
     bottom: auto;
@@ -243,5 +253,14 @@
   }
   #interface[data-mode="rumble"] .fighter-damage {
     margin-left: auto;
+  }
+}
+
+@media (pointer: coarse) and (max-height: 570px) and (max-width: 520px) {
+  /* The gap between the cards is too narrow for the shortcut buttons here. */
+  #interface .training-hud {
+    top: 166px;
+    max-width: calc(100% - 40px);
+    max-height: calc(100dvh - 298px - env(safe-area-inset-bottom));
   }
 }

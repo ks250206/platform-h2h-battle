@@ -987,10 +987,13 @@ export class ArenaRenderer {
     }
     for (const effect of state.effects) this.updateEffect(effect);
     this.updateImpacts(visualDelta);
-    this.trainingDebug.visible =
-      state.mode === "training" && state.phase !== "menu" && showHitboxes;
-    if (this.trainingDebug.visible)
+    const showDebug = state.mode === "training" && state.phase !== "menu" && showHitboxes;
+    if (showDebug) {
       drawTrainingDebug(this.trainingDebug, state.fighters, (p) => this.view.worldToScreen(p));
+    } else if (this.trainingDebug.visible) {
+      this.trainingDebug.clear();
+    }
+    this.trainingDebug.visible = showDebug;
     this.app.render();
   }
 

@@ -1,7 +1,16 @@
 import { clamp, isInvulnerable, normalize } from "./combat";
+import { clearWalk } from "./navigation";
+import { CONVEYOR_SPEED, hasConveyors } from "./stages";
 import { RULES, UKEMI } from "./tuning";
 import { armedTech } from "./ukemi";
-import { emptyInput, type AttackId, type Fighter, type GameState, type PlayerInput } from "./types";
+import {
+  emptyInput,
+  type AttackId,
+  type Fighter,
+  type GameState,
+  type PlayerInput,
+  type Vec2,
+} from "./types";
 
 export const RECORDING_LIMIT = 600;
 export const DAMAGE_LIMIT = 999;
@@ -29,6 +38,38 @@ function mirror(input: PlayerInput): PlayerInput {
     move: { x: -input.move.x, z: -input.move.z },
     aim: input.aim && { x: -input.aim.x, z: -input.aim.z },
   };
+}
+
+function safeDummyMove(arena: GameState["arena"], dummy: Fighter, preferred: Vec2, dodge: boolean) {
+  const center = normalize({ x: -dummy.x, z: -dummy.z });
+  let halfSize = arena.halfSize;
+  if (hasConveyors(arena.stageId)) {
+    // Reserve room for belt drift during a committed step. Walk inland even while recharging.
+    halfSize -= CONVEYOR_SPEED * RULES.stepDuration + RULES.fighterRadius;
+    if (Math.max(Math.abs(dummy.x), Math.abs(dummy.z)) > halfSize)
+      return { move: center, step: false };
+  }
+  const step = dodge && dummy.mode === "idle" && dummy.stamina >= RULES.stepCost;
+  const still = { move: { x: 0, z: 0 }, step: false };
+  if (dodge && !step) return still;
+  const travel = step ? RULES.stepSpeed * RULES.stepDuration : RULES.fighterRadius;
+  const directions = [
+    preferred,
+    { x: -preferred.x, z: -preferred.z },
+    center,
+    { x: preferred.z, z: -preferred.x },
+    { x: -preferred.z, z: preferred.x },
+    { x: 1, z: 0 },
+    { x: -1, z: 0 },
+    { x: 0, z: 1 },
+    { x: 0, z: -1 },
+  ];
+  for (const move of directions) {
+    if (!move.x && !move.z) continue;
+    const to = { x: dummy.x + move.x * travel, z: dummy.z + move.z * travel };
+    if (clearWalk(arena.stageId, halfSize, dummy, to)) return { move, step };
+  }
+  return still;
 }
 
 export class TrainingSession {
@@ -87,11 +128,13 @@ export class TrainingSession {
     const toward = normalize({ x: player.x - dummy.x, z: player.z - dummy.z });
     input.aim = toward;
     if (behavior === "repeatAttack" && dummy.mode === "idle") input.attackPressed = attack;
-    const sign = Math.floor((state.elapsed + 1e-8) / 0.8) % 2 ? -1 : 1;
-    if (behavior === "move") input.move = { x: toward.x * sign, z: toward.z * sign };
-    if (behavior === "dodge" && dummy.mode === "idle" && dummy.stamina >= RULES.stepCost) {
-      input.step = true;
-      input.move = { x: toward.z * sign, z: -toward.x * sign };
+    if (behavior === "move" || behavior === "dodge") {
+      const sign = Math.floor((state.elapsed + 1e-8) / 0.8) % 2 ? -1 : 1;
+      const dodge = behavior === "dodge";
+      const preferred = dodge
+        ? { x: toward.z * sign, z: -toward.x * sign }
+        : { x: toward.x * sign, z: toward.z * sign };
+      Object.assign(input, safeDummyMove(state.arena, dummy, preferred, dodge));
     }
     return input;
   }

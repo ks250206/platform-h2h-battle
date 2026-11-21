@@ -21,8 +21,8 @@ const damageRow = (
   label: string,
 ) => `<fieldset><legend>${label}の蓄積ダメージ</legend>
   <div class="training-damage"><input type="number" min="0" max="${DAMAGE_LIMIT}" step="1" inputmode="numeric" data-slot="${slot}" aria-label="${label}の開始・現在ダメージ"> %
-  ${[0, 50, 100, 150].map((n) => `<button data-slot="${slot}" data-value="${n}">${n}%</button>`).join("")}
-  <button data-slot="${slot}" data-delta="-1">−1</button><button data-slot="${slot}" data-delta="1">+1</button></div></fieldset>`;
+  ${[0, 50, 100, 150].map((n) => `<button type="button" data-slot="${slot}" data-value="${n}">${n}%</button>`).join("")}
+  <button type="button" data-slot="${slot}" data-delta="-1">−1</button><button type="button" data-slot="${slot}" data-delta="1">+1</button></div></fieldset>`;
 
 function describe(engine: BattleEngine, fighter: Fighter) {
   const s = trainingSnapshot(engine.state, fighter);
@@ -53,14 +53,16 @@ export class TrainingUI {
     private readonly root: HTMLElement,
     private readonly engine: BattleEngine,
     private readonly resetDevices: () => void,
+    private readonly onSync: () => void,
   ) {
     this.hud = document.createElement("aside");
     this.hud.className = "training-hud";
     this.hud.hidden = true;
-    this.hud.innerHTML = `<button data-open>稽古設定 · T / 十字↑</button><button data-reset>リセット · R</button><button data-stop hidden>停止</button>
+    this.hud.innerHTML = `<button type="button" data-open>稽古設定 · T / 十字↑</button><button type="button" data-reset>リセット · R / 十字↓</button><button type="button" data-stop hidden>停止</button>
       <span class="training-status"></span><div class="training-state" hidden><pre></pre><pre></pre></div>`;
     root.querySelector(".game-hud")!.append(this.hud);
     this.pauseButton = document.createElement("button");
+    this.pauseButton.type = "button";
     this.pauseButton.hidden = true;
     this.pauseButton.className = "secondary-button";
     this.pauseButton.textContent = "稽古設定・入力記録";
@@ -85,28 +87,33 @@ export class TrainingUI {
       <fieldset><legend>入力記録</legend><p>1Pの入力を60 Hzで最大10秒（${RECORDING_LIMIT}F）記録します。記録・再生・各ループの開始時に両者をリセット。相手は移動と照準を180°回して再生します。</p>
       <p>記録はこの稽古中だけ保持します。再記録で上書き。ポーズ・設定変更・リセットで停止します。</p>
       <label><input type="checkbox" data-key="loop"> 繰り返し再生</label>
-      <p data-tape role="status"></p><button data-record>記録開始</button> <button data-play>相手で再生</button></fieldset>
-      <div class="training-footer"><button data-reset>開始位置にリセット</button><button data-pad-back>戻る</button></div>`;
+      <p data-tape role="status"></p><button type="button" data-record>記録開始</button> <button type="button" data-play>相手で再生</button></fieldset>
+      <div class="training-footer"><button type="button" data-reset>開始位置にリセット</button><button type="button" data-pad-back>戻る</button></div>`;
     root.append(this.dialog);
     const signal = this.abort.signal;
     const open = () => this.open();
     this.pauseButton.addEventListener("click", open, { signal });
     this.hud.querySelector("[data-open]")!.addEventListener("click", open, { signal });
-    this.hud.querySelector("[data-stop]")!.addEventListener(
+    const stop = this.hud.querySelector<HTMLButtonElement>("[data-stop]")!;
+    stop.addEventListener(
       "click",
       () => {
+        stop.blur();
         this.engine.stopTraining();
         this.resetDevices();
-        this.update();
+        this.onSync();
       },
       { signal },
     );
-    const reset = () => {
-      this.engine.resetTraining();
-      this.resetDevices();
-      this.update();
-    };
-    this.hud.querySelector("[data-reset]")!.addEventListener("click", reset, { signal });
+    const reset = this.hud.querySelector<HTMLButtonElement>("[data-reset]")!;
+    reset.addEventListener(
+      "click",
+      () => {
+        reset.blur();
+        this.quickReset();
+      },
+      { signal },
+    );
     window.addEventListener(
       "keydown",
       (e) => {
@@ -120,7 +127,7 @@ export class TrainingUI {
         )
           return;
         if (e.code === "KeyT") open();
-        if (e.code === "KeyR" && this.engine.state.phase !== "paused") reset();
+        if (e.code === "KeyR") this.quickReset();
       },
       { signal },
     );
@@ -174,6 +181,13 @@ export class TrainingUI {
     );
   }
 
+  quickReset() {
+    if (!this.engine.training || this.engine.state.phase === "paused") return;
+    this.engine.resetTraining();
+    this.resetDevices();
+    this.onSync();
+  }
+
   open() {
     if (!this.engine.training || this.root.querySelector("dialog[open]")) return;
     this.resumeOnClose = this.engine.state.phase !== "paused";
@@ -185,11 +199,19 @@ export class TrainingUI {
   }
 
   private close() {
-    this.dialog.close();
     this.resetDevices();
     if (this.resumeOnClose) this.engine.resume();
     this.resumeOnClose = false;
-    this.update();
+    this.onSync();
+    this.dialog.close();
+    if (this.engine.state.phase === "paused") {
+      this.root.querySelector<HTMLButtonElement>('.pause-panel [data-action="resume"]')?.focus();
+    } else if (
+      document.activeElement instanceof HTMLElement &&
+      this.hud.contains(document.activeElement)
+    ) {
+      document.activeElement.blur();
+    }
   }
 
   private tapeLabel() {

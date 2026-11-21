@@ -207,7 +207,7 @@ const ui = new GameUI(overlay, {
     supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
   },
 });
-const trainingUI = new TrainingUI(overlay, engine, () => input?.reset());
+const trainingUI = new TrainingUI(overlay, engine, () => input?.reset(), updateUI);
 updateUI();
 pads.subscribe((connected) => {
   ui.setPads(connected);
@@ -227,6 +227,7 @@ pads.subscribe((connected) => {
 const padMenu = new PadMenu(overlay, pads, {
   phase: () => engine.state.phase,
   openTraining: () => trainingUI.open(),
+  resetTraining: () => trainingUI.quickReset(),
   titleButton: (index, button) => ui.padTitleButton(index, button),
 });
 

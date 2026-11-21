@@ -60,7 +60,7 @@ export function drawTrainingDebug(graphics: Graphics, fighters: Fighter[], proje
     if (screen.some((p) => !p)) return;
     graphics.moveTo(screen[0]!.x, screen[0]!.y);
     for (const p of screen.slice(1)) graphics.lineTo(p!.x, p!.y);
-    if (closed) graphics.closePath();
+    if (closed) graphics.closePath().fill({ color, alpha: 0.14 });
     graphics.stroke({ width: 2, color, alpha: 0.9 });
   }
   for (const fighter of fighters) {

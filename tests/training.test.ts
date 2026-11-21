@@ -5,15 +5,16 @@ import { BattleEngine } from "../src/game/engine";
 import { attackContains, isInvulnerable } from "../src/game/combat";
 import { ladderMatchOptions, LADDER_ROUNDS } from "../src/game/ladder";
 import { trainingSnapshot, RECORDING_LIMIT } from "../src/game/training";
+import type { StageId } from "../src/game/stages";
 import { ATTACKS, RULES, UKEMI } from "../src/game/tuning";
 import { emptyInput, type AttackId, type FighterMode, type PlayerInput } from "../src/game/types";
 import { debugGeometry } from "../src/render/trainingDebug";
 
 const dt = RULES.fixedStep;
 const input = (values: Partial<PlayerInput> = {}) => ({ ...emptyInput(), ...values });
-function training() {
+function training(stage: StageId = "garden") {
   const e = new BattleEngine(12);
-  e.start("training", { difficulty: "hard" });
+  e.start("training", { difficulty: "hard", stage });
   e.state.phase = "playing";
   return e;
 }
@@ -48,6 +49,31 @@ describe("practice partner", () => {
     ticks(e, 90);
     expect(f.aiLevel).toBe("hard");
     expect(f.aiMemory).not.toBeNull();
+  });
+
+  describe.each(["move", "dodge"] as const)("%s partner footing", (behavior) => {
+    test.each([
+      { stage: "garden", x: 8.8, z: 8.8 },
+      { stage: "ruins", x: 3.2, z: 0 },
+      { stage: "bridges", x: 3.5, z: 0 },
+      { stage: "factory", x: 8.8, z: -8.8 },
+    ] as const)("keeps moving over solid floor on $stage for 240 ticks", ({ stage, x, z }) => {
+      const e = training(stage);
+      e.configureTraining({ behavior });
+      const dummy = e.state.fighters[1];
+      Object.assign(dummy, { x, z });
+      let furthest = 0;
+      let stepped = false;
+      for (let i = 0; i < 240; i++) {
+        e.update(dt);
+        expect(dummy.grounded).toBe(true);
+        expect(dummy.mode).not.toBe("dead");
+        stepped ||= dummy.mode === "step";
+        furthest = Math.max(furthest, Math.hypot(dummy.x - x, dummy.z - z));
+      }
+      expect(furthest).toBeGreaterThan(0.5);
+      expect(stepped).toBe(behavior === "dodge");
+    });
   });
 
   test.each(attacks)("repeats the selected %s", (attack) => {
