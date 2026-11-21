@@ -59,6 +59,13 @@ export const PALETTE = {
     chip: 0x7c6cf0,
     crack: 0x4b3fa8,
     spark: 0xffc21a,
+    /** Hit sparks: white-hot cores cooling to gold and ember orange as they fly. */
+    sparkCore: 0xfff3b8,
+    sparkEmber: 0xff7a1a,
+    /** Static: electric blue with a pale core, dark enough to read against the pale floor. */
+    bolt: 0x2f7bff,
+    boltCore: 0xa8ecff,
+    flash: 0xffffff,
   },
 
   label: {

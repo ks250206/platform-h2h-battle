@@ -358,6 +358,11 @@ export class FighterMotion {
       }
       if (frozen) this.tumbleAngle = Math.max(this.tumbleAngle, 0.34);
       if (f.grounded) this.tumbleAngle += (0.5 - this.tumbleAngle) * (1 - Math.exp(-step * 9));
+    } else if (f.mode === "step" && !f.grounded && f.stepDelay <= 0) {
+      // An air dodge is one full somersault over the direction of travel.
+      const d = norm(toBody(f.stepDirection.x, f.stepDirection.z), v3(0, 0, 1));
+      this.tumbleAxis = norm(cross(v3(0, 1, 0), d), v3(1, 0, 0));
+      this.tumbleAngle = easeInOut(clamp01(f.modeTime / RULES.stepDuration)) * TAU;
     } else if (f.mode === "grabbed") {
       this.tumbleAxis = v3(1, 0, 0);
       this.tumbleAngle += (-0.28 - this.tumbleAngle) * (1 - Math.exp(-step * 10));
@@ -560,8 +565,11 @@ export class FighterMotion {
         return result;
       }
       case "step": {
-        result.pose = this.stepPose(f, guard, toBody);
+        result.pose = f.grounded
+          ? this.stepPose(f, guard, toBody)
+          : this.airDodgePose(f, guard, toBody);
         result.planted = 0;
+        result.legs = f.grounded ? 1 : 0;
         result.carry = 1;
         return result;
       }
@@ -674,6 +682,27 @@ export class FighterMotion {
       pose.footRPitch = leadPitch;
       pose.footLPitch = trailPitch;
     }
+    return pose;
+  }
+
+  /** Tucked into a ball and thrown the way of the dodge; the flip itself is the body tumble. */
+  private airDodgePose(f: Fighter, guard: Pose, toBody: (x: number, z: number) => V3): Pose {
+    const pose = clonePose(guard);
+    const d = norm(toBody(f.stepDirection.x, f.stepDirection.z), v3(0, 0, 1));
+    const waiting = f.stepDelay > 0;
+    const tuck = waiting ? 0.5 : 1;
+    pose.hip = v3(d.x * 0.06, 0.1 * tuck, d.z * 0.06);
+    pose.hipPitch = 0.5 * tuck;
+    pose.chestPitch = 0.7 * tuck;
+    pose.headPitch = 0.35 * tuck;
+    pose.lowerYaw = guard.lowerYaw * 0.4;
+    pose.chestYaw = guard.chestYaw * 0.4;
+    // Knees to the chest.
+    pose.footL = v3(0.15, 0.42 * tuck, 0.22);
+    pose.footR = v3(-0.15, 0.36 * tuck, 0.16);
+    pose.footLPitch = 0.4;
+    pose.footRPitch = 0.5;
+    pose.squash = 0.06 * tuck;
     return pose;
   }
 
