@@ -218,6 +218,8 @@ const modes: Record<TitleMode, { label: string; en: string; detail: string; numb
   },
 };
 
+/** Where the title's secondary rules fold into a bottom sheet (mirrors styles.css). */
+const RULES_SHEET_MEDIA = "(max-width: 700px) and (orientation: portrait)";
 const levelLabels: Record<AiLevel, string> = { easy: "よわい", normal: "ふつう", hard: "つよい" };
 
 const ladderRound = (round: number) => `第${round}戦 / 全${LADDER_ROUNDS.length}戦`;
@@ -363,6 +365,7 @@ function matchOptionsMarkup(): string {
     `<button type="button" data-${attribute}="${value}" aria-pressed="false"${extra}>${label}</button>`;
   return `
           <section class="match-options" aria-labelledby="match-options-title">
+            <div class="rules-sheet-backdrop" data-rules-close aria-hidden="true"></div>
             <div class="match-options-head"><h2 id="match-options-title">対戦設定</h2><span class="rule-preset-badge match-rule" role="status" aria-label="現在のルール"></span><span>MATCH RULES</span></div>
             <div class="match-options-body">
               <div class="match-option stage-option">
@@ -372,6 +375,16 @@ function matchOptionsMarkup(): string {
               <div class="stage-detail stage-info" id="stage-detail" aria-live="polite">
                 <p class="stage-detail-name"><strong></strong><span></span></p>
                 ${stageInfoMarkup()}
+              </div>
+              <button type="button" class="rules-toggle match-rule" aria-expanded="false" aria-controls="match-rules-panel">
+                <span class="rules-toggle-label">ルール・CPU</span>
+                <span class="rules-toggle-summary"></span>
+                <span class="rules-toggle-chevron" aria-hidden="true">›</span>
+              </button>
+              <div class="match-rules-panel" id="match-rules-panel" role="group" aria-labelledby="rules-sheet-title">
+              <div class="rules-sheet-head">
+                <h3 id="rules-sheet-title">ルール詳細</h3>
+                <button type="button" class="rules-sheet-done" data-rules-close>完了</button>
               </div>
               <div class="match-option match-set-format" hidden>
                 <span class="match-option-label" id="match-set-format-label">対戦形式</span>
@@ -403,6 +416,7 @@ function matchOptionsMarkup(): string {
               <div class="match-option match-rule">
                 <span class="match-option-label" id="match-level-label">CPU の強さ</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-level-label">${AI_LEVEL_IDS.map((level) => segment("difficulty", level, levelLabels[level])).join("")}</div>
+              </div>
               </div>
               <div class="player-rows"></div>
               <p class="join-hint" aria-live="polite"></p>
@@ -586,9 +600,11 @@ export class GameUI {
           <p class="mode-description">${modes.duel.detail}</p>
           ${matchOptionsMarkup()}
           ${ladderOverviewMarkup()}
-          <button class="start-button flex items-center justify-between" data-action="start"><span><b class="start-label">アリーナへ</b><span class="start-en">ENTER THE ARENA</span></span>${icons.arrow}</button>
-          <button type="button" class="tutorial-entry" data-tutor="catalog">はじめての方へ · 実戦チュートリアル</button>
-          <div class="menu-links"><button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button><button class="menu-controls-link" data-action="settings">グラフィック設定 <span>↗</span></button></div>
+          <div class="menu-cta">
+            <button class="start-button flex items-center justify-between" data-action="start"><span><b class="start-label">アリーナへ</b><span class="start-en">ENTER THE ARENA</span></span>${icons.arrow}</button>
+            <button type="button" class="tutorial-entry" data-tutor="catalog">はじめての方へ · 実戦チュートリアル</button>
+            <div class="menu-links"><button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button><button class="menu-controls-link" data-action="settings">グラフィック設定 <span>↗</span></button></div>
+          </div>
           <div class="menu-features flex items-center"><span>重い一撃</span><i></i><span>自由なフェイント</span><i></i><span>一瞬の読み合い</span></div>
         </div>
         <aside class="arena-caption stage-info" aria-label="選択中のステージ" aria-live="polite">
@@ -779,9 +795,26 @@ export class GameUI {
     );
     const unsubscribe = this.graphics.store.subscribe(() => this.syncSettings());
     this.abort.signal.addEventListener("abort", unsubscribe);
-    window.addEventListener("resize", () => this.refreshRenderSize(), {
-      signal: this.abort.signal,
-    });
+    window.addEventListener(
+      "resize",
+      () => {
+        this.refreshRenderSize();
+        // The rules sheet only exists on a portrait phone; elsewhere the rows sit in the panel.
+        if (this.rulesOpen() && !this.rulesSheetAvailable()) this.setRulesOpen(false);
+      },
+      { signal: this.abort.signal },
+    );
+    // Esc closes the phone rules sheet before anything else hears it (pause, pad menus).
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key !== "Escape" || !this.rulesOpen()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.setRulesOpen(false, true);
+      },
+      { capture: true, signal: this.abort.signal },
+    );
     this.syncSettings();
     this.query(".match-options").addEventListener("change", this.handleMatchChange, {
       signal: this.abort.signal,
@@ -888,6 +921,19 @@ export class GameUI {
       .join("");
     if (notes.innerHTML !== notesMarkup) notes.innerHTML = notesMarkup;
     notes.hidden = training || lockedIds.length === 0;
+    // The phone's one-line digest of the rules behind the sheet.
+    const toggle = this.query(".rules-toggle");
+    const digest = [
+      mode === "duel" && options.setFormat !== "single" ? options.setFormat.toUpperCase() : null,
+      PRESET_LABELS[preset],
+      `残機${options.stocks}`,
+      formatClock(timeLimitFor(options.stocks, options.time)),
+      levelLabels[options.difficulty],
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    setText(this.query(".rules-toggle-summary"), digest);
+    toggle.classList.toggle("has-notes", rules.notes.length > 0);
 
     const { options: playable, substitutes } = playableOptions(options, count, connected);
     const players = humanSlots(playable, count);
@@ -956,6 +1002,7 @@ export class GameUI {
     const lost = substitutes.find((sub) => padIndex(sub.device) !== null);
     const hint = this.query(".join-hint");
     hint.classList.toggle("warning", Boolean(lost));
+    hint.classList.toggle("pads-connected", this.connectedPads.length > 0);
     const markup = lost
       ? lost.by === "keyboard"
         ? `${deviceLabel(lost.device)}が未接続のため、${nameOf(lost.slot)}は${deviceLabel("keyboard")}で操作します`
@@ -1286,6 +1333,34 @@ export class GameUI {
     return this.callbacks.stage?.() ?? stageInfoFor(this.match.get().stage);
   }
 
+  /** Whether the phone rules sheet is open. */
+  private rulesOpen(): boolean {
+    return this.query(".match-options").classList.contains("rules-open");
+  }
+
+  /** The rules sheet exists on portrait phones (styles.css), in the modes that have rules. */
+  private rulesSheetAvailable(): boolean {
+    return (
+      this.selectedMode !== "training" &&
+      this.selectedMode !== "ladder" &&
+      (window.matchMedia?.(RULES_SHEET_MEDIA).matches ?? false)
+    );
+  }
+
+  /**
+   * Opens or closes the phone rules sheet. Opening moves focus into it; closing with
+   * `returnFocus` hands it back to the toggle.
+   */
+  private setRulesOpen(open: boolean, returnFocus = false): void {
+    const block = this.query(".match-options");
+    const toggle = this.query(".rules-toggle");
+    if (block.classList.contains("rules-open") === open) return;
+    block.classList.toggle("rules-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) this.query("#match-rules-panel [data-rules-close]").focus({ preventScroll: true });
+    else if (returnFocus) toggle.focus({ preventScroll: true });
+  }
+
   private query<T extends HTMLElement = HTMLElement>(selector: string): T {
     const element = this.host.querySelector<T>(selector);
     if (!element) throw new Error(`Missing UI element: ${selector}`);
@@ -1293,6 +1368,15 @@ export class GameUI {
   }
 
   private handleClick = (event: MouseEvent): void => {
+    const clicked = event.target as Element;
+    if (clicked.closest(".rules-toggle")) {
+      this.setRulesOpen(!this.rulesOpen(), true);
+      return;
+    }
+    if (clicked.closest("[data-rules-close]")) {
+      this.setRulesOpen(false, true);
+      return;
+    }
     // Buttons only: the host itself carries data-mode and data-stage (the running match's state).
     const target = (event.target as Element).closest<HTMLElement>(
       "[data-action], button[data-mode], button[data-stage], [data-shadow], [data-stocks], [data-set-format], [data-result-stats], [data-difficulty], [data-preset], [data-time], [data-gimmick], [data-customize], [data-customize-slot], [data-species], [data-palette], [data-accessory]",
@@ -1361,6 +1445,7 @@ export class GameUI {
     }
     const mode = target.dataset.mode as TitleMode | undefined;
     if (mode) {
+      this.setRulesOpen(false);
       this.selectedMode = mode;
       this.host.querySelectorAll<HTMLElement>("button[data-mode]").forEach((button) => {
         button.classList.toggle("selected", button.dataset.mode === mode);
@@ -1372,6 +1457,7 @@ export class GameUI {
     }
     switch (target.dataset.action) {
       case "start":
+        this.setRulesOpen(false);
         if (this.selectedMode === "ladder") this.callbacks.onStartLadder(this.match.get());
         else this.callbacks.onStart(this.selectedMode, this.match.get());
         break;
@@ -1395,6 +1481,8 @@ export class GameUI {
         break;
       case "match-settings":
         this.callbacks.onMenu();
+        // On a portrait phone the set format lives in the rules sheet: open it first.
+        if (this.rulesSheetAvailable()) this.setRulesOpen(true);
         this.query(".match-set-format [aria-pressed='true']").focus();
         break;
       case "menu":
@@ -1644,6 +1732,7 @@ export class GameUI {
     this.host.dataset.phase = state.phase;
     this.host.dataset.mode = state.mode;
     const inMatch = state.phase !== "menu";
+    if (inMatch && this.rulesOpen()) this.setRulesOpen(false);
     this.menu.hidden = inMatch;
     this.hud.hidden = !inMatch;
     this.pausePanel.hidden = state.phase !== "paused";
