@@ -204,7 +204,6 @@ export class ArenaRenderer {
       this.assets.ring,
       this.assets.material(0xa8efd0, 0.92, 0.3),
     );
-    this.zoneRing.rotation.x = Math.PI / 2;
     this.zoneCore = this.assets.mesh(
       this.zone,
       this.assets.disc,
@@ -287,7 +286,6 @@ export class ArenaRenderer {
             : 0xa4c1a8;
         const top = a.mesh(root, a.tile, a.flatMaterial(tint));
         const outline = a.mesh(root, a.ring, a.material(0xf7b36e, 0.8, 0.2), 0, 0.025, 0, 0.75);
-        outline.rotation.x = Math.PI / 2;
         outline.visible = false;
         this.tiles.push({ root, top, outline, x, z, tint, fallenAt: null });
         if (border && (col + row) % 3 === 0) {
@@ -314,7 +312,6 @@ export class ArenaRenderer {
     }
     // A pale compass is a useful reference for depth and directional inputs.
     const compass = a.mesh(this.scene, a.ring, a.material(0xf5e7bf, 0.3), 0, 0.012, 0, 2.6);
-    compass.rotation.x = Math.PI / 2;
     for (let i = 0; i < 4; i++) {
       const mark = a.box(
         this.scene,
@@ -513,7 +510,6 @@ export class ArenaRenderer {
     const root = new Container3D();
     this.scene.addChild(root);
     const ring = a.mesh(root, a.ring, a.material(0xff987a, 0.95, 0.6), 0, 0.065, 0, bomb.radius);
-    ring.rotation.x = Math.PI / 2;
     const fill = a.mesh(
       root,
       a.disc,
@@ -586,7 +582,6 @@ export class ArenaRenderer {
       a.mesh(root, i % 2 ? a.cube : a.pebble, material, 0, 0, 0, 0.08, 0.08, 0.08),
     );
     const ring = a.mesh(root, a.ring, a.material(color, 0.65, 0.4));
-    ring.rotation.x = Math.PI / 2;
     view = { root, particles, ring };
     this.effects.set(effect.id, view);
     return view;
