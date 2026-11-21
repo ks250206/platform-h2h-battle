@@ -1,0 +1,36 @@
+@media (max-width: 1024px) {
+  #interface:not([data-phase="menu"]) .fullscreen-button {
+    display: none;
+  }
+}
+
+.fullscreen-ios-dialog {
+  width: min(390px, calc(100% - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.fullscreen-ios-dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+
+.fullscreen-ios-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.fullscreen-ios-dialog ol {
+  margin: 12px 0 16px;
+  padding-inline-start: 1.3em;
+  list-style: decimal;
+}

@@ -118,6 +118,18 @@ export class PadMenu {
           : {}),
       };
     }
+    const rulesSheet = this.root.querySelector<HTMLElement>(
+      ".match-options.rules-open #match-rules-panel",
+    );
+    if (rulesSheet && visible(rulesSheet)) {
+      const close = rulesSheet.querySelector<HTMLElement>("[data-rules-close]");
+      return {
+        key: "rules-sheet",
+        scopes: [rulesSheet],
+        primary: "[data-rules-close]",
+        back: () => close?.click(),
+      };
+    }
     const click = (selector: string) => () => {
       const control = this.root.querySelector<HTMLElement>(selector);
       if (control && visible(control)) control.click();

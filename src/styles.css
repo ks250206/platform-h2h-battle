@@ -47,9 +47,17 @@
   --scrim: color-mix(in srgb, var(--ink) 30%, transparent);
   /* A paper glow for the few words that sit straight on the 3D picture. */
   --halo: 0 0 2px var(--paper), 0 0 7px var(--paper), 0 0 14px var(--paper);
+  /* Safe-area insets (notch, home bar, Safari's floating toolbar), read once here. */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  /* The top bar's line: 19px in a browser tab (inset 0), under the status bar when standalone. */
+  --hud-t: max(19px, var(--safe-t));
   font-family: var(--font-sans);
   color: var(--ink);
-  background: var(--paper-2);
+  /* The sky's tint: whatever shows past the canvas (behind Safari's bars) blends with it. */
+  background: #8fd3ff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -255,6 +263,14 @@ svg {
 .menu-content > * {
   flex-shrink: 0;
 }
+/* Start, the tutorial and the links: one block that a portrait phone pins to the sheet's foot.
+   Elsewhere it is not a box at all, so the column lays out exactly as before. */
+.menu-cta {
+  display: contents;
+}
+.menu-cta > * {
+  flex-shrink: 0;
+}
 .menu-content::before,
 .menu-content::after {
   content: "";
@@ -269,32 +285,15 @@ svg {
   letter-spacing: 0.19em;
   font-weight: 650;
 }
+/* The title's eyebrow sits right above the mode picker now that the headline is read out only. */
+.menu-content > .eyebrow {
+  margin-bottom: 10px;
+}
 .tiny-rule {
   display: block;
   width: 24px;
   height: 1px;
   background: currentColor;
-}
-h1 {
-  margin: 20px 0 14px;
-  font-size: clamp(32px, 3.2vw, 48px);
-  font-weight: 800;
-  letter-spacing: 0.035em;
-  line-height: 1.5;
-}
-h1 > span {
-  color: var(--coral-text);
-  text-decoration: underline wavy var(--sun);
-  text-decoration-thickness: 0.07em;
-  text-underline-offset: 0.2em;
-  text-decoration-skip-ink: none;
-}
-.menu-description {
-  margin: 0 0 22px;
-  font-size: 12px;
-  line-height: 2;
-  letter-spacing: 0.075em;
-  color: var(--ink-soft);
 }
 .mode-picker {
   display: grid;
@@ -759,6 +758,16 @@ h1 > span {
   font-size: 10px;
   line-height: 1.6;
   color: var(--ink-soft);
+}
+/* The secondary rules: rows of the panel's grid here, a bottom sheet on a portrait phone, where
+   a one-line summary button (.rules-toggle) opens them. */
+.match-rules-panel {
+  display: contents;
+}
+.rules-sheet-head,
+.rules-sheet-backdrop,
+.rules-toggle {
+  display: none;
 }
 .ladder-overview {
   display: grid;
@@ -1737,16 +1746,12 @@ kbd {
   filter: drop-shadow(0 0 9px var(--sun));
 }
 .result-panel:has([data-action="ladder-continue"]),
-.pause-panel:has([data-action="restart"][hidden]) {
+.pause-panel {
   max-height: calc(100dvh - 24px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-:is(
-    .result-panel:has([data-action="ladder-continue"]),
-    .pause-panel:has([data-action="restart"][hidden])
-  )
-  .text-button {
+:is(.result-panel:has([data-action="ladder-continue"]), .pause-panel) .text-button {
   min-height: 40px;
   padding-inline: 12px;
   margin-top: 6px;
@@ -2524,12 +2529,6 @@ kbd {
     width: 420px;
     left: 8%;
   }
-  h1 {
-    font-size: 54px;
-  }
-  .menu-description {
-    font-size: 14px;
-  }
   .mode-label {
     font-size: 15px;
   }
@@ -2538,6 +2537,13 @@ kbd {
   }
   .start-button {
     padding: 23px 25px;
+  }
+}
+/* During matches, hide the prototype badge below 1400px so the fullscreen icon never pushes
+   the badge into the centered Rumble or BO3 match heading (e.g. at 1280x800). */
+@media (max-width: 1400px) {
+  #interface[data-phase]:not([data-phase="menu"]) .prototype-chip {
+    display: none;
   }
 }
 @media (max-width: 1100px) {
@@ -2550,9 +2556,6 @@ kbd {
   }
   .mode-number {
     display: none;
-  }
-  h1 {
-    font-size: 37px;
   }
   .arena-caption {
     right: 3.5%;
@@ -2589,15 +2592,6 @@ kbd {
     top: 76px;
     bottom: 34px;
   }
-  h1 {
-    font-size: 32px;
-    margin: 12px 0 8px;
-    line-height: 1.4;
-  }
-  .menu-description {
-    margin-bottom: 12px;
-    line-height: 1.85;
-  }
   .mode-option {
     padding-top: 9px;
     padding-bottom: 10px;
@@ -2608,10 +2602,6 @@ kbd {
   }
   .match-options {
     margin-bottom: 13px;
-  }
-  /* Four player rows: the tagline under the headline makes way too. */
-  .menu-content:has(.match-options.four-players:not(.practice)) .menu-description {
-    display: none;
   }
   .start-button {
     padding-top: 13px;
@@ -2634,10 +2624,56 @@ kbd {
     top: 81px;
   }
 }
-/* The stage row took the taglines' line on a short desktop screen. */
+/* A short desktop screen (1280x720): the stage row makes way and the column tightens enough that
+   the default Duel menu (including stage-override notes on taller Linux/Windows CJK fonts) fits
+   without scrolling, Start and Tutorial included. */
 @media (max-height: 760px) and (min-width: 701px) {
+  .topbar {
+    top: 16px;
+  }
   .menu-features {
     display: none;
+  }
+  .menu-content {
+    top: 58px;
+    bottom: 24px;
+    padding-bottom: 0;
+  }
+  .menu-content > .eyebrow {
+    margin-bottom: 4px;
+  }
+  .mode-option {
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+  .mode-description {
+    margin-top: 5px;
+    margin-bottom: 7px;
+  }
+  .match-options {
+    padding: 8px 11px 7px;
+    margin-bottom: 8px;
+  }
+  .match-options-head {
+    margin-bottom: 4px;
+  }
+  .match-options-body {
+    gap: 2.5px;
+  }
+  .player-rows {
+    gap: 3px;
+    padding-top: 5px;
+  }
+  .start-button {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .menu-controls-link,
+  .menu-links {
+    margin-top: 6px;
+  }
+  .menu-bottom {
+    bottom: 8px;
   }
 }
 @media (max-height: 700px) and (min-width: 701px) {
@@ -2647,17 +2683,26 @@ kbd {
     scrollbar-width: thin;
     pointer-events: auto;
   }
-  .ladder-menu .menu-content > .eyebrow,
-  .ladder-menu h1,
-  .ladder-menu .menu-description {
+  .ladder-menu .menu-content > .eyebrow {
+    display: none;
+  }
+}
+/* On tablets and phones (<= 900px), the pause menu holds settings, controls and fullscreen so
+   the in-match top bar stays clear of the centered match heading (Rumble / BO3). */
+@media (max-width: 900px) {
+  #interface[data-phase]:not([data-phase="menu"]) :is(.settings-button, .help-button) {
     display: none;
   }
 }
 @media (max-width: 700px) {
   .topbar {
-    top: max(19px, env(safe-area-inset-top));
-    left: 22px;
-    right: 22px;
+    top: var(--hud-t);
+    left: max(16px, var(--safe-l));
+    right: max(16px, var(--safe-r));
+  }
+  /* Four icons at most on a phone title: the camera only matters during a match. */
+  #interface[data-phase="menu"] .camera-button {
+    display: none;
   }
   .wordmark {
     font-size: 16px;
@@ -2700,22 +2745,8 @@ kbd {
   .menu-content > .eyebrow {
     font-size: 8px;
   }
-  /* The headline drops to one line to make room for the match options. */
-  h1 {
-    font-size: 22px;
-    line-height: 1.3;
-    margin: 6px 0 6px;
-  }
-  h1 br {
-    display: none;
-  }
-  /* The stage's own words (under its buttons, below) take the tagline's place on a phone. */
-  .menu-description {
-    display: none;
-  }
-  /* Four player rows: the headline makes way too, so the stage stays in view above them. */
-  .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow,
-  .menu-content:has(.match-options.four-players:not(.practice)) h1 {
+  /* Four player rows: the eyebrow makes way, so the stage stays in view above them. */
+  .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow {
     display: none;
   }
   .mode-option {
@@ -2771,7 +2802,7 @@ kbd {
     display: none;
   }
   .match-heading {
-    top: 81px;
+    top: calc(var(--hud-t) + 62px);
     padding: 7px 17px;
     gap: 12px;
   }
@@ -2779,11 +2810,12 @@ kbd {
     font-size: 17px;
   }
   .arena-status {
-    top: 131px;
+    top: calc(var(--hud-t) + 112px);
     font-size: 8px;
   }
   .center-announcement {
-    top: 27%;
+    /* Below the training / tutorial pills on short phones. */
+    top: max(27%, calc(var(--hud-t) + 190px));
     font-size: 11px;
     max-width: 85%;
     white-space: nowrap;
@@ -2965,11 +2997,493 @@ kbd {
     bottom: 66px;
   }
 }
-@media (max-height: 570px) and (max-width: 950px) {
+/* Portrait phones: the top 38dvh is the hero band (the 3D island and its fighters, nothing over
+   them; renderer.ts MENU_HERO_SHARE frames the arena into it), and the menu is an opaque paper
+   sheet below it. Start and the tutorial stay pinned to the sheet's foot; the secondary rules
+   fold into a summary button that opens a bottom sheet. */
+@media (max-width: 700px) and (orientation: portrait) {
+  .menu-screen {
+    background: none;
+  }
+  .menu-content {
+    top: 38dvh;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 6px max(16px, var(--safe-r)) 0 max(16px, var(--safe-l));
+    gap: 8px;
+    background: var(--paper);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 28px #2a25501f;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    pointer-events: auto;
+  }
+  .menu-content::before,
+  .menu-content::after {
+    display: none;
+  }
+  .menu-content > .eyebrow,
+  .mode-description,
+  .menu-bottom,
+  .match-options-head {
+    display: none;
+  }
+  .mode-option {
+    padding: 8px 2px 9px;
+  }
+  .mode-label {
+    font-size: 13px;
+  }
+  .match-options {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+  .match-options-body {
+    gap: 8px;
+  }
+  .match-option {
+    grid-template-columns: 62px 1fr;
+  }
+  .match-option-label {
+    font-size: 11px;
+  }
+  .match-options .segmented button {
+    min-height: 34px;
+    font-size: 12px;
+  }
+  .stage-detail {
+    padding: 7px 10px;
+    border-radius: 10px;
+  }
+  .stage-detail-name strong {
+    font-size: 12.5px;
+  }
+  .stage-summary,
+  .stage-rules {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    font-size: 10.5px;
+    line-height: 1.5;
+  }
+  /* The rules in one line: preset · lives · clock · CPU. A dot marks a stage that overrides them. */
+  .rules-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 6px 12px 6px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--paper-2);
+    color: var(--ink);
+    text-align: left;
+  }
+  .rules-toggle-label {
+    position: relative;
+    flex: none;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--ink-soft);
+  }
+  .rules-toggle.has-notes .rules-toggle-label::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    right: -8px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+  .rules-toggle-summary {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
+    font-weight: 650;
+  }
+  .rules-toggle-chevron {
+    flex: none;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--violet);
+  }
+  .match-rules-panel {
+    display: none;
+  }
+  .match-options.rules-open .match-rules-panel {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 30;
+    display: grid;
+    gap: 10px;
+    max-height: 80dvh;
+    padding: 14px max(16px, var(--safe-r)) max(16px, var(--safe-b)) max(16px, var(--safe-l));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--paper);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -12px 36px #2a255038;
+    pointer-events: auto;
+  }
+  .match-options.rules-open .rules-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    display: block;
+    background: var(--scrim);
+    pointer-events: auto;
+  }
+  .rules-sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .rules-sheet-head h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 750;
+    letter-spacing: 0.06em;
+  }
+  .rules-sheet-done {
+    min-width: 64px;
+    min-height: 40px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--sun);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .match-rules-panel .match-option {
+    grid-template-columns: 66px 1fr;
+  }
+  .match-rules-panel .segmented button,
+  .match-set-format .segmented button {
+    min-height: 40px;
+    font-size: 12px;
+    white-space: normal;
+  }
+  .rules-preset-detail,
+  .rules-summary,
+  .rules-notes {
+    font-size: 11px;
+  }
+  .player-rows {
+    gap: 6px;
+    padding-top: 8px;
+  }
+  .player-row {
+    grid-template-columns: 96px 1fr 1fr;
+  }
+  .player-character,
+  .match-options select {
+    min-height: 34px;
+    font-size: 12px;
+  }
+  .ladder-overview {
+    gap: 6px;
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+  }
+  .ladder-overview h2 {
+    font-size: 15px;
+  }
+  .ladder-opponent-card {
+    padding: 7px 10px;
+  }
+  .menu-cta {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    margin: auto -16px 0;
+    padding: 10px 16px max(12px, var(--safe-b));
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+  }
+  .menu-cta .start-button {
+    padding: 12px 18px;
+    border-radius: 12px;
+  }
+  .menu-cta .tutorial-entry {
+    align-self: center;
+    padding: 6px 4px 2px;
+  }
+  .menu-cta .menu-links {
+    flex-wrap: nowrap;
+    gap: 14px;
+    margin-top: 0;
+  }
+  .menu-cta .menu-controls-link {
+    padding: 3px 4px;
+  }
+}
+/* Short portrait phones (iPhone SE): tighter type so the first player row clears the pinned
+   Start block; the help and settings links are in the top bar anyway. */
+@media (max-width: 700px) and (orientation: portrait) and (max-height: 700px) {
+  .mode-option {
+    padding: 7px 2px 8px;
+  }
+  .mode-label small {
+    display: none;
+  }
+  .stage-option .segmented button {
+    min-height: 32px;
+  }
+  .stage-detail {
+    padding: 5px 10px;
+  }
+  .stage-summary,
+  .stage-rules {
+    -webkit-line-clamp: 1;
+  }
+  .rules-toggle {
+    min-height: 40px;
+  }
+  .menu-cta {
+    padding-top: 8px;
+  }
+  .menu-cta .start-button {
+    padding: 10px 16px;
+  }
+  .menu-cta .start-button > span span {
+    margin-top: 2px;
+  }
+  .menu-cta .menu-links {
+    display: none;
+  }
+}
+/* Very compact portrait phones (e.g. 320x568): keep top bar clear of wordmark and row 1 above CTA. */
+@media (max-width: 360px) and (orientation: portrait) {
+  .topbar {
+    left: max(12px, var(--safe-l));
+    right: max(12px, var(--safe-r));
+  }
+  .wordmark {
+    font-size: 14px;
+    gap: 6px;
+  }
+  .wordmark-icon {
+    width: 18px;
+  }
+  .top-actions {
+    gap: 5px;
+  }
+  .icon-button {
+    width: 30px;
+    height: 30px;
+  }
+  .player-row {
+    grid-template-columns: 82px 1fr 1fr;
+  }
+}
+@media (max-width: 700px) and (orientation: portrait) and (max-height: 600px) {
+  .menu-content {
+    gap: 5px;
+  }
+  .match-options-body {
+    gap: 5px;
+  }
+  .player-rows {
+    padding-top: 5px;
+  }
+  .menu-cta {
+    padding-top: 6px;
+    padding-bottom: max(8px, var(--safe-b));
+  }
+}
+/* A touch phone without pads has nobody to press "A to join". */
+@media (max-width: 700px) and (orientation: portrait) and (pointer: coarse) {
+  .join-hint:not(.warning, .pads-connected) {
+    display: none;
+  }
+}
+/* Slim two-row fighter cards on portrait phones and touch tablets: tag and name on top, lives,
+   stamina and the air tokens under them, the damage beside both. The 3D arena keeps the room. */
+@media (max-width: 700px) and (orientation: portrait),
+  (pointer: coarse) and (orientation: portrait) {
+  .fighter-cards {
+    left: max(12px, var(--safe-l));
+    right: max(12px, var(--safe-r));
+    gap: 8px;
+    align-items: stretch;
+  }
+  .fighter-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 4px;
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    padding: 7px 9px 7px 11px;
+    border-radius: 10px;
+  }
+  .fighter-card:first-child {
+    margin-right: 0;
+  }
+  .fighter-card-top,
+  .fighter-main,
+  .fighter-ident,
+  .fighter-foot {
+    display: contents;
+  }
+  .fighter-tags {
+    grid-column: 1;
+    grid-row: 1;
+    padding-left: 2px;
+  }
+  .fighter-tag {
+    font-size: 8px;
+    letter-spacing: 0.08em;
+  }
+  .fighter-name {
+    grid-column: 2;
+    grid-row: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+  .fighter-life {
+    grid-column: 1;
+    grid-row: 2;
+    margin: 0;
+    padding-left: 2px;
+  }
+  .fighter-damage,
+  [data-mode="rumble"] .fighter-damage {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    margin-left: 2px;
+    font-size: 21px;
+    font-weight: 750;
+  }
+  .fighter-damage small {
+    font-size: 10px;
+    margin-left: 1px;
+  }
+  .stamina-track {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    height: 4px;
+    margin-top: 1px;
+  }
+  .air-tokens {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    gap: 2px;
+  }
+  .air-tokens > span {
+    width: 12px;
+    height: 12px;
+    font-size: 9px;
+    border-radius: 2px;
+  }
+  .fighter-avatar,
+  .fighter-species,
+  .fighter-level,
+  .stamina-label,
+  .air-tokens > small,
+  .fighter-status,
+  [data-mode="rumble"] .fighter-status.landing-status:not(.ukemi, .knockdown) {
+    display: none;
+  }
+  /* Only the states worth a glance stay: down, out, coming back. They take the tokens' place. */
+  .fighter-card:is(.eliminated, .respawning) .fighter-status,
+  .fighter-status:is(.ukemi, .knockdown),
+  [data-mode="rumble"] .fighter-card:is(.eliminated, .respawning) .fighter-status {
+    display: block;
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    font-size: 7px;
+    letter-spacing: 0.04em;
+  }
+  .fighter-card:is(.eliminated, .respawning) .air-tokens,
+  .fighter-card:has(.fighter-status:is(.ukemi, .knockdown)) .air-tokens {
+    display: none;
+  }
+  .zone-compass {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+  /* Keep outside-zone warnings inside their own slim card so lower rumble cards never cover row 1. */
+  .outside-warning {
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 5;
+    margin-top: 2px;
+    padding: 3px 6px;
+    box-shadow: none;
+  }
+  .outside-warning > div:first-child {
+    margin-bottom: 3px;
+    font-size: 8px;
+  }
+  /* Rumble: two by two. */
+  [data-mode="rumble"] .fighter-cards {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  [data-mode="rumble"] .fighter-card {
+    flex: 1 1 calc(50% - 3px);
+    width: auto;
+    padding: 6px 8px 6px 11px;
+  }
+}
+/* Touch controls take the bottom: the cards sit just above them (touch.css sets the block). */
+@media (pointer: coarse) and (orientation: portrait) {
+  .fighter-cards,
+  .game-hud.has-pads:not(.no-keyboard) .fighter-cards {
+    bottom: calc(var(--touch-block-h, 150px) + 8px);
+  }
+  /* Rumble adds the target-switch pill above the action pad; keep row 2 cards clear of it. */
+  [data-mode="rumble"] .game-hud:not(.no-keyboard) .fighter-cards {
+    bottom: calc(
+      max(
+          var(--touch-block-h, 150px),
+          var(--touch-bottom, 12px) + var(--pad, 44px) + var(--util-h, 42px) + 52px
+        ) +
+        8px
+    );
+  }
+  .game-hud.no-keyboard .fighter-cards {
+    bottom: max(66px, calc(var(--safe-b) + 50px));
+  }
+}
+@media (pointer: coarse) and (orientation: portrait) and (max-width: 700px) {
+  .game-hud.no-keyboard .fighter-cards {
+    bottom: max(16px, var(--safe-b));
+  }
+}
+@media (max-height: 570px) and (max-width: 950px) and (orientation: landscape) {
   .topbar {
     top: 14px;
-    left: 25px;
-    right: 25px;
+    left: max(25px, var(--safe-l));
+    right: max(25px, var(--safe-r));
   }
   .wordmark-edition {
     display: none;
@@ -2995,9 +3509,7 @@ kbd {
     pointer-events: auto;
     transform: none;
   }
-  .ladder-menu .menu-content > .eyebrow,
-  .ladder-menu h1,
-  .ladder-menu .menu-description {
+  .ladder-menu .menu-content > .eyebrow {
     display: none;
   }
   .ladder-overview {
@@ -3043,16 +3555,6 @@ kbd {
   }
   .menu-content > .eyebrow {
     font-size: 7px;
-  }
-  h1 {
-    font-size: 27px;
-    margin: 12px 0 8px;
-    line-height: 1.35;
-  }
-  .menu-description {
-    font-size: 10px;
-    margin-bottom: 9px;
-    line-height: 1.7;
   }
   .mode-option {
     padding: 7px 4px;
@@ -3105,8 +3607,11 @@ kbd {
   }
   .fighter-cards {
     bottom: 15px;
-    left: 20px;
-    right: 20px;
+  }
+  /* Clear of a landscape notch; outranks touch.css's 20px sides. */
+  #interface .game-hud .fighter-cards {
+    left: max(25px, var(--safe-l));
+    right: max(25px, var(--safe-r));
   }
   /* Short windows have no room for the legends under the cards (the help dialog lists them). */
   .keyboard-legend,
@@ -3355,6 +3860,23 @@ kbd {
   border-radius: 4px;
   padding: 5px 8px;
 }
+/* The keyboard / pad shortcut beside a training button's word. */
+.shortcut-hint {
+  margin-left: 0.35em;
+  font: inherit;
+  color: var(--ink-soft);
+}
+.shortcut-hint::before {
+  content: "· ";
+}
+/* A touch player has neither: the words alone, and no "待機 · 記録なし" line until it means
+   something (the text stays in the DOM for the keyboard layouts). */
+@media (pointer: coarse) {
+  .game-hud:not(.has-pads) .shortcut-hint,
+  .training-status.idle-empty {
+    display: none;
+  }
+}
 .training-state pre {
   margin: 6px 0;
   white-space: pre-wrap;
@@ -3399,21 +3921,56 @@ kbd {
   justify-content: space-between;
 }
 @media (max-width: 700px) {
+  /* A row of pills across the top of the arena: the container itself is see-through. */
   .training-hud {
-    top: 160px;
-    left: 8px;
-    font-size: 10px;
+    top: calc(var(--hud-t) + 141px);
+    left: 12px;
+    right: 12px;
+    max-width: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: 11px;
+    pointer-events: none;
+  }
+  .training-hud button {
+    min-height: 36px;
+    padding: 0 14px;
+    border-radius: 999px;
+    white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+  }
+  .training-status {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .training-state {
+    flex-basis: 100%;
     max-height: 26dvh;
     overflow: auto;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: var(--paper);
+    pointer-events: auto;
   }
 }
 #interface:has(.training-dialog[open]) .pause-screen {
   visibility: hidden;
 }
 
-@media (max-height: 570px) {
+@media (max-height: 570px) and (orientation: landscape) {
   .training-hud {
     top: 73px;
   }
@@ -3421,11 +3978,6 @@ kbd {
     max-height: 34dvh;
     overflow: auto;
   }
-}
-[data-mode="training"] .pause-panel {
-  max-height: calc(100dvh - 24px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 @keyframes finish-stamp-still {
   0%,
