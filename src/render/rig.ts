@@ -3,6 +3,7 @@ import type { Mesh3D } from "@pixi/3d";
 import type { Fighter, Species } from "../game/types";
 import type { MeshLibrary } from "./meshes";
 import type { MotionFrame } from "./motion";
+import { PALETTE } from "./palette";
 import { BODY } from "./skeleton";
 import type { Joint, Limb } from "./skeleton";
 
@@ -132,20 +133,15 @@ export interface FighterRig {
   heading: Mesh3D;
 }
 
-const CREAM = 0xffeaca;
-const DARK = 0x253441;
-const LEATHER = 0x6f5142;
-const GOLD = 0xd9b96f;
-const STEEL = 0xe1e8e5;
-const FULLER = 0x8fa3aa;
-const IRON = 0x56666f;
+const { cream: CREAM, dark: DARK, leather: LEATHER, gold: GOLD, steel: STEEL } = PALETTE.fighter;
+const { fuller: FULLER, iron: IRON } = PALETTE.fighter;
 
 const TRAITS: Record<Species, { fur: number | null; bulk: number; head: number }> = {
   // The fox's coat is its team colour, a shade deeper so the scarf still reads.
   fox: { fur: null, bulk: 1, head: 1 },
-  rabbit: { fur: 0xbadbe0, bulk: 0.93, head: 0.97 },
-  bear: { fur: 0xc79672, bulk: 1.16, head: 1.05 },
-  raccoon: { fur: 0xa3a6b7, bulk: 1.03, head: 1 },
+  rabbit: { fur: PALETTE.fighter.fur.rabbit, bulk: 0.93, head: 0.97 },
+  bear: { fur: PALETTE.fighter.fur.bear, bulk: 1.16, head: 1.05 },
+  raccoon: { fur: PALETTE.fighter.fur.raccoon, bulk: 1.03, head: 1 },
 };
 
 function shade(color: number, factor: number): number {
@@ -164,7 +160,7 @@ export function createFighterRig(
 ): FighterRig {
   const trait = TRAITS[f.species];
   const team = f.color;
-  const fur = trait.fur ?? shade(team, 0.9);
+  const fur = trait.fur ?? shade(team, 0.88);
   const b = trait.bulk;
   const node = (into: Container3D, x = 0, y = 0, z = 0): Container3D => {
     const child = new Container3D();
@@ -233,22 +229,31 @@ export function createFighterRig(
     for (const side of [-1, 1]) {
       const base = ear(side, 0.2, 0.32, -0.14);
       a.ball(base, fur, 0, 0.36, -0.02, 0.13, 0.46, 0.12);
-      a.ball(base, 0xeaaeb2, 0, 0.38, 0.075, 0.066, 0.32, 0.035);
+      a.ball(base, PALETTE.fighter.innerEar, 0, 0.38, 0.075, 0.066, 0.32, 0.035);
     }
     a.ball(skull, CREAM, 0, -0.16, 0.35, 0.26, 0.18, 0.15);
   } else {
     for (const side of [-1, 1]) {
       const base = ear(side, 0.35, 0.3, 0);
       a.ball(base, fur, 0, 0.04, 0, 0.19, 0.2, 0.12);
-      a.ball(base, f.species === "bear" ? 0x8d6758 : DARK, 0, 0.05, 0.09, 0.1, 0.11, 0.045);
+      a.ball(
+        base,
+        f.species === "bear" ? PALETTE.fighter.bearEar : DARK,
+        0,
+        0.05,
+        0.09,
+        0.1,
+        0.11,
+        0.045,
+      );
       if (f.species === "raccoon") a.ball(skull, DARK, side * 0.22, 0.02, 0.35, 0.18, 0.13, 0.075);
     }
     a.ball(skull, CREAM, 0, -0.13, 0.35, 0.25, 0.2, 0.15);
   }
   for (const side of [-1, 1]) {
-    a.ball(skull, 0x132431, side * 0.19, 0.03, 0.388, 0.066, 0.088, 0.035);
+    a.ball(skull, PALETTE.fighter.eye, side * 0.19, 0.03, 0.388, 0.066, 0.088, 0.035);
     a.ball(skull, 0xffffff, side * 0.19 - 0.013, 0.052, 0.418, 0.02, 0.023, 0.013);
-    a.ball(skull, 0xe79b8b, side * 0.32, -0.095, 0.338, 0.075, 0.04, 0.024);
+    a.ball(skull, PALETTE.fighter.cheek, side * 0.32, -0.095, 0.338, 0.075, 0.04, 0.024);
     // A hard brow gives the face some resolve.
     a.box(skull, DARK, side * 0.19, 0.14, 0.4, 0.13, 0.03, 0.03).rotation.z = side * -0.32;
   }
@@ -302,7 +307,7 @@ export function createFighterRig(
 
   // --- Greatsword ---------------------------------------------------------------------
   const sword = node(body);
-  a.mesh(sword, a.cylinder, a.material(0x3a2f2c), 0, 0, 0, 0.04, 0.5, 0.04);
+  a.mesh(sword, a.cylinder, a.material(PALETTE.fighter.grip), 0, 0, 0, 0.04, 0.5, 0.04);
   a.mesh(sword, a.pebble, a.material(GOLD), 0, -0.28, 0, 0.07, 0.075, 0.07);
   a.box(sword, GOLD, 0, 0.29, 0, 0.6, 0.075, 0.12);
   for (const side of [-1, 1])
@@ -313,15 +318,44 @@ export function createFighterRig(
   a.box(sword, team, 0, BODY.bladeBase + 0.045, 0, 0.36, 0.07, 0.115);
 
   // --- Markers ------------------------------------------------------------------------
-  const chargeHalo = a.mesh(root, a.ring, a.material(0xf6cf7a, 0.8, 0.4), 0, 0.07, 0, 0.85);
+  const chargeHalo = a.mesh(
+    root,
+    a.ring,
+    a.material(PALETTE.fighter.chargeHalo, 0.9, 0.4),
+    0,
+    0.07,
+    0,
+    0.85,
+  );
   chargeHalo.visible = false;
-  const pointer = a.mesh(root, a.cone, a.material(0xffe3b5, 1, 0.35), 0, 2.6, 0, 0.13, 0.2, 0.13);
+  const pointer = a.mesh(
+    root,
+    a.cone,
+    a.material(PALETTE.fighter.pointer, 1, 0.35),
+    0,
+    2.6,
+    0,
+    0.15,
+    0.24,
+    0.15,
+  );
   pointer.rotation.z = Math.PI;
   pointer.visible = f.human;
-  const shadow = a.mesh(parent, a.disc, a.material(0x152b31, 0.23), 0, 0.025, 0, 0.65, 1, 0.45);
-  const ringColor = f.human ? 0xffd7a2 : team;
-  const footRing = a.mesh(parent, a.ring, a.material(ringColor, 0.75, 0.25), 0, 0.035, 0, 0.69);
-  const heading = a.mesh(parent, g.chevron, a.material(ringColor, 0.9, 0.3), 0, 0.04, 0);
+  const shadow = a.mesh(
+    parent,
+    a.disc,
+    a.material(PALETTE.fighter.shadow, 0.22),
+    0,
+    0.025,
+    0,
+    0.65,
+    1,
+    0.45,
+  );
+  // Pale rings vanish on the pale floor, so every ring is its fighter's own saturated colour.
+  const ringColor = team;
+  const footRing = a.mesh(parent, a.ring, a.material(ringColor, 0.9, 0.25), 0, 0.035, 0, 0.69);
+  const heading = a.mesh(parent, g.chevron, a.material(ringColor, 0.95, 0.3), 0, 0.04, 0);
 
   return {
     root,

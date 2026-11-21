@@ -19,6 +19,7 @@ import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/setting
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
 import { MeshLibrary } from "./meshes";
 import { FighterMotion } from "./motion";
+import { PALETTE } from "./palette";
 import type { MotionEvent } from "./motion";
 import { applyFrame, createFighterRig, destroyFighterRig, RigAssets } from "./rig";
 import type { FighterRig } from "./rig";
@@ -216,9 +217,9 @@ export class ArenaRenderer {
     sky.height = 512;
     const context = sky.getContext("2d")!;
     const gradient = context.createLinearGradient(0, 0, 0, 512);
-    gradient.addColorStop(0, "#122831");
-    gradient.addColorStop(0.55, "#25444a");
-    gradient.addColorStop(1, "#3b5658");
+    gradient.addColorStop(0, PALETTE.sky.top);
+    gradient.addColorStop(0.55, PALETTE.sky.middle);
+    gradient.addColorStop(1, PALETTE.sky.bottom);
     context.fillStyle = gradient;
     context.fillRect(0, 0, 2, 512);
     this.skyTexture = Texture.from(sky);
@@ -248,8 +249,8 @@ export class ArenaRenderer {
     // Fixed shadow box around the arena (tiles span ±9, fighters jump a few units) so the
     // shadow map's texels are not spent on the far-off floating islands.
     const sun = new DirectionalLight({
-      color: 0xffe9c0,
-      intensity: 2.2,
+      color: PALETTE.light.sun,
+      intensity: 1.9,
       castShadow: false,
       shadow: {
         bounds: Box.fromCenterSize({ x: 0, y: 1.5, z: 0 }, { x: 20, y: 8, z: 20 }),
@@ -260,23 +261,28 @@ export class ArenaRenderer {
     sun.position.set(-10, 22, 14);
     this.view.root.addChild(sun);
     sun.lookAt({ x: 0, y: 0, z: 0 });
-    const rim = new DirectionalLight({ color: 0x8bd6dc, intensity: 0.65, castShadow: false });
+    const rim = new DirectionalLight({
+      color: PALETTE.light.rim,
+      intensity: 0.5,
+      castShadow: false,
+    });
     rim.position.set(12, 7, -12);
     this.view.root.addChild(rim);
     rim.lookAt({ x: 0, y: 1, z: 0 });
-    this.view.root.addChild(new AmbientLight({ color: 0xb4cdd1, intensity: 0.7 }));
+    // A strong, slightly blue fill keeps the shaded side of everything colourful.
+    this.view.root.addChild(new AmbientLight({ color: PALETTE.light.ambient, intensity: 1.35 }));
     this.buildArena();
     this.buildScenery();
     this.scene.addChild(this.zone);
     this.zoneRing = this.assets.mesh(
       this.zone,
       this.assets.ring,
-      this.assets.material(0xa8efd0, 0.92, 0.3),
+      this.assets.material(PALETTE.zone.ring, 0.95, 0.3),
     );
     this.zoneCore = this.assets.mesh(
       this.zone,
       this.assets.disc,
-      this.assets.material(0xabedd2, 0.08),
+      this.assets.material(PALETTE.zone.core, 0.14),
       0,
       -0.005,
       0,
@@ -287,15 +293,15 @@ export class ArenaRenderer {
         fontFamily: "system-ui, sans-serif",
         fontSize: 10,
         fontWeight: "700",
-        fill: 0xc5f5de,
+        fill: PALETTE.zone.label,
         letterSpacing: 2,
       },
     });
     this.zoneMarker.anchor.set(0.5, 0.5);
     this.labels.addChild(this.zoneMarker);
     for (let i = 0; i < 8; i++) {
-      const line = this.assets.box(this.scene, 0xa9d7ca, 0, 0.2, 0, 0.035, 0.025, 0.9);
-      line.material = this.assets.material(0xb4e6d8, 0.45, 0.2);
+      const line = this.assets.box(this.scene, PALETTE.wind, 0, 0.2, 0, 0.035, 0.025, 0.9);
+      line.material = this.assets.material(PALETTE.wind, 0.7, 0.2);
       line.visible = false;
       this.windLines.push(line);
     }
@@ -318,7 +324,7 @@ export class ArenaRenderer {
         preference: "webgl",
         width: host.clientWidth || 1280,
         height: host.clientHeight || 720,
-        background: 0x132b34,
+        background: PALETTE.clear,
         // Context MSAA keeps the 2D labels smooth; the 3D scene's MSAA follows the settings.
         antialias: !software,
         autoDensity: true,
@@ -356,22 +362,30 @@ export class ArenaRenderer {
         const border = Math.abs(row) === 4 || Math.abs(col) === 4;
         const tint = border
           ? (row + col) % 2
-            ? 0xc9c8a4
-            : 0xbbc5a6
+            ? PALETTE.floor.edgeDark
+            : PALETTE.floor.edgeLight
           : (row + col) % 2
-            ? 0x86ad9a
-            : 0xa4c1a8;
+            ? PALETTE.floor.dark
+            : PALETTE.floor.light;
         const top = a.mesh(root, a.tile, a.flatMaterial(tint));
         // Only takes effect while the shadow-receiving tile material is in use.
         top.receiveShadow = true;
-        const outline = a.mesh(root, a.ring, a.material(0xf7b36e, 0.8, 0.2), 0, 0.025, 0, 0.75);
+        const outline = a.mesh(
+          root,
+          a.ring,
+          a.material(PALETTE.floor.warnRing, 0.9, 0.2),
+          0,
+          0.025,
+          0,
+          0.75,
+        );
         outline.visible = false;
         this.tiles.push({ root, top, outline, x, z, tint, fallenAt: null });
         if (border && (col + row) % 3 === 0) {
           const shard = a.mesh(
             root,
             a.cone,
-            a.material(0x385b5d),
+            a.material(PALETTE.floor.shard),
             0,
             -1.09,
             0,
@@ -384,17 +398,18 @@ export class ArenaRenderer {
         }
         // Quiet decorative inlay: it never denotes a collider or hazard.
         if (!border && (row + col + 12) % 5 === 0) {
-          a.box(root, 0x91b3a3, -0.57, 0.006, -0.5, 0.34, 0.012, 0.045).rotation.y = 0.5;
-          a.box(root, 0x91b3a3, -0.45, 0.007, -0.43, 0.18, 0.012, 0.045).rotation.y = -0.45;
+          a.box(root, PALETTE.floor.inlay, -0.57, 0.006, -0.5, 0.34, 0.012, 0.045).rotation.y = 0.5;
+          a.box(root, PALETTE.floor.inlay, -0.45, 0.007, -0.43, 0.18, 0.012, 0.045).rotation.y =
+            -0.45;
         }
       }
     }
     // A pale compass is a useful reference for depth and directional inputs.
-    a.mesh(this.scene, a.ring, a.material(0xf5e7bf, 0.3), 0, 0.012, 0, 2.6);
+    a.mesh(this.scene, a.ring, a.material(PALETTE.floor.compass, 0.5), 0, 0.012, 0, 2.6);
     for (let i = 0; i < 4; i++) {
       const mark = a.box(
         this.scene,
-        0xe3dab7,
+        PALETTE.floor.compass,
         Math.sin((i * Math.PI) / 2) * 2.6,
         0.016,
         Math.cos((i * Math.PI) / 2) * 2.6,
@@ -425,15 +440,49 @@ export class ArenaRenderer {
       root.position.set(x, y!, z);
       root.scale.set(size!);
       this.scenery.addChild(root);
-      const rock = a.mesh(root, a.cone, a.material(0x27494f), 0, -0.8, 0, 1.5, 2, 1.3);
+      const rock = a.mesh(root, a.cone, a.material(PALETTE.island.rock), 0, -0.8, 0, 1.5, 2, 1.3);
       rock.rotation.z = Math.PI;
-      a.mesh(root, a.cylinder, a.material(0x668c80), 0, 0.1, 0, 1.4, 0.21, 1.2);
+      a.mesh(root, a.cylinder, a.material(PALETTE.island.top), 0, 0.1, 0, 1.4, 0.21, 1.2);
       if (i % 2 === 0) {
-        a.box(root, 0x445b58, 0.1, 0.5, 0, 0.13, 0.8, 0.13);
-        a.mesh(root, a.cone, a.material(0x87a58e), 0.1, 1.05, 0, 0.66, 1.2, 0.62);
-        a.mesh(root, a.cone, a.material(0x9eb496), 0.1, 1.46, 0, 0.47, 0.91, 0.47);
+        a.box(root, PALETTE.island.trunk, 0.1, 0.5, 0, 0.13, 0.8, 0.13);
+        a.mesh(root, a.cone, a.material(PALETTE.island.blossom), 0.1, 1.05, 0, 0.66, 1.2, 0.62);
+        a.mesh(
+          root,
+          a.cone,
+          a.material(PALETTE.island.blossomLight),
+          0.1,
+          1.46,
+          0,
+          0.47,
+          0.91,
+          0.47,
+        );
       }
       this.floaters.push({ root, x, y: y!, z, phase: i * 1.45 });
+    });
+    // Fat little clouds: [screen right, screen up (away from camera), height, size].
+    const clouds = [
+      [-15, 17, -4, 1.2],
+      [14, 22, -5.5, 1.5],
+      [-30, 11, -10, 2.1],
+      [31, 9, -11, 1.9],
+      [3, 38, -7, 1.6],
+      [-21, -9, -13, 2.3],
+      [22, -11, -15, 2.5],
+    ];
+    clouds.forEach(([right, up, y, size], i) => {
+      const x = CAMERA_RIGHT.x * right! + CAMERA_FORWARD.x * up!;
+      const z = CAMERA_RIGHT.z * right! + CAMERA_FORWARD.z * up!;
+      const root = new Container3D();
+      root.position.set(x, y!, z);
+      root.scale.set(size!);
+      root.rotation.y = FACING_CAMERA + (i % 2 ? 0.3 : -0.2);
+      this.scenery.addChild(root);
+      a.ball(root, PALETTE.cloud, 0, 0, 0, 1.5, 0.82, 1.1);
+      a.ball(root, PALETTE.cloud, -1.15, -0.12, 0.15, 1, 0.6, 0.8);
+      a.ball(root, PALETTE.cloud, 1.2, -0.08, -0.1, 1.1, 0.66, 0.86);
+      a.ball(root, PALETTE.cloud, 0.3, 0.46, 0, 0.82, 0.6, 0.72);
+      this.floaters.push({ root, x, y: y!, z, phase: 2.1 + i * 0.9 });
     });
     for (let i = 0; i < 24; i++) {
       const angle = (i / 24) * TAU;
@@ -442,7 +491,7 @@ export class ArenaRenderer {
       const spark = a.mesh(
         this.scenery,
         a.pebble,
-        a.material(0xa0b7a1, 0.45, 0.2),
+        a.material(PALETTE.speck, 0.8, 0.2),
         CAMERA_FORWARD.x * 6 + Math.sin(angle) * distance,
         -3 - (i % 4),
         CAMERA_FORWARD.z * 6 + Math.cos(angle) * distance,
@@ -483,10 +532,10 @@ export class ArenaRenderer {
       tile.top.material = a.tileMaterial(
         warning
           ? Math.sin(this.time * 7) > 0
-            ? 0xdca36f
-            : 0xdec2a1
+            ? PALETTE.floor.warnA
+            : PALETTE.floor.warnB
           : unsafe
-            ? 0x91a4a5
+            ? PALETTE.floor.unsafe
             : tile.tint,
         this.shadowsActive,
       );
@@ -526,16 +575,17 @@ export class ArenaRenderer {
     if (view) return view;
     const rig = createFighterRig(this.assets, this.rigAssets, this.scene, f);
     const motion = new FighterMotion();
-    const trail = new SwordTrail(this.scene, 0xf2fbe6);
+    // On the pale floor a white smear would vanish: each blade trails its owner's colour.
+    const trail = new SwordTrail(this.scene, f.color);
     const label = new Text({
       text: f.human ? "YOU" : f.name,
       style: {
         fontFamily: "system-ui, sans-serif",
         fontSize: 11,
         fontWeight: "800",
-        fill: f.human ? 0xffe2ac : 0xe8f0ed,
+        fill: f.human ? PALETTE.label.you : PALETTE.label.text,
         letterSpacing: 1,
-        dropShadow: { color: 0x10282f, alpha: 0.65, blur: 3, distance: 1 },
+        dropShadow: { color: PALETTE.label.shadow, alpha: 0.65, blur: 3, distance: 1 },
       },
     });
     label.anchor.set(0.5, 1);
@@ -577,7 +627,12 @@ export class ArenaRenderer {
     if (point) {
       view.label.position.set(point.x, point.y);
       view.label.text = f.human ? "YOU" : `${f.name}  ${Math.round(f.damage)}%`;
-      view.label.style.fill = f.outsideTime > 0.5 ? 0xffad93 : f.human ? 0xffe2ac : 0xe8f0ed;
+      view.label.style.fill =
+        f.outsideTime > 0.5
+          ? PALETTE.label.outside
+          : f.human
+            ? PALETTE.label.you
+            : PALETTE.label.text;
       view.stamina
         .clear()
         .roundRect(
@@ -587,15 +642,15 @@ export class ArenaRenderer {
           view.label.height + 8,
           4,
         )
-        .fill({ color: 0x173039, alpha: 0.88 });
+        .fill({ color: PALETTE.label.ink, alpha: 0.9 });
       if (state.phase !== "menu")
         view.stamina
           .roundRect(point.x - 19, point.y + 5, 38, 3, 1.5)
-          .fill({ color: 0x183239, alpha: 0.7 });
+          .fill({ color: PALETTE.label.ink, alpha: 0.75 });
       if (state.phase !== "menu")
         view.stamina
           .roundRect(point.x - 19, point.y + 5, Math.max(0.1, (38 * f.stamina) / 100), 3, 1.5)
-          .fill({ color: f.stamina < 25 ? 0xf3b167 : 0xbfe3a1 });
+          .fill({ color: f.stamina < 25 ? PALETTE.label.staminaLow : PALETTE.label.stamina });
     }
   }
 
@@ -605,11 +660,19 @@ export class ArenaRenderer {
     const a = this.assets;
     const root = new Container3D();
     this.scene.addChild(root);
-    const ring = a.mesh(root, a.ring, a.material(0xff987a, 0.95, 0.6), 0, 0.065, 0, bomb.radius);
+    const ring = a.mesh(
+      root,
+      a.ring,
+      a.material(PALETTE.bomb.ring, 0.95, 0.6),
+      0,
+      0.065,
+      0,
+      bomb.radius,
+    );
     const fill = a.mesh(
       root,
       a.disc,
-      a.material(0xff8d6b, 0.2, 0.2),
+      a.material(PALETTE.bomb.fill, 0.28, 0.2),
       0,
       0.055,
       0,
@@ -618,22 +681,22 @@ export class ArenaRenderer {
       bomb.radius,
     );
     for (const turn of [0, Math.PI / 2]) {
-      const cross = a.box(root, 0xffae84, 0, 0.07, 0, 0.045, 0.025, 0.48);
+      const cross = a.box(root, PALETTE.bomb.cross, 0, 0.07, 0, 0.045, 0.025, 0.48);
       cross.rotation.y = turn;
     }
     const comet = new Container3D();
     root.addChild(comet);
-    a.mesh(comet, a.pebble, a.material(0x645c59), 0, 0, 0, 0.35);
-    a.mesh(comet, a.cone, a.material(0xf9ac6e, 0.7, 1), 0, 0.7, 0, 0.36, 1.7, 0.36);
-    a.mesh(comet, a.cone, a.material(0xffe1a3, 0.85, 1), 0, 0.47, 0, 0.18, 1.1, 0.18);
+    a.mesh(comet, a.pebble, a.material(PALETTE.bomb.rock), 0, 0, 0, 0.35);
+    a.mesh(comet, a.cone, a.material(PALETTE.bomb.flame, 0.8, 1), 0, 0.7, 0, 0.36, 1.7, 0.36);
+    a.mesh(comet, a.cone, a.material(PALETTE.bomb.flameCore, 0.9, 1), 0, 0.47, 0, 0.18, 1.1, 0.18);
     const label = new Text({
       text: "",
       style: {
         fontFamily: "system-ui, sans-serif",
         fontSize: 11,
         fontWeight: "800",
-        fill: 0xffcfac,
-        dropShadow: { color: 0x271f22, blur: 3, alpha: 0.8, distance: 1 },
+        fill: PALETTE.bomb.label,
+        dropShadow: { color: 0xffffff, blur: 3, alpha: 0.95, distance: 0 },
       },
     });
     label.anchor.set(0.5);
@@ -669,8 +732,20 @@ export class ArenaRenderer {
     const a = this.assets;
     const root = new Container3D();
     this.scene.addChild(root);
+    // The simulation tags effects with pale tints from the old night scene; on the bright floor
+    // each kind gets a colour that reads. Steps, throws and knock-outs keep the fighter's own.
     const color =
-      effect.kind === "clash" ? 0xffe8a3 : effect.kind === "bomb" ? 0xf6b77d : effect.color;
+      effect.kind === "clash"
+        ? PALETTE.fx.clash
+        : effect.kind === "bomb"
+          ? PALETTE.fx.blast
+          : effect.kind === "hit"
+            ? effect.size > 1.15
+              ? PALETTE.fx.hitHeavy
+              : PALETTE.fx.hit
+            : effect.kind === "jump" || effect.kind === "land" || effect.kind === "cancel"
+              ? PALETTE.fx.dust
+              : effect.color;
     const material = a.material(color, 1, 0.55);
     const count =
       effect.kind === "ko" || effect.kind === "bomb" ? 12 : effect.kind === "clash" ? 10 : 6;
@@ -888,14 +963,15 @@ export class ArenaRenderer {
     switch (event.kind) {
       case "slam": {
         impact.life = 1.5;
-        burst(10, 0xcfd8c4, 2.6 + event.power * 2.2, 3.2, 0.09);
-        burst(5, 0x6f8f86, 1.6, 4.4, 0.06);
+        burst(6, PALETTE.fx.dustLight, 2.6 + event.power * 2.2, 3.2, 0.09);
+        burst(6, PALETTE.fx.dust, 2.2 + event.power * 2, 2.8, 0.085);
+        burst(5, PALETTE.fx.chip, 1.6, 4.4, 0.06);
         for (let i = 0; i < 6; i++) {
           const angle = (i / 6) * TAU + random(i + 20) * 0.8;
           const length = (0.45 + random(i + 30) * 0.7) * (0.7 + event.power * 0.6);
           const crack = a.box(
             root,
-            0x33494c,
+            PALETTE.fx.crack,
             Math.sin(angle) * length * 0.5,
             0.012,
             Math.cos(angle) * length * 0.5,
@@ -911,22 +987,30 @@ export class ArenaRenderer {
       }
       case "land":
         impact.life = 0.45;
-        burst(Math.round(4 + event.power * 6), 0xcfd8c4, 1.3 + event.power * 2, 0.9, 0.065);
+        burst(
+          Math.round(2 + event.power * 3),
+          PALETTE.fx.dustLight,
+          1.3 + event.power * 2,
+          0.9,
+          0.065,
+        );
+        burst(Math.round(2 + event.power * 3), PALETTE.fx.dust, 1.1 + event.power * 2, 0.8, 0.06);
         if (event.power > 0.5) this.addShake(event.power * 0.3);
         break;
       case "stomp":
         impact.life = 0.35;
-        burst(5, 0xcfd8c4, 1.5, 0.8, 0.055);
+        burst(3, PALETTE.fx.dustLight, 1.5, 0.8, 0.055);
+        burst(3, PALETTE.fx.dust, 1.3, 0.7, 0.05);
         this.addShake(0.1 + event.power * 0.12);
         break;
       case "scrape":
         impact.life = 0.3;
         impact.gravity = 14;
-        burst(2, 0xffe6a8, 1.8, 3.4, 0.035, 0.8);
+        burst(2, PALETTE.fx.spark, 1.8, 3.4, 0.04, 0.8);
         break;
       case "skid":
         impact.life = 0.3;
-        burst(2, 0xcfd8c4, 0.7, 0.7, 0.045);
+        burst(2, PALETTE.fx.dust, 0.7, 0.7, 0.045);
         break;
     }
     this.impacts.push(impact);

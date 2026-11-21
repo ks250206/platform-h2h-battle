@@ -1,8 +1,8 @@
 import { createLightingBit, FlatMaterial } from "@pixi/3d";
 import type { ColorSpace, FlatMaterialOptions } from "@pixi/3d";
 
-/** How much of a tile's colour remains where the sun's shadow falls on it. */
-const SHADOW_FLOOR = "0.56";
+/** What a tile's colour is multiplied by where the sun is blocked: a soft violet, not grey. */
+const SHADOW_TINT = "0.68, 0.64, 0.9";
 
 /**
  * Keeps `FlatMaterial`'s colour (base colour times the baked vertex shade) and only darkens it where
@@ -17,8 +17,8 @@ const tileShadowBit = createLightingBit({
     gl: "sunShadow = min(sunShadow, shadow);",
   },
   postLighting: {
-    gpu: `finalColor = albedo * mix(${SHADOW_FLOOR}, 1.0, sunShadow);`,
-    gl: `finalColor = albedo * mix(${SHADOW_FLOOR}, 1.0, sunShadow);`,
+    gpu: `finalColor = albedo * mix(vec3<f32>(${SHADOW_TINT}), vec3<f32>(1.0), sunShadow);`,
+    gl: `finalColor = albedo * mix(vec3(${SHADOW_TINT}), vec3(1.0), sunShadow);`,
   },
 });
 

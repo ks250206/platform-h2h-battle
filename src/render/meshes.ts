@@ -10,9 +10,11 @@ import {
   TorusGeometry,
 } from "@pixi/3d";
 import type { BaseMaterial3D } from "@pixi/3d";
+import { PALETTE } from "./palette";
 import { ShadowedTileMaterial } from "./tileMaterial";
 
 const TAU = Math.PI * 2;
+const SIDE_TINT: readonly number[] = PALETTE.floorSideTint;
 
 /** Shared low-poly geometry and cached materials for everything in the arena. */
 export class MeshLibrary {
@@ -175,12 +177,17 @@ function makeTile(): Geometry3D {
     normals: number[] = [],
     colors: number[] = [],
     indices: number[] = [];
-  const quad = (points: number[][], normal: number[], shade: number) => {
+  const quad = (
+    points: number[][],
+    normal: number[],
+    shade: number,
+    tint: readonly number[] = [1, 1, 1],
+  ) => {
     const first = positions.length / 3;
     for (const p of points) {
       positions.push(...p);
       normals.push(...normal);
-      colors.push(shade, shade, shade, 1);
+      colors.push(shade * tint[0]!, shade * tint[1]!, shade * tint[2]!, 1);
     }
     indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
   };
@@ -204,11 +211,11 @@ function makeTile(): Geometry3D {
         [1, 0, 0],
         [0, 0, -1],
       ][side]!;
-      const shade = [0.84, 0.64, 0.54, 0.46][layer]! * [0.9, 1, 0.83, 0.76][side]!;
-      quad([upper[side]!, lower[side]!, lower[next]!, upper[next]!], normal, shade);
+      const shade = [0.9, 0.74, 0.64, 0.55][layer]! * [0.92, 1, 0.86, 0.8][side]!;
+      quad([upper[side]!, lower[side]!, lower[next]!, upper[next]!], normal, shade, SIDE_TINT);
     }
   }
-  quad(corners(widths.at(-1)!, heights.at(-1)!).reverse(), [0, -1, 0], 0.35);
+  quad(corners(widths.at(-1)!, heights.at(-1)!).reverse(), [0, -1, 0], 0.35, SIDE_TINT);
   return new Geometry3D({
     positions: new Float32Array(positions),
     normals: new Float32Array(normals),
