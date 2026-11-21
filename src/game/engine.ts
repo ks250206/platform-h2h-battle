@@ -305,7 +305,9 @@ export class BattleEngine {
 
   private spend(f: Fighter, cost: number): boolean {
     if (f.stamina + 1e-6 < cost) {
-      if (f.human) this.announce("スタミナ不足 — 歩いて間合いを取り直そう", 0.8);
+      // A shared centre message cannot say whose stamina ran out, so only a lone human gets it.
+      if (f.human && this.state.fighters.filter((o) => o.human).length === 1)
+        this.announce("スタミナ不足 — 歩いて間合いを取り直そう", 0.8);
       return false;
     }
     f.stamina = Math.max(0, f.stamina - cost);
@@ -893,6 +895,7 @@ export class BattleEngine {
     const fresh = makeFighter(f.id, this.state.fighters.length, this.options);
     Object.assign(f, fresh, {
       human: f.human,
+      player: f.player,
       kills: f.kills,
       aiLevel: f.aiLevel,
       stocks: f.stocks,
