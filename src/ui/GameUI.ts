@@ -558,6 +558,7 @@ export class GameUI {
   private finishHoldUntil = 0;
   private resumeAfterHelp = false;
   private resumeAfterSettings = false;
+  private rulesSheetOpen = false;
   private previousFocus: HTMLElement | null = null;
   private renderSizeFrame = 0;
   private lastFpsText = 0;
@@ -1335,7 +1336,7 @@ export class GameUI {
 
   /** Whether the phone rules sheet is open. */
   private rulesOpen(): boolean {
-    return this.query(".match-options").classList.contains("rules-open");
+    return this.rulesSheetOpen;
   }
 
   /** The rules sheet exists on portrait phones (styles.css), in the modes that have rules. */
@@ -1352,9 +1353,10 @@ export class GameUI {
    * `returnFocus` hands it back to the toggle.
    */
   private setRulesOpen(open: boolean, returnFocus = false): void {
+    if (this.rulesSheetOpen === open) return;
+    this.rulesSheetOpen = open;
     const block = this.query(".match-options");
     const toggle = this.query(".rules-toggle");
-    if (block.classList.contains("rules-open") === open) return;
     block.classList.toggle("rules-open", open);
     toggle.setAttribute("aria-expanded", String(open));
     if (open) this.query("#match-rules-panel [data-rules-close]").focus({ preventScroll: true });
