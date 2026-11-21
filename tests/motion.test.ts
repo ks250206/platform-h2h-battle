@@ -226,6 +226,35 @@ describe("fighter motion", () => {
     }
   });
 
+  test("a cancelled wind-up lowers the blade back to the guard without ever cutting", () => {
+    const { frames } = simulate(1.6, (frame) =>
+      frame === 0
+        ? { attackPressed: "overhead", attackHeld: "overhead" }
+        : frame === 16
+          ? { cancel: true }
+          : {},
+    );
+    const modes = new Set(frames.map((entry) => entry.fighter.mode));
+    expect(modes.has("windup")).toBe(true);
+    expect(modes.has("cancel")).toBe(true);
+    expect(modes.has("active")).toBe(false);
+    expect(frames.some((entry) => entry.frame.events.some((e) => e.kind === "slam"))).toBe(false);
+    for (const { frame } of frames) expect(frame.trail).toBe(0);
+    // Facing +Z: back in the tail guard the point rests on the floor behind the fighter.
+    const last = frames[frames.length - 1]!;
+    expect(last.fighter.mode).toBe("idle");
+    expect(last.frame.bladeTip.z).toBeLessThan(-1);
+    expect(last.frame.bladeTip.y).toBeLessThan(0.1);
+    // The blade is lowered, not snapped: no frame moves the point further than a full cut does.
+    let fastest = 0;
+    for (let i = 1; i < frames.length; i++)
+      fastest = Math.max(
+        fastest,
+        distance(frames[i]!.frame.bladeTip, frames[i - 1]!.frame.bladeTip),
+      );
+    expect(fastest).toBeLessThan(0.7);
+  });
+
   test("hit-stop freezes the pose with the simulation", () => {
     const { frames } = simulate(1.2, tap("overhead"), (engine) => {
       // Put the practice dummy in the blade's path so the swing connects.

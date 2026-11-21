@@ -286,6 +286,10 @@ export class BattleEngine {
       }
       return;
     }
+    if (f.mode === "windup") {
+      if (input.cancel) this.cancelWindup(f);
+      return;
+    }
     if (f.mode !== "idle") return;
     if (input.step && f.grounded && this.spend(f, RULES.stepCost)) {
       this.startStep(f, input.move, false);
@@ -329,6 +333,20 @@ export class BattleEngine {
     this.setMode(f, "windup", ATTACKS[f.attack].startup);
     f.hitTargets = [];
     f.swingId++;
+  }
+
+  private cancelWindup(f: Fighter): void {
+    const progress = clamp(f.modeTime / f.modeDuration, 0, 1);
+    this.setMode(f, "cancel", RULES.cancelDuration + RULES.windupCancelPenalty * progress);
+    f.attack = null;
+    f.charge = 0;
+    f.staminaDelay = RULES.staminaDelay;
+    // A cancelled grounded cut never leaves the floor, so no landing would clear its air use.
+    if (f.grounded) {
+      f.airRisingUsed = false;
+      f.airThrustUsed = false;
+    }
+    this.effect("cancel", f, 0xbbe4dc, 0.28);
   }
 
   private startStep(f: Fighter, direction: Vec2, feint: boolean): void {

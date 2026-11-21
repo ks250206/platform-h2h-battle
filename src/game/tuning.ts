@@ -74,6 +74,7 @@ export const RULES = {
   maxCharge: 0.9,
   maxHold: 1.3,
   cancelDuration: 0.12,
+  windupCancelPenalty: 0.2,
   stepCost: 25,
   stepDuration: 0.3,
   stepSpeed: 10.5,

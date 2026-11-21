@@ -55,13 +55,13 @@ describe("committed, stamina-limited greatsword attacks", () => {
     expect(player.staminaDelay).toBeGreaterThan(0);
   });
 
-  test("releasing charges the remaining cost and commits through cancel/step input", () => {
+  test("releasing charges the remaining cost and commits through step input", () => {
     const { engine, player } = fixture();
     startCharge(engine, "overhead");
     engine.update(DT, emptyInput());
     expect(player.mode).toBe("windup");
     expect(player.stamina).toBe(RULES.maxStamina - ATTACKS.overhead.stamina);
-    engine.update(DT, { ...emptyInput(), cancel: true, step: true, move: { x: 1, z: 0 } });
+    engine.update(DT, { ...emptyInput(), step: true, move: { x: 1, z: 0 } });
     expect(player.mode).toBe("windup");
     expect(player.stamina).toBe(RULES.maxStamina - ATTACKS.overhead.stamina);
   });
@@ -114,6 +114,169 @@ describe("committed, stamina-limited greatsword attacks", () => {
     expect(player.grounded).toBe(true);
     expect(player.mode).toBe("recovery");
   });
+});
+
+describe("cancelling a committed wind-up", () => {
+  const cancelInput = (): PlayerInput => ({ ...emptyInput(), cancel: true });
+
+  /** Tap (press, then release on the next tick) so the attack commits into its wind-up. */
+  function tap(engine: BattleEngine, attack: AttackId = "overhead") {
+    startCharge(engine, attack);
+    engine.update(DT, emptyInput());
+  }
+
+  /** Steps with no input until the fighter reaches `mode`; fails instead of looping forever. */
+  function advanceUntil(engine: BattleEngine, fighter: Fighter, mode: Fighter["mode"]) {
+    for (let frame = 0; frame < 240 && fighter.mode !== mode; frame++) engine.update(DT);
+    expect(fighter.mode).toBe(mode);
+  }
+
+  /** Cancels once the wind-up has run `fraction` of its startup; returns the cancel's cost. */
+  function cancelAt(fraction: number) {
+    const { engine, player } = fixture();
+    tap(engine);
+    const startup = ATTACKS.overhead.startup;
+    while (player.modeTime + DT < fraction * startup) engine.update(DT);
+    const progress = (player.modeTime + DT) / startup;
+    engine.update(DT, cancelInput());
+    expect(player.mode).toBe("cancel");
+    const duration = player.modeDuration;
+    let frames = 0;
+    while (player.mode === "cancel" && frames < 120) {
+      engine.update(DT);
+      frames++;
+    }
+    expect(player.mode).toBe("idle");
+    return { duration, frames, progress };
+  }
+
+  test("a tapped attack cancelled in its wind-up never becomes active and cannot hit", () => {
+    const { engine, player, target } = fixture();
+    Object.assign(target, { z: -1 });
+    tap(engine);
+    expect(player.mode).toBe("windup");
+    advance(engine, 0.1);
+    engine.update(DT, cancelInput());
+    expect(player.mode).toBe("cancel");
+    expect(player.attack).toBeNull();
+    expect(player.charge).toBe(0);
+    expect(engine.state.effects.some((effect) => effect.kind === "cancel")).toBe(true);
+    const modes = new Set<Fighter["mode"]>();
+    const swing = ATTACKS.overhead;
+    for (let frame = 0; frame < (swing.startup + swing.active + swing.recovery) / DT; frame++) {
+      engine.update(DT);
+      modes.add(player.mode);
+    }
+    expect(modes.has("idle")).toBe(true);
+    expect(modes.has("active")).toBe(false);
+    expect(modes.has("recovery")).toBe(false);
+    expect(target.damage).toBe(0);
+    expect(engine.state.stats.hits).toBe(0);
+  });
+
+  test("a wind-up cancel keeps the full attack cost spent, unlike a charge cancel", () => {
+    const windup = fixture();
+    tap(windup.engine);
+    windup.engine.update(DT, cancelInput());
+    expect(windup.player.mode).toBe("cancel");
+    expect(windup.player.stamina).toBe(RULES.maxStamina - ATTACKS.overhead.stamina);
+    expect(windup.player.staminaDelay).toBe(RULES.staminaDelay);
+
+    const charge = fixture();
+    startCharge(charge.engine);
+    charge.engine.update(DT, { ...cancelInput(), attackHeld: "overhead" });
+    expect(charge.player.mode).toBe("cancel");
+    expect(charge.player.modeDuration).toBe(RULES.cancelDuration);
+    expect(charge.player.stamina).toBe(RULES.maxStamina - RULES.chargeCost);
+
+    advanceUntil(windup.engine, windup.player, "idle");
+    expect(windup.player.stamina).toBe(RULES.maxStamina - ATTACKS.overhead.stamina);
+  });
+
+  test("a later wind-up cancel takes longer to arrest the blade", () => {
+    const early = cancelAt(0);
+    const late = cancelAt(0.9);
+    expect(early.duration).toBeCloseTo(
+      RULES.cancelDuration + RULES.windupCancelPenalty * early.progress,
+      8,
+    );
+    expect(early.duration).toBeLessThan(RULES.cancelDuration + 0.01);
+    expect(late.progress).toBeGreaterThan(0.85);
+    expect(late.progress).toBeLessThan(1);
+    expect(late.duration).toBeCloseTo(
+      RULES.cancelDuration + RULES.windupCancelPenalty * late.progress,
+      8,
+    );
+    expect(late.duration).toBeLessThanOrEqual(RULES.cancelDuration + RULES.windupCancelPenalty);
+    expect(late.frames).toBeGreaterThan(early.frames + 6);
+  });
+
+  test.each(["active", "recovery"] as const)(
+    "the cancel input does nothing during %s and the attack completes",
+    (mode) => {
+      const { engine, player } = fixture();
+      tap(engine);
+      advanceUntil(engine, player, mode);
+      engine.update(DT, cancelInput());
+      expect(player.mode).toBe(mode);
+      expect(player.attack).toBe("overhead");
+      if (mode === "active") advanceUntil(engine, player, "recovery");
+      advanceUntil(engine, player, "idle");
+    },
+  );
+
+  test("a cancel arriving on the tick the wind-up ends is too late", () => {
+    const { engine, player } = fixture();
+    tap(engine);
+    while (player.modeTime + DT + 1e-7 < ATTACKS.overhead.startup) engine.update(DT);
+    expect(player.mode).toBe("windup");
+    engine.update(DT, cancelInput());
+    expect(player.mode).toBe("active");
+  });
+
+  test("a grounded cancelled rising cut leaves the air riser available for the next jump", () => {
+    const { engine, player } = fixture();
+    tap(engine, "rising");
+    expect(player.airRisingUsed).toBe(true);
+    engine.update(DT, cancelInput());
+    expect(player.grounded).toBe(true);
+    expect(player.airRisingUsed).toBe(false);
+    expect(player.airThrustUsed).toBe(false);
+    advanceUntil(engine, player, "idle");
+    engine.update(DT, { ...emptyInput(), jump: true });
+    advance(engine, 0.05);
+    expect(player.grounded).toBe(false);
+    tap(engine, "rising");
+    expect(player.mode).toBe("windup");
+    advanceUntil(engine, player, "active");
+    expect(player.grounded).toBe(false);
+    expect(player.vy).toBeGreaterThan(0);
+    expect(player.airRisingUsed).toBe(true);
+  });
+
+  test.each(["rising", "thrust"] as const)(
+    "an airborne cancelled %s keeps its air use consumed until landing",
+    (attack) => {
+      const { engine, player } = fixture();
+      const token = attack === "rising" ? "airRisingUsed" : "airThrustUsed";
+      Object.assign(player, { grounded: false, y: 5, vy: 0 });
+      tap(engine, attack);
+      expect(player[token]).toBe(true);
+      engine.update(DT, cancelInput());
+      expect(player.mode).toBe("cancel");
+      expect(player[token]).toBe(true);
+      advanceUntil(engine, player, "idle");
+      expect(player.grounded).toBe(false);
+      const stamina = player.stamina;
+      startCharge(engine, attack);
+      expect(player.mode).not.toBe("charge");
+      expect(player.stamina).toBe(stamina);
+      Object.assign(player, { y: 0.01, vy: -1 });
+      advance(engine, 0.05);
+      expect(player.grounded).toBe(true);
+      expect(player[token]).toBe(false);
+    },
+  );
 });
 
 describe("directional step and attack geometry", () => {
