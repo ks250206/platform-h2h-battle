@@ -1,9 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.use({
-  // Full Chromium (--headless=new) supports real CDP touch pinch gestures on Linux CI,
-  // unlike chromium-headless-shell where synthetic touch pinch is dropped on Linux.
-  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? {} : { channel: "chromium" }),
   viewport: { width: 390, height: 844 },
   isMobile: true,
   hasTouch: true,
@@ -134,19 +131,29 @@ test("instructions stay zoomable, reset and pinch-out recovery both return to 1x
         ),
     );
 
+  const pinch = async (x: number, y: number, fromSpan: number, toSpan: number) => {
+    const steps = 10;
+    for (let i = 0; i <= steps; i++) {
+      const span = fromSpan + (toSpan - fromSpan) * (i / steps);
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: i === 0 ? "touchStart" : "touchMove",
+        touchPoints: [
+          { x: x - span, y, id: 1 },
+          { x: x + span, y, id: 2 },
+        ],
+      });
+      await page.waitForTimeout(16);
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  };
+
   const zoomViaHelp = async () => {
     await page.locator(".pause-button").tap();
     await page.locator('.pause-panel [data-action="help"]').tap();
     await expect(page.locator("dialog.help-dialog")).toBeVisible();
     // Wait for compositor commit so hit-testing sees help-dialog (not the canvas behind it).
     await commitCompositor();
-    await cdp.send("Input.synthesizePinchGesture", {
-      x: 195,
-      y: 400,
-      scaleFactor: 1.5,
-      relativeSpeed: 300,
-      gestureSourceType: "touch",
-    });
+    await pinch(195, 400, 45, 85);
     await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 1)).toBeGreaterThan(1.2);
     await expect(page.locator("html")).toHaveAttribute("data-zoomed", "");
     await page.keyboard.press("Escape");
@@ -173,13 +180,7 @@ test("instructions stay zoomable, reset and pinch-out recovery both return to 1x
   // Exercise manual 2-finger pinch-out recovery separately without pressing reset.
   await zoomViaHelp();
   expect(await page.evaluate(() => visualViewport?.scale ?? 1)).toBeGreaterThan(1.2);
-  await cdp.send("Input.synthesizePinchGesture", {
-    x: 195,
-    y: 420,
-    scaleFactor: 0.5,
-    relativeSpeed: 300,
-    gestureSourceType: "touch",
-  });
+  await pinch(195, 420, 125, 25);
   await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 0)).toBeCloseTo(1, 2);
   await expect(page.locator("html")).not.toHaveAttribute("data-zoomed", "");
   await expect(notice).toBeHidden();
