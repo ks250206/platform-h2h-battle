@@ -7,7 +7,13 @@ import {
   type MatchOptions,
 } from "./match";
 import { AI_LEVELS, ATTACKS, RULES } from "./tuning";
-import { effectiveRules, timeLimitFor, type TimeRule } from "./rules";
+import {
+  effectiveRules,
+  FLOATING_GARDEN,
+  timeLimitFor,
+  type StageInfo,
+  type TimeRule,
+} from "./rules";
 import {
   angleDelta,
   attackContains,
@@ -130,6 +136,8 @@ export class BattleEngine {
   /** Each human's input, with button presses held until a simulation tick has consumed them. */
   private pending = new Map<number, PlayerInput>();
   private options: MatchOptions = sanitizeMatchOptions(DEFAULT_MATCH_OPTIONS);
+  /** The stage the match runs on; its gimmick constraints override the players' choice. */
+  private stage: StageInfo = FLOATING_GARDEN;
 
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
@@ -169,14 +177,19 @@ export class BattleEngine {
       seed,
       pausedFrom: "playing",
       options: copyMatchOptions(this.options),
-      rules: effectiveRules(this.options, mode),
+      rules: effectiveRules(this.options, mode, this.stage),
       stats: { hits: 0, clashes: 0, dodges: 0, maxDamage: 0 },
     };
   }
 
-  /** Starts a match. Options given once are kept for later restarts until new ones arrive. */
-  start(mode: MatchMode, options?: Partial<MatchOptions>): void {
+  /**
+   * Starts a match. Options (and the stage) given once are kept for later restarts until new
+   * ones arrive. The stage's gimmick constraints are applied to `state.rules` before the match
+   * begins and never change during it.
+   */
+  start(mode: MatchMode, options?: Partial<MatchOptions>, stage?: StageInfo): void {
     if (options) this.options = sanitizeMatchOptions({ ...this.options, ...options });
+    if (stage) this.stage = stage;
     this.state = this.createState(mode, this.state.seed);
     this.randomState = this.state.seed >>> 0;
     this.nextBomb = RULES.bombStart;

@@ -8,6 +8,7 @@ import { playableOptions, type MatchStore } from "../game/matchStore";
 import {
   describeRules,
   effectiveRules,
+  FLOATING_GARDEN,
   formatClock,
   GIMMICK_DETAILS,
   GIMMICK_IDS,
@@ -20,6 +21,7 @@ import {
   TIME_RULES,
   type GimmickId,
   type PresetId,
+  type StageInfo,
   type TimeRule,
 } from "../game/rules";
 import type { PlayerLock } from "../game/input";
@@ -37,7 +39,20 @@ export interface GameUICallbacks {
   /** The remembered 対戦設定 (who plays what, lives, time limit, gimmicks and CPU strength). */
   match: MatchStore;
   graphics: GraphicsSettingsBinding;
+  /**
+   * The stage the next match runs on (THE FLOATING GARDEN when absent). Its gimmick constraints
+   * lock the matching toggles on the title and are explained there before the match starts.
+   */
+  stage?: () => StageInfo;
 }
+
+/** What the preset (or カスタム) means, shown under the picker for touch and pad players too. */
+const PRESET_DETAILS: Record<PresetId | "custom", string> = {
+  standard: RULE_PRESETS.standard.detail,
+  short: RULE_PRESETS.short.detail,
+  noGimmicks: RULE_PRESETS.noGimmicks.detail,
+  custom: "プリセットから残機・制限時間・ギミックを変えた自分だけのルール",
+};
 
 /** What the graphics settings dialog reads and writes; renderer values are null until it is ready. */
 export interface GraphicsSettingsBinding {
@@ -188,6 +203,7 @@ function matchOptionsMarkup(): string {
                 <span class="match-option-label" id="match-gimmicks-label">ギミック</span>
                 <div class="segmented match-segmented gimmick-toggles" role="group" aria-labelledby="match-gimmicks-label">${GIMMICK_IDS.map((id) => segment("gimmick", id, gimmickShort[id], ` aria-label="${GIMMICK_LABELS[id]}" title="${GIMMICK_LABELS[id]}：${GIMMICK_DETAILS[id]}"`)).join("")}</div>
               </div>
+              <p class="rules-preset-detail match-rule"><strong class="rules-preset-name"></strong><span class="rules-preset-text"></span></p>
               <p class="rules-summary match-rule" aria-live="polite"></p>
               <ul class="rules-notes match-rule" hidden></ul>
               <div class="match-option match-rule">
@@ -476,7 +492,19 @@ export class GameUI {
     const preset = presetOf(options);
     pressed("[data-preset]", (b) => b.dataset.preset === preset);
     pressed("[data-time]", (b) => b.dataset.time === options.time);
-    pressed("[data-gimmick]", (b) => options.gimmicks[b.dataset.gimmick as GimmickId]);
+    const rules = effectiveRules(options, mode, this.stage());
+    // Toggles show what the match will run with; a gimmick the stage fixes can't be switched.
+    pressed("[data-gimmick]", (b) => rules.gimmicks[b.dataset.gimmick as GimmickId]);
+    for (const button of block.querySelectorAll<HTMLButtonElement>("[data-gimmick]")) {
+      const id = button.dataset.gimmick as GimmickId;
+      const constraint = rules.locked[id];
+      button.disabled = Boolean(constraint);
+      button.classList.toggle("locked", Boolean(constraint));
+      const label = constraint
+        ? `${GIMMICK_LABELS[id]}（${constraint.forced ? "常にあり" : "なし"}：${constraint.reason}）`
+        : GIMMICK_LABELS[id];
+      if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+    }
     for (const button of block.querySelectorAll<HTMLElement>("[data-time]")) {
       const time = button.dataset.time as TimeRule;
       const clock = formatClock(timeLimitFor(options.stocks, time));
@@ -489,17 +517,22 @@ export class GameUI {
     const badge = this.query(".rule-preset-badge");
     badge.classList.toggle("custom", preset === "custom");
     setText(badge, PRESET_LABELS[preset]);
-    const rules = effectiveRules(options, mode);
+    setText(this.query(".rules-preset-name"), `${PRESET_LABELS[preset]}：`);
+    setText(this.query(".rules-preset-text"), PRESET_DETAILS[preset]);
     setText(this.query(".rules-summary"), describeRules(rules));
+    // Every gimmick the stage fixes is explained, also when the saved choice already matches.
     const notes = this.query(".rules-notes");
-    const notesMarkup = rules.notes
-      .map(
-        (note) =>
-          `<li>${GIMMICK_LABELS[note.gimmick]}: ${note.effective ? "常にあり" : "なし"}（${escapeHtml(note.reason)}）</li>`,
-      )
+    const changed = new Set(rules.notes.map((note) => note.gimmick));
+    const lockedIds = GIMMICK_IDS.filter((id) => rules.locked[id]);
+    const notesMarkup = lockedIds
+      .map((id) => {
+        const constraint = rules.locked[id]!;
+        const overridden = changed.has(id) ? "（選んだ設定は使われません）" : "";
+        return `<li>${GIMMICK_LABELS[id]}: ${constraint.forced ? "常にあり" : "なし"}（${escapeHtml(constraint.reason)}）${overridden}</li>`;
+      })
       .join("");
     if (notes.innerHTML !== notesMarkup) notes.innerHTML = notesMarkup;
-    notes.hidden = training || rules.notes.length === 0;
+    notes.hidden = training || lockedIds.length === 0;
 
     const connected = (pad: number) => this.connectedPads.includes(pad);
     const { options: playable, substitutes } = playableOptions(options, count, connected);
@@ -721,6 +754,11 @@ export class GameUI {
     this.hud.classList.toggle("lock-off", legendLock ? !legendLock.on : false);
   }
 
+  /** The stage the next match runs on. */
+  private stage(): StageInfo {
+    return this.callbacks.stage?.() ?? FLOATING_GARDEN;
+  }
+
   private query<T extends HTMLElement = HTMLElement>(selector: string): T {
     const element = this.host.querySelector<T>(selector);
     if (!element) throw new Error(`Missing UI element: ${selector}`);
@@ -755,6 +793,8 @@ export class GameUI {
       return;
     }
     if (target.dataset.gimmick) {
+      // A gimmick the stage fixes is locked: the choice would have no effect.
+      if ((target as HTMLButtonElement).disabled || target.classList.contains("locked")) return;
       this.match.toggleGimmick(target.dataset.gimmick as GimmickId);
       return;
     }

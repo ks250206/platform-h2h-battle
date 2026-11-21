@@ -175,6 +175,11 @@ export interface EffectiveRules {
   timeLimit: number | null;
   time: TimeRule;
   gimmicks: Gimmicks;
+  /**
+   * Every gimmick the stage (or the mode) fixes, whether or not it differs from the players'
+   * choice: the title disables those toggles and shows the reason.
+   */
+  locked: GimmickConstraints;
   /** Every gimmick the stage or the mode changed from the players' choice, with the reason. */
   notes: RuleNote[];
 }
@@ -193,11 +198,13 @@ export function effectiveRules(
   const training = mode === "training";
   const gimmicks = { ...chosen.gimmicks };
   const notes: RuleNote[] = [];
+  const locked: GimmickConstraints = {};
   for (const id of GIMMICK_IDS) {
     const constraint = training
       ? { forced: false, reason: TRAINING_REASON }
       : stage.constraints[id];
     if (!constraint) continue;
+    locked[id] = { forced: constraint.forced, reason: constraint.reason };
     gimmicks[id] = constraint.forced;
     if (constraint.forced !== chosen.gimmicks[id])
       notes.push({
@@ -212,6 +219,7 @@ export function effectiveRules(
     timeLimit: training ? null : timeLimitFor(chosen.stocks, chosen.time),
     time: chosen.time,
     gimmicks,
+    locked,
     notes,
   };
 }

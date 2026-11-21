@@ -298,6 +298,13 @@ describe("effective rules", () => {
     ]);
     const off = effectiveRules(presetRules("noGimmicks"), "rumble", stage);
     expect(off.notes.map((n) => n.gimmick)).toEqual(["collapse"]);
+    // Both constraints are locked (and explained on the title) whatever the choice.
+    for (const r of [rules, off])
+      expect(r.locked).toEqual({
+        wind: { forced: false, reason: "屋内のため風は吹かない" },
+        collapse: { forced: true, reason: "崩れやすい島" },
+      });
+    expect(effectiveRules(presetRules("standard"), "duel").locked).toEqual({});
     expect(FLOATING_GARDEN.constraints).toEqual({});
     expect(effectiveRules(presetRules("standard"), "duel").notes).toEqual([]);
   });
@@ -479,5 +486,80 @@ describe("rematch", () => {
     engine.start("rumble");
     expect(engine.state.rules.timeLimit).toBe(90);
     expect(engine.state.rules.gimmicks.wind).toBe(false);
+  });
+});
+
+describe("stage constraints in the engine", () => {
+  const holeStage: StageInfo = {
+    id: "hole",
+    name: "HOLE",
+    constraints: { collapse: { forced: false, reason: "中央穴ステージでは外周崩壊なし" } },
+  };
+
+  test("a stage forbidding collapse never shrinks, even with collapse chosen", () => {
+    const engine = new BattleEngine(5);
+    engine.start("rumble", { gimmicks: ALL_GIMMICKS }, holeStage);
+    expect(engine.state.options.gimmicks.collapse).toBe(true);
+    expect(engine.state.rules.gimmicks).toEqual(only("collapse", false));
+    expect(engine.state.rules.locked).toEqual(holeStage.constraints);
+    expect(engine.state.rules.notes).toEqual([
+      {
+        gimmick: "collapse",
+        chosen: true,
+        effective: false,
+        reason: "中央穴ステージでは外周崩壊なし",
+      },
+    ]);
+    engine.state.phase = "playing";
+    for (const cpu of engine.state.fighters.slice(1)) cpu.hitstop = 1e6;
+    for (let k = 0; k < 4; k++) {
+      const at = RULES.collapseStart + k * RULES.collapseInterval;
+      jump(engine, at - RULES.collapseWarning + 0.5);
+      expect(engine.state.arena.warningRing).toBe(false);
+      jump(engine, at + 0.1);
+      expect(engine.state.arena.halfSize).toBe(RULES.arenaHalfSize);
+    }
+  });
+
+  test("the lock is exposed even when the choice already matches", () => {
+    const engine = new BattleEngine(5);
+    engine.start("duel", { gimmicks: only("collapse", false) }, holeStage);
+    expect(engine.state.rules.notes).toEqual([]);
+    expect(engine.state.rules.locked.collapse).toEqual({
+      forced: false,
+      reason: "中央穴ステージでは外周崩壊なし",
+    });
+  });
+
+  test("a forced gimmick runs even when the players switched it off", () => {
+    const stage: StageInfo = {
+      id: "storm",
+      name: "STORM",
+      constraints: { wind: { forced: true, reason: "嵐の島では常に風が吹く" } },
+    };
+    const { engine } = fixture({ gimmicks: NO_GIMMICKS });
+    engine.start("duel", undefined, stage);
+    engine.state.phase = "playing";
+    for (const cpu of engine.state.fighters.slice(1)) cpu.hitstop = 1e6;
+    expect(engine.state.rules.gimmicks).toEqual({ ...NO_GIMMICKS, wind: true });
+    jump(engine, 25, 1);
+    expect(engine.state.arena.windActive).toBe(true);
+  });
+
+  test("the stage is kept across restarts and defaults to the floating garden", () => {
+    const engine = new BattleEngine(5);
+    engine.start("duel", { gimmicks: ALL_GIMMICKS });
+    expect(engine.state.rules.locked).toEqual({});
+    engine.start("duel", undefined, holeStage);
+    engine.start("rumble");
+    expect(engine.state.rules.gimmicks.collapse).toBe(false);
+    engine.start("duel", undefined, FLOATING_GARDEN);
+    expect(engine.state.rules.gimmicks.collapse).toBe(true);
+  });
+
+  test("training ignores the stage: no gimmicks at all", () => {
+    const engine = new BattleEngine(5);
+    engine.start("training", { gimmicks: ALL_GIMMICKS }, holeStage);
+    expect(engine.state.rules.gimmicks).toEqual(NO_GIMMICKS);
   });
 });

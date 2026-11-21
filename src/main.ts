@@ -7,6 +7,7 @@ import { createSettingsStore, defaultSettings, detectTouch } from "./game/settin
 import { createMatchStore, playableOptions } from "./game/matchStore";
 import type { MatchOptions } from "./game/match";
 import { PadHub } from "./game/pads";
+import { FLOATING_GARDEN, type StageInfo } from "./game/rules";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
 import { PadMenu } from "./ui/padMenu";
@@ -28,6 +29,8 @@ let selectedMode: MatchMode = "duel";
 const match = createMatchStore();
 let matchOptions: MatchOptions = match.get();
 const pads = new PadHub();
+/** The stage matches run on; the title explains its gimmick constraints before the start. */
+const currentStage = (): StageInfo => FLOATING_GARDEN;
 /** Starts (or restarts) a match with what can play right now. */
 const startMatch = (mode: MatchMode, options: MatchOptions) => {
   selectedMode = mode;
@@ -38,7 +41,7 @@ const startMatch = (mode: MatchMode, options: MatchOptions) => {
   input?.newMatch();
   lostPad = null;
   ui.setPadNotice(null);
-  engine.start(mode, playable.options);
+  engine.start(mode, playable.options, currentStage());
 };
 let animation = 0;
 let stopped = false;
@@ -82,6 +85,7 @@ const toggleCameraFollow = () => {
   settings.set({ cameraFollow: !settings.get().cameraFollow });
 };
 const ui = new GameUI(overlay, {
+  stage: currentStage,
   onStart: (mode, options) => {
     sound.unlock();
     startMatch(mode, options);
