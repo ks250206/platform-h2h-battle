@@ -33,6 +33,8 @@ import { PALETTE } from "./palette";
 import type { MotionEvent } from "./motion";
 import { applyFrame, createFighterRig, destroyFighterRig, rigIdentity, RigAssets } from "./rig";
 import type { FighterRig } from "./rig";
+import type { PresentationEvent } from "../game/presentation";
+import { FinishFx } from "./finishFx";
 import { StageShapes, StageView } from "./stageMesh";
 import { SwordTrail } from "./trail";
 
@@ -239,6 +241,9 @@ export class ArenaRenderer {
   private readonly windLines: Mesh3D[] = [];
   private readonly rigAssets = new RigAssets();
   private readonly impacts: Impact[] = [];
+  /** KO and finish highlights (finishFx.ts). */
+  private readonly finishFx: FinishFx;
+  private arenaHalfSize = 7;
   /** Camera shake energy; decays every frame. */
   private shake = 0;
   /** Development aid: a fixed close-up camera for inspecting animation. */
@@ -331,6 +336,7 @@ export class ArenaRenderer {
     this.labels.eventMode = "none";
     app.stage.addChild(this.view, this.trainingDebug, this.labels);
     this.view.root.addChild(this.scenery, this.scene);
+    this.finishFx = new FinishFx(this.scene, this.assets);
     this.view.camera.mode = "perspective";
     this.view.camera.fov = CAMERA_FOV;
     this.view.camera.near = CAMERA_NEAR;
@@ -994,7 +1000,21 @@ export class ArenaRenderer {
       this.trainingDebug.clear();
     }
     this.trainingDebug.visible = showDebug;
+    this.arenaHalfSize = state.arena.initialHalfSize;
+    this.finishFx.update(visualDelta, state.phase);
     this.app.render();
+  }
+
+  /**
+   * KO and finish highlights for this frame's presentation events. Visual only: the camera may
+   * jolt (when shake is on) but nothing waits, so the fighters still in play keep moving.
+   */
+  present(events: readonly PresentationEvent[]): void {
+    if (this.destroyed) return;
+    for (const event of events) {
+      const shake = this.finishFx.trigger(event, this.arenaHalfSize, this.settings.reducedFlash);
+      if (shake > 0) this.addShake(shake);
+    }
   }
 
   screenToWorld(clientX: number, clientY: number): Vec2 | null {

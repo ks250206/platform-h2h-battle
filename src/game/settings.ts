@@ -31,7 +31,21 @@ export interface GraphicsSettings {
   cameraFollow: boolean;
   /** パッドの振動: 被弾・ヒット・相殺でパッドが震える */
   padRumble: boolean;
+  /** 強い光と決着演出の白フラッシュを控えめにする (KO・決着は色と文字で読める) */
+  reducedFlash: boolean;
+  /** BGM の音量 (0..1)。0 でも効果音は鳴る */
+  bgmVolume: number;
+  /** 効果音の音量 (0..1)。0 でも BGM は鳴る */
+  seVolume: number;
+  /** すべての音を消す (上部バーの音ボタンと同じ値) */
+  muted: boolean;
 }
+
+/** Every stored choice: graphics, effects and sound share one record and one storage key. */
+export type GameSettings = GraphicsSettings;
+
+export const DEFAULT_BGM_VOLUME = 0.6;
+export const DEFAULT_SE_VOLUME = 0.8;
 
 export const RESOLUTION_OPTIONS: readonly { value: ResolutionPreset; label: string }[] = [
   { value: "native", label: "ネイティブ (画面に合わせる)" },
@@ -65,6 +79,10 @@ export function defaultSettings({ software, touch }: DeviceProfile): GraphicsSet
     cameraShake: true,
     cameraFollow: true,
     padRumble: true,
+    reducedFlash: false,
+    bgmVolume: DEFAULT_BGM_VOLUME,
+    seVolume: DEFAULT_SE_VOLUME,
+    muted: false,
   };
 }
 
@@ -74,6 +92,11 @@ const pick = <T>(value: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(value as T) ? (value as T) : fallback;
 const bool = (value: unknown, fallback: boolean): boolean =>
   typeof value === "boolean" ? value : fallback;
+/** A real number clamped to 0..1 (and snapped to whole percent); anything else falls back. */
+const unit = (value: unknown, fallback: number): number =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.round(Math.min(1, Math.max(0, value)) * 100) / 100
+    : fallback;
 
 /** Keeps every valid field of `raw` and replaces each missing, corrupt or out-of-range one. */
 export function sanitizeSettings(raw: unknown, defaults: GraphicsSettings): GraphicsSettings {
@@ -94,6 +117,10 @@ export function sanitizeSettings(raw: unknown, defaults: GraphicsSettings): Grap
     cameraShake: bool(source.cameraShake, defaults.cameraShake),
     cameraFollow: bool(source.cameraFollow, defaults.cameraFollow),
     padRumble: bool(source.padRumble, defaults.padRumble),
+    reducedFlash: bool(source.reducedFlash, defaults.reducedFlash),
+    bgmVolume: unit(source.bgmVolume, defaults.bgmVolume),
+    seVolume: unit(source.seVolume, defaults.seVolume),
+    muted: bool(source.muted, defaults.muted),
   };
 }
 
