@@ -421,6 +421,8 @@ export class BgmPlayer {
   private readonly pauseGain: GainNode;
   private readonly duck: GainNode;
   private readonly instances = new Map<number, GainNode>();
+  /** Stopped instances still fading out, keyed by the timer that disconnects them. */
+  private readonly fading = new Map<ReturnType<typeof setTimeout>, GainNode>();
   private paused = false;
   private disposed = false;
 
@@ -499,7 +501,11 @@ export class BgmPlayer {
     gain.gain.setValueAtTime(0, stop.at + stop.fadeOut);
     const end = stop.at + stop.fadeOut + 0.05;
     const delay = Math.max(0, end - this.context.currentTime) * 1000;
-    setTimeout(() => gain.disconnect(), delay + 100);
+    const timer = setTimeout(() => {
+      this.fading.delete(timer);
+      gain.disconnect();
+    }, delay + 100);
+    this.fading.set(timer, gain);
   }
 
   private voice(note: BgmNote): void {
@@ -661,6 +667,11 @@ export class BgmPlayer {
     this.disposed = true;
     for (const gain of this.instances.values()) gain.disconnect();
     this.instances.clear();
+    for (const [timer, gain] of this.fading) {
+      clearTimeout(timer);
+      gain.disconnect();
+    }
+    this.fading.clear();
     this.pauseGain.disconnect();
   }
 }

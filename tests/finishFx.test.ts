@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { fxSpot, fxStyle, type FxKind } from "../src/render/finishFx";
+import { fxSpot, fxStyle, type FxKind } from "../src/render/finishFxLogic";
 
 const KINDS: FxKind[] = ["trainingKo", "stockKo", "elimination", "finish"];
 

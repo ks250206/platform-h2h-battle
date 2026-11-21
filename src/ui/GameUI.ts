@@ -1198,7 +1198,8 @@ export class GameUI {
       range.disabled = s.muted;
       setText(dialog.querySelector<HTMLElement>(`[data-output="${key}"]`)!, `${percent}%`);
     }
-    this.host.toggleAttribute("data-reduced-flash", s.reducedFlash);
+    if (s.reducedFlash) this.host.dataset.reducedFlash = "";
+    else delete this.host.dataset.reducedFlash;
     const sound = this.query('[data-action="sound"]');
     if (sound.getAttribute("aria-pressed") !== String(!s.muted)) {
       sound.innerHTML = s.muted ? icons.mute : icons.sound;
@@ -1646,7 +1647,8 @@ export class GameUI {
     const showResult = state.phase === "ended" && performance.now() >= this.finishHoldUntil;
     const revealed = showResult && this.result.hidden;
     this.result.hidden = !showResult;
-    this.host.toggleAttribute("data-climax", isClimax(state));
+    if (isClimax(state)) this.host.dataset.climax = "";
+    else delete this.host.dataset.climax;
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
     const ladderLabel = ladder
       ? `${ladderRound(ladder.round)} · ${ladderOpponentName(ladder.opponent)} · ${ladderOpponentDetails(ladder.opponent)}`

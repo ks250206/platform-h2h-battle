@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import {
   BgmPlayer,
   BgmSequencer,
@@ -223,5 +223,32 @@ describe("player", () => {
     frames(cue("battle"), 1, true);
     expect(ctx.startedSince(mark)).toBeGreaterThan(0);
     expect(player.state.started).toBe(1);
+  });
+
+  test("destroy clears fade-out timers and disconnects loops that are still fading", () => {
+    vi.useFakeTimers();
+    try {
+      const gains: { outputs: Set<unknown> }[] = [];
+      const create = ctx.createGain.bind(ctx);
+      ctx.createGain = () => {
+        const gain = create();
+        gains.push(gain);
+        return gain;
+      };
+      frames(cue("menu"), 2);
+      frames(cue("battle"), 0.2);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      // Loop instances feed the music bus (made before this hook); note envelopes feed instances.
+      const own = new Set<unknown>(gains);
+      const loops = gains.filter((gain) => [...gain.outputs].some((node) => !own.has(node)));
+      // The menu loop is mid fade-out (the battle loop waits for it to finish).
+      expect(loops.length).toBeGreaterThan(0);
+      expect(player.liveInstances).toBe(0);
+      player.destroy();
+      expect(vi.getTimerCount()).toBe(0);
+      for (const gain of loops) expect(gain.outputs.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
