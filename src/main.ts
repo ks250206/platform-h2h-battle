@@ -10,6 +10,8 @@ import { LadderSession } from "./game/ladder";
 import { PadHub } from "./game/pads";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
+import { TutorialBattle } from "./game/tutorial";
+import { TutorialUi } from "./ui/tutorialUi";
 import { PadMenu } from "./ui/padMenu";
 import { emptyInput } from "./game/types";
 import type { GameState, MatchMode, PlayerInput } from "./game/types";
@@ -19,7 +21,8 @@ root.innerHTML =
   '<div id="arena"></div><div id="interface"></div><div class="loading-screen"><span class="loading-paw">✦</span><strong>BRAMBLE</strong><p>浮島を準備しています…</p></div>';
 const host = document.getElementById("arena")!;
 const overlay = document.getElementById("interface")!;
-const engine = new BattleEngine();
+const matchEngine = new BattleEngine();
+let engine = matchEngine;
 const sound = new BattleAudio();
 let input: BattleInput | null = null;
 let renderer: ArenaRenderer | null = null;
@@ -34,6 +37,7 @@ let ladder: LadderSession | null = null;
 let ladderAttempt: symbol | null = null;
 /** Starts (or restarts) a match with what can play right now. */
 const startMatch = (mode: MatchMode, options: MatchOptions) => {
+  leaveTutorial();
   selectedMode = mode;
   matchOptions = options;
   const count = mode === "rumble" ? 4 : 2;
@@ -74,8 +78,8 @@ let manualStepping = false;
 let lostPad: number | null = null;
 
 /** A set keeps its starting line-up, including during a disconnect between games. */
-const missingSetPad = (): number | null => {
-  if (!engine.state.set) return null;
+const missingRequiredPad = (): number | null => {
+  if (!engine.state.set && !(engine instanceof TutorialBattle)) return null;
   for (const { device } of humanSlots(engine.state.options, 2)) {
     const pad = padIndex(device);
     if (pad !== null && !pads.isConnected(pad)) return pad + 1;
@@ -84,10 +88,10 @@ const missingSetPad = (): number | null => {
 };
 const prepareGame = () => {
   input?.reset();
-  input?.newMatch();
+  input?.newMatch(engine instanceof TutorialBattle);
   lostPad = null;
   ui.setPadNotice(null);
-  const missing = missingSetPad();
+  const missing = missingRequiredPad();
   if (missing !== null) padLost(missing);
   updateUI();
 };
@@ -97,7 +101,7 @@ const pause = () => {
   else engine.pause();
 };
 const resume = () => {
-  const missing = missingSetPad();
+  const missing = missingRequiredPad();
   if (missing !== null) {
     padLost(missing);
     return;
@@ -108,16 +112,24 @@ const resume = () => {
   }
   lostPad = null;
   ui.setPadNotice(null);
+  if (engine instanceof TutorialBattle) {
+    input?.reset();
+    input?.newMatch(true);
+  }
   engine.resume();
 };
 /** A pad of the running match went away: pause and say which one. */
 const padLost = (padNumber: number) => {
   lostPad = padNumber;
   engine.pause();
-  const hint = ladder
-    ? "つなぎ直すか、キーボード・マウス（タッチ）で再開できます。"
-    : "つなぎ直してから再開してください。";
-  ui.setPadNotice(`パッド${padNumber} の接続が切れました。${hint}`, engine.state.set !== null);
+  const hint =
+    ladder || engine instanceof TutorialBattle
+      ? "つなぎ直すか、キーボード・マウス（タッチ）で再開できます。"
+      : "つなぎ直してから再開してください。";
+  ui.setPadNotice(
+    `パッド${padNumber} の接続が切れました。${hint}`,
+    engine.state.set !== null || engine instanceof TutorialBattle,
+  );
 };
 /** V / the top-bar camera button / the settings dialog all write the same stored setting. */
 const toggleCameraFollow = () => {
@@ -131,6 +143,7 @@ const updateUI = () => {
     ladderAttempt = null;
   }
   ui.update(state, ladder?.progress);
+  tutorialUi.update();
 };
 const playLadderAttempt = () => {
   const attempt = ladder?.startAttempt();
@@ -144,6 +157,16 @@ const leaveLadder = () => {
   ladder = null;
   ladderAttempt = null;
 };
+function returnToTitle() {
+  leaveTutorial();
+  leaveLadder();
+  input?.reset();
+  lostPad = null;
+  ui.setPadNotice(null);
+  renderer?.setSpotlight(null);
+  showTitle();
+  updateUI();
+}
 const ui = new GameUI(overlay, {
   onStart: (mode, options) => {
     leaveLadder();
@@ -163,6 +186,7 @@ const ui = new GameUI(overlay, {
   onPause: () => engine.pause(),
   onResume: resume,
   onRestart: () => {
+    if (engine instanceof TutorialBattle) return tutorialUi.retry();
     if (ladder) return;
     sound.unlock();
     if (engine.state.set) {
@@ -175,15 +199,7 @@ const ui = new GameUI(overlay, {
     sound.unlock();
     prepareGame();
   },
-  onMenu: () => {
-    leaveLadder();
-    input?.reset();
-    lostPad = null;
-    ui.setPadNotice(null);
-    renderer?.setSpotlight(null);
-    showTitle();
-    updateUI();
-  },
+  onMenu: returnToTitle,
   onPreview: (mode, options) => {
     titleMode = mode;
     titleOptions = options;
@@ -202,12 +218,52 @@ const ui = new GameUI(overlay, {
     supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
   },
 });
+const leaveTutorial = () => {
+  tutorialUi.leave();
+  if (engine instanceof TutorialBattle) input?.newMatch();
+  engine = matchEngine;
+};
+const tutorialUi = new TutorialUi(
+  overlay,
+  {
+    resume,
+    play: (battle) => {
+      leaveLadder();
+      engine = battle;
+      sound.unlock();
+      prepareGame();
+    },
+    deviceChanged: (device) => {
+      if (!(engine instanceof TutorialBattle)) return;
+      engine.state.options.controls = { 0: device };
+      input?.reset();
+      input?.updateVisibility(engine.state);
+      if (lostPad !== null && missingRequiredPad() === null) {
+        lostPad = null;
+        ui.setPadNotice(null);
+      }
+    },
+    exit: (mode) => {
+      const options = {
+        ...match.get(),
+        controls: { 0: tutorialUi.device },
+        setFormat: "single" as const,
+      };
+      if (mode) startMatch(mode, options);
+      else {
+        returnToTitle();
+        overlay.querySelector<HTMLButtonElement>(".tutorial-entry")?.focus();
+      }
+    },
+  },
+  detectTouch(),
+);
 updateUI();
 pads.subscribe((connected) => {
   ui.setPads(connected);
   // Notice immediately if the set's roster is missing a pad. Results can still be browsed.
   if (engine.state.phase !== "ended") {
-    const missing = missingSetPad();
+    const missing = missingRequiredPad();
     if (missing !== null) {
       padLost(missing);
       return;
@@ -256,9 +312,14 @@ async function boot() {
       // Pads are read once a frame: the menus first (a press there may start or resume the
       // match), then the match input, which treats buttons still held as already pressed.
       pads.poll();
+      if (engine.state.phase === "menu" || engine instanceof TutorialBattle)
+        tutorialUi.observePads(pads.current);
       padMenu.update(now / 1000);
       input.updateVisibility(engine.state);
-      const control = input.sample(engine.state);
+      const control = input.sample(
+        engine.state,
+        engine instanceof TutorialBattle && tutorialUi.promptDevice === "touch",
+      );
       if (!manualStepping) {
         engine.update(dt, control);
         renderer.render(engine.state, dt);
@@ -287,7 +348,9 @@ async function boot() {
               startMatch(mode, match.get());
               if (engine.state.phase === "countdown") engine.state.phase = "playing";
             },
-            engine,
+            get engine() {
+              return engine;
+            },
             renderer,
             manual: (on: boolean) => {
               manualStepping = on;
@@ -327,6 +390,7 @@ window.addEventListener(
     stopped = true;
     cancelAnimationFrame(animation);
     input?.destroy();
+    tutorialUi.destroy();
     padMenu.destroy();
     ui.destroy();
     sound.destroy();

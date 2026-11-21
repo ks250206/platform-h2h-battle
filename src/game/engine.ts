@@ -371,7 +371,7 @@ export class BattleEngine {
     }
   }
 
-  private tick(dt: number, playerInputs: ReadonlyMap<number, PlayerInput>): void {
+  protected tick(dt: number, playerInputs: ReadonlyMap<number, PlayerInput>): void {
     const state = this.state;
     if (state.phase === "paused" || state.phase === "ended" || state.phase === "menu") return;
     if (state.phase === "countdown") {
@@ -1348,7 +1348,7 @@ export class BattleEngine {
     this.announce(message, 10);
   }
 
-  private ai(f: Fighter, dt: number): PlayerInput {
+  protected ai(f: Fighter, dt: number): PlayerInput {
     return this.cpu.decide(f, dt);
   }
 

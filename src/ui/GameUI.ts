@@ -566,6 +566,7 @@ export class GameUI {
           ${matchOptionsMarkup()}
           ${ladderOverviewMarkup()}
           <button class="start-button flex items-center justify-between" data-action="start"><span><b class="start-label">アリーナへ</b><span class="start-en">ENTER THE ARENA</span></span>${icons.arrow}</button>
+          <button class="tutorial-entry" data-tutor="catalog">はじめての方へ · 実戦チュートリアル</button>
           <div class="menu-links"><button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button><button class="menu-controls-link" data-action="settings">グラフィック設定 <span>↗</span></button></div>
           <div class="menu-features flex items-center"><span>重い一撃</span><i></i><span>自由なフェイント</span><i></i><span>一瞬の読み合い</span></div>
         </div>
@@ -598,6 +599,7 @@ export class GameUI {
           <p class="pause-notice" role="status" hidden></p>
           <button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button>
           <button class="secondary-button" data-action="restart">はじめから</button>
+          <button class="secondary-button tutorial-pause-link" data-tutor="catalog">課題を選ぶ</button>
           <button class="secondary-button" data-action="settings">グラフィック設定</button>
           <button class="text-button" data-action="menu">タイトルへ戻る</button>
           <p class="pause-exit-note" hidden>タイトルに戻ると、勝利数を加算せずにこのセットを終了します。</p>
@@ -1057,7 +1059,10 @@ export class GameUI {
   padTitleButton(index: number, button: TitleButton): boolean {
     if (this.host.querySelector("dialog[open]")) return false;
     if (this.selectedMode === "ladder") return false;
-    if (button === "a" && document.activeElement?.matches("button[data-mode='ladder']"))
+    if (
+      button === "a" &&
+      document.activeElement?.matches("button[data-mode='ladder'], .tutorial-entry")
+    )
       return false;
     const count = fighterCount(this.selectedMode);
     if (button === "y") {
@@ -1560,7 +1565,12 @@ export class GameUI {
       setText(this.query(".pause-description"), ladderLabel || "次の一撃を、じっくり考えよう。");
       const restart = this.query(".pause-screen [data-action='restart']");
       restart.hidden = Boolean(ladder);
-      setText(restart, state.set ? "セットを最初から" : "はじめから");
+      setText(
+        restart,
+        this.host.hasAttribute("data-tutorial")
+          ? "この課題をやり直す"
+          : state.set ? "セットを最初から" : "はじめから",
+      );
       setText(
         this.query(".pause-screen [data-action='menu']"),
         ladder ? "ラダーを終了" : "タイトルへ戻る",
