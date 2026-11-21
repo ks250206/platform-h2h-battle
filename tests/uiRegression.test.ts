@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { BattleEngine } from "../src/game/engine";
 import { BUTTON, type PadSnapshot } from "../src/game/gamepad";
 import { PadHub } from "../src/game/pads";
-import type { Phase } from "../src/game/types";
+import { emptyInput, type Phase } from "../src/game/types";
 import { PadMenu } from "../src/ui/padMenu";
 import { TrainingUI } from "../src/ui/trainingUi";
 
@@ -248,5 +248,247 @@ describe("TrainingUI pad disconnect safety", () => {
       vi.doUnmock("../src/render/renderer");
       vi.doUnmock("../src/game/audio");
     }
+  });
+});
+
+/** Boots the real app (GameUI, TrainingUI, main.ts wiring) on a stub renderer and audio. */
+async function bootApp() {
+  document.body.innerHTML = '<div id="app"></div>';
+  localStorage.clear();
+  const canvas = document.createElement("canvas");
+  vi.resetModules();
+  vi.doMock("../src/render/renderer", () => ({
+    hasSoftwareRenderer: () => false,
+    ArenaRenderer: {
+      create: async (host: HTMLElement) => {
+        host.append(canvas);
+        return {
+          canvas,
+          render() {},
+          present() {},
+          applySettings() {},
+          screenToWorld: () => null,
+          setSpotlight() {},
+          destroy() {},
+        };
+      },
+    },
+  }));
+  vi.doMock("../src/game/audio", () => ({
+    BattleAudio: class {
+      unlock() {}
+      setMix() {}
+      update() {}
+      setEnabled() {}
+      destroy() {}
+    },
+  }));
+  let now = performance.now();
+  let handle = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    frames.set(++handle, cb);
+    return handle;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  const draw = (count = 1) => {
+    for (let i = 0; i < count; i++) {
+      now += 34;
+      const batch = [...frames.values()];
+      frames.clear();
+      batch.forEach((cb) => cb(now));
+    }
+  };
+  await import("../src/main");
+  draw(2);
+  const teardown = () => {
+    window.dispatchEvent(new Event("pagehide"));
+    vi.unstubAllGlobals();
+    vi.doUnmock("../src/render/renderer");
+    vi.doUnmock("../src/game/audio");
+  };
+  return { app: window.__BRAMBLE__!, draw, teardown };
+}
+
+describe("phone rules bottom sheet", () => {
+  test("the summary button opens the sheet; 完了, the backdrop, Escape, a mode switch and Start close it", async () => {
+    const { app, draw, teardown } = await bootApp();
+    try {
+      const $ = <T extends HTMLElement = HTMLElement>(selector: string) =>
+        document.querySelector<T>(selector)!;
+      const block = $(".match-options");
+      const toggle = $<HTMLButtonElement>(".rules-toggle");
+      const panel = $("#match-rules-panel");
+      const done = panel.querySelector<HTMLButtonElement>("[data-rules-close]")!;
+      const isOpen = () => block.classList.contains("rules-open");
+
+      // The toggle sits right before the panel it controls, which holds every secondary rule.
+      expect(toggle.getAttribute("aria-controls")).toBe("match-rules-panel");
+      expect(toggle.nextElementSibling).toBe(panel);
+      for (const selector of [
+        ".match-set-format",
+        "[data-preset]",
+        "[data-stocks]",
+        "[data-time]",
+        "[data-gimmick]",
+        ".rules-preset-detail",
+        ".rules-summary",
+        ".rules-notes",
+        "[data-difficulty]",
+      ])
+        expect(panel.querySelector(selector), selector).not.toBeNull();
+      // Start, the tutorial and the links share the pinned call-to-action block.
+      const cta = $(".menu-cta");
+      expect(cta.querySelector('[data-action="start"]')).not.toBeNull();
+      expect(cta.querySelector(".tutorial-entry")).not.toBeNull();
+      expect(cta.querySelector(".menu-links")).not.toBeNull();
+
+      // Open with the toggle: focus moves to 完了; 完了 closes and hands focus back.
+      toggle.click();
+      expect(isOpen()).toBe(true);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(done);
+      done.click();
+      expect(isOpen()).toBe(false);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(toggle);
+
+      // The toggle also closes it again.
+      toggle.click();
+      toggle.click();
+      expect(isOpen()).toBe(false);
+
+      // A tap on the backdrop closes it.
+      toggle.click();
+      $(".rules-sheet-backdrop").click();
+      expect(isOpen()).toBe(false);
+
+      // Escape closes it, is consumed (no pause, nothing else hears it) and refocuses the toggle.
+      toggle.click();
+      const bubbled = vi.fn();
+      window.addEventListener("keydown", bubbled);
+      const escape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      done.dispatchEvent(escape);
+      window.removeEventListener("keydown", bubbled);
+      expect(isOpen()).toBe(false);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(bubbled).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(toggle);
+      expect(app.snapshot().phase).toBe("menu");
+      // With the sheet closed, Escape is left alone.
+      const later = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      document.body.dispatchEvent(later);
+      expect(later.defaultPrevented).toBe(false);
+
+      // The summary follows the rules: lives, the set format, and a dot for stage overrides.
+      const summary = $(".rules-toggle-summary");
+      expect(summary.textContent).toMatch(/^標準 · 残機3 · \d+:\d{2} · ふつう$/);
+      $<HTMLButtonElement>('[data-stocks="5"]').click();
+      draw();
+      expect(summary.textContent).toContain("残機5");
+      expect(summary.textContent).toContain("カスタム");
+      $<HTMLButtonElement>('[data-set-format="bo3"]').click();
+      draw();
+      expect(summary.textContent).toMatch(/^BO3 · /);
+      $<HTMLButtonElement>('[data-difficulty="hard"]').click();
+      draw();
+      expect(summary.textContent).toMatch(/つよい$/);
+      expect(toggle.classList.contains("has-notes")).toBe(false);
+      $<HTMLButtonElement>('button[data-stage="bridges"]').click();
+      draw();
+      expect(toggle.classList.contains("has-notes")).toBe(true);
+
+      // Switching modes closes it; in 稽古 the toggle is hidden with the other rules.
+      toggle.click();
+      $<HTMLButtonElement>('button[data-mode="rumble"]').click();
+      expect(isOpen()).toBe(false);
+      expect(summary.textContent).not.toMatch(/^BO3/);
+      $<HTMLButtonElement>('button[data-mode="training"]').click();
+      expect(toggle.hidden).toBe(true);
+      $<HTMLButtonElement>('button[data-mode="duel"]').click();
+      expect(toggle.hidden).toBe(false);
+
+      // Start closes it and the match begins.
+      toggle.click();
+      expect(isOpen()).toBe(true);
+      $<HTMLButtonElement>('.menu-cta [data-action="start"]').click();
+      draw(2);
+      expect(isOpen()).toBe(false);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(app.snapshot().phase).not.toBe("menu");
+    } finally {
+      teardown();
+    }
+  });
+});
+
+describe("training HUD on touch screens", () => {
+  test("buttons carry their shortcuts as hints, and the status is flagged while there is nothing to say", () => {
+    document.body.innerHTML = `
+      <div id="root">
+        <div class="game-hud"></div>
+        <div class="pause-panel"><button type="button" data-action="resume">再開</button></div>
+      </div>`;
+    const root = document.getElementById("root")!;
+    const engine = new BattleEngine(5);
+    engine.start("training", {});
+    engine.state.phase = "playing";
+    const trainingUI = new TrainingUI(
+      root,
+      engine,
+      () => {},
+      () => {},
+    );
+    const hud = root.querySelector<HTMLElement>(".training-hud")!;
+    const open = hud.querySelector("[data-open]")!;
+    const reset = hud.querySelector("[data-reset]")!;
+    expect(open.querySelector("span")!.textContent).toBe("稽古設定");
+    expect(open.querySelector("kbd.shortcut-hint")!.textContent).toBe("T / 十字↑");
+    expect(reset.querySelector("span")!.textContent).toBe("リセット");
+    expect(reset.querySelector("kbd.shortcut-hint")!.textContent).toBe("R / 十字↓");
+    for (const selector of ["[data-stop]", ".training-status", ".training-state pre"])
+      expect(hud.querySelector(selector), selector).not.toBeNull();
+
+    const status = hud.querySelector<HTMLElement>(".training-status")!;
+    trainingUI.update();
+    // Idle with no tape: flagged, but the words stay for the keyboard layouts.
+    expect(status.classList.contains("idle-empty")).toBe(true);
+    expect(status.textContent).toContain("待機");
+
+    // Infinite stamina is worth showing.
+    engine.configureTraining({ infinite: true });
+    trainingUI.update();
+    expect(status.classList.contains("idle-empty")).toBe(false);
+    expect(status.textContent).toContain("スタミナ∞");
+    engine.configureTraining({ infinite: false });
+    trainingUI.update();
+    expect(status.classList.contains("idle-empty")).toBe(true);
+
+    // Recording, and a recorded tape once stopped, are shown.
+    expect(engine.beginTraining("record")).toBe(true);
+    trainingUI.update();
+    expect(status.classList.contains("idle-empty")).toBe(false);
+    expect(status.textContent).toContain("記録中");
+    for (let i = 0; i < 3; i++) engine.training!.sample(emptyInput());
+    engine.stopTraining();
+    trainingUI.update();
+    expect(engine.training!.transport).toBe("idle");
+    expect(status.classList.contains("idle-empty")).toBe(false);
+    expect(status.textContent).toContain("記録 3F");
+
+    // Playing it back too.
+    expect(engine.beginTraining("play")).toBe(true);
+    trainingUI.update();
+    expect(status.classList.contains("idle-empty")).toBe(false);
+    trainingUI.destroy();
   });
 });

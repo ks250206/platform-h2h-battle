@@ -60,7 +60,7 @@ export class TrainingUI {
     this.hud = document.createElement("aside");
     this.hud.className = "training-hud";
     this.hud.hidden = true;
-    this.hud.innerHTML = `<button type="button" data-open>稽古設定 · T / 十字↑</button><button type="button" data-reset>リセット · R / 十字↓</button><button type="button" data-stop hidden>停止</button>
+    this.hud.innerHTML = `<button type="button" data-open><span>稽古設定</span><kbd class="shortcut-hint">T / 十字↑</kbd></button><button type="button" data-reset><span>リセット</span><kbd class="shortcut-hint">R / 十字↓</kbd></button><button type="button" data-stop hidden>停止</button>
       <span class="training-status"></span><div class="training-state" hidden><pre></pre><pre></pre></div>`;
     root.querySelector(".game-hud")!.append(this.hud);
     this.pauseButton = document.createElement("button");
@@ -270,6 +270,11 @@ export class TrainingUI {
     const status = this.hud.querySelector(".training-status")!;
     const label = `${this.tapeLabel()}${t.settings.infinite ? " · スタミナ∞" : ""}`;
     if (status.textContent !== label) status.textContent = label;
+    // Nothing recorded and nothing on: touch screens hide the line (it only says "待機").
+    status.classList.toggle(
+      "idle-empty",
+      t.transport === "idle" && !t.ticks && !t.settings.infinite,
+    );
     this.hud.querySelector<HTMLButtonElement>("[data-stop]")!.hidden = t.transport === "idle";
     const state = this.hud.querySelector<HTMLElement>(".training-state")!;
     state.hidden = !t.settings.overlay;
