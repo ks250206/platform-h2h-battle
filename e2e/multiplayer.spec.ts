@@ -111,6 +111,9 @@ test("pads join on the title and a keyboard player and a pad player share a duel
     window.__padConnect(0);
     window.__padConnect(1);
   });
+  // A button that is already down when a screen takes over the pads does nothing until it is
+  // released, so let the title see the pads idle before the first press.
+  await frames(page, 5);
 
   // パッド1 presses A: it takes the duel's CPU slot (シロ).
   await expect(device(page, 1)).toHaveValue("cpu");
@@ -219,7 +222,7 @@ test("pads join on the title and a keyboard player and a pad player share a duel
   await page.waitForTimeout(400);
   expect(await phase(page)).toBe("paused");
   await button(page, 0, START, false);
-  await frames(page, 4);
+  await frames(page, 5);
   await button(page, 0, START, true);
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
   await button(page, 0, START, false);
@@ -229,7 +232,10 @@ test("pads join on the title and a keyboard player and a pad player share a duel
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "paused");
   await expect(page.locator(".pause-notice")).toHaveText(/パッド1 の接続が切れました/);
   await page.evaluate(() => window.__padConnect(0));
-  // Any pad drives the pause panel: B resumes.
+  // Any pad drives the pause panel: B resumes. The panel must have taken over the pads first: on
+  // a slow machine the press could land in the very frame the pause appears, and a button that
+  // is down at a takeover is ignored until it comes up.
+  await frames(page, 5);
   await button(page, 1, B, true);
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
   await button(page, 1, B, false);
