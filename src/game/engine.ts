@@ -1,4 +1,5 @@
 import {
+  copyMatchOptions,
   DEFAULT_MATCH_OPTIONS,
   humanSlots,
   levelFor,
@@ -6,6 +7,13 @@ import {
   type MatchOptions,
 } from "./match";
 import { AI_LEVELS, ATTACKS, RULES } from "./tuning";
+import {
+  effectiveRules,
+  FLOATING_GARDEN,
+  timeLimitFor,
+  type StageInfo,
+  type TimeRule,
+} from "./rules";
 import {
   angleDelta,
   attackContains,
@@ -39,9 +47,12 @@ export {
   isInvulnerable,
 } from "./combat";
 
-/** Seconds before time-up: the base clock plus extra time for every life beyond the first. */
-export function matchTimeLimit(stocks: number): number {
-  return RULES.maxMatchTime + RULES.matchTimePerStock * (Math.max(1, stocks) - 1);
+/**
+ * Seconds before time-up: under the standard rule the base clock plus extra time for every life
+ * beyond the first; under the short rule a flat `SHORT_TIME_LIMIT`.
+ */
+export function matchTimeLimit(stocks: number, time: TimeRule = "standard"): number {
+  return timeLimitFor(stocks, time);
 }
 
 /** Will `f` still be untouchable `t` seconds from now (timed invulnerability or a step's window)? */
@@ -125,6 +136,8 @@ export class BattleEngine {
   /** Each human's input, with button presses held until a simulation tick has consumed them. */
   private pending = new Map<number, PlayerInput>();
   private options: MatchOptions = sanitizeMatchOptions(DEFAULT_MATCH_OPTIONS);
+  /** The stage the match runs on; its gimmick constraints override the players' choice. */
+  private stage: StageInfo = FLOATING_GARDEN;
 
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
@@ -163,18 +176,20 @@ export class BattleEngine {
       messageTime: 0,
       seed,
       pausedFrom: "playing",
-      options: {
-        ...this.options,
-        controls: { ...this.options.controls },
-        overrides: { ...this.options.overrides },
-      },
+      options: copyMatchOptions(this.options),
+      rules: effectiveRules(this.options, mode, this.stage),
       stats: { hits: 0, clashes: 0, dodges: 0, maxDamage: 0 },
     };
   }
 
-  /** Starts a match. Options given once are kept for later restarts until new ones arrive. */
-  start(mode: MatchMode, options?: Partial<MatchOptions>): void {
+  /**
+   * Starts a match. Options (and the stage) given once are kept for later restarts until new
+   * ones arrive. The stage's gimmick constraints are applied to `state.rules` before the match
+   * begins and never change during it.
+   */
+  start(mode: MatchMode, options?: Partial<MatchOptions>, stage?: StageInfo): void {
     if (options) this.options = sanitizeMatchOptions({ ...this.options, ...options });
+    if (stage) this.stage = stage;
     this.state = this.createState(mode, this.state.seed);
     this.randomState = this.state.seed >>> 0;
     this.nextBomb = RULES.bombStart;
@@ -793,19 +808,27 @@ export class BattleEngine {
     this.effect("throw", target, f.color, 0.4);
   }
 
+  /**
+   * The arena gimmicks, each only when the match's effective rules have it on: a gimmick that is
+   * off leaves no trace in the state (no warning ring, zone, wind or bombs), so neither the
+   * renderer, the HUD nor the CPUs ever react to it.
+   */
   private updateArena(_dt: number): void {
-    const { arena, elapsed, mode } = this.state;
+    const { arena, elapsed, mode, rules } = this.state;
     if (mode === "training") return;
+    const { collapse, safeZone, bombs, wind } = rules.gimmicks;
     arena.warningRing =
-      arena.halfSize > RULES.minHalfSize && elapsed >= arena.nextCollapse - RULES.collapseWarning;
-    if (elapsed >= arena.nextCollapse && arena.halfSize > RULES.minHalfSize) {
+      collapse &&
+      arena.halfSize > RULES.minHalfSize &&
+      elapsed >= arena.nextCollapse - RULES.collapseWarning;
+    if (collapse && elapsed >= arena.nextCollapse && arena.halfSize > RULES.minHalfSize) {
       arena.halfSize = Math.max(RULES.minHalfSize, arena.halfSize - RULES.tileSize);
       arena.nextCollapse += RULES.collapseInterval;
       arena.warningRing = false;
       this.announce("外周の足場が崩れた", 2);
     }
     const zone = arena.safeZone;
-    zone.active = elapsed >= RULES.safeZoneStart;
+    zone.active = safeZone && elapsed >= RULES.safeZoneStart;
     if (zone.active) {
       const progress = clamp((elapsed - RULES.safeZoneStart) / 100, 0, 1);
       zone.radius = Math.min(arena.halfSize * 0.94, 8.4 - progress * 5.7);
@@ -813,11 +836,11 @@ export class BattleEngine {
       zone.x = Math.sin(elapsed * 0.055) * margin;
       zone.z = Math.cos(elapsed * 0.07) * margin;
     }
-    arena.windActive = elapsed >= 24 && Math.floor(elapsed / 12) % 3 === 2;
+    arena.windActive = wind && elapsed >= 24 && Math.floor(elapsed / 12) % 3 === 2;
     arena.wind = arena.windActive
       ? { x: Math.sin(elapsed * 0.1) * 0.35, z: Math.cos(elapsed * 0.1) * 0.25 }
       : { x: 0, z: 0 };
-    if (elapsed >= this.nextBomb) {
+    if (bombs && elapsed >= this.nextBomb) {
       this.nextBomb += RULES.bombInterval;
       const count = this.state.mode === "rumble" ? 3 : 2;
       for (let i = 0; i < count; i++) {
@@ -982,7 +1005,7 @@ export class BattleEngine {
       state.winnerId = contenders[0]?.id ?? null;
       state.phase = "ended";
       this.announce(contenders[0] ? contenders[0].name + " WINS" : "DRAW", 10);
-    } else if (state.elapsed >= matchTimeLimit(state.options.stocks)) {
+    } else if (state.elapsed >= (state.rules.timeLimit ?? Infinity)) {
       // A fighter waiting to respawn already lost the damage it carried with that life.
       const damage = (f: Fighter) => (f.mode === "dead" ? 0 : f.damage);
       const sorted = [...contenders].sort((a, b) => b.stocks - a.stocks || damage(a) - damage(b));

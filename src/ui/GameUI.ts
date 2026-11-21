@@ -5,6 +5,25 @@ import type { GraphicsSettings, MsaaSamples, SettingsStore, ShadowLevel } from "
 import { AI_LEVEL_IDS, humanSlots, padIndex, STOCK_CHOICES } from "../game/match";
 import type { AiLevel, ControlDevice, MatchOptions } from "../game/match";
 import { playableOptions, type MatchStore } from "../game/matchStore";
+import {
+  describeRules,
+  effectiveRules,
+  FLOATING_GARDEN,
+  formatClock,
+  GIMMICK_DETAILS,
+  GIMMICK_IDS,
+  GIMMICK_LABELS,
+  PRESET_IDS,
+  PRESET_LABELS,
+  presetOf,
+  RULE_PRESETS,
+  timeLimitFor,
+  TIME_RULES,
+  type GimmickId,
+  type PresetId,
+  type StageInfo,
+  type TimeRule,
+} from "../game/rules";
 import type { PlayerLock } from "../game/input";
 import { PAD_COUNT } from "../game/pads";
 import type { TitleButton } from "./padMenu";
@@ -17,10 +36,23 @@ export interface GameUICallbacks {
   onRestart: () => void;
   onMenu: () => void;
   onSound: (enabled: boolean) => void;
-  /** The remembered 対戦設定 (who plays what, lives and CPU strength). */
+  /** The remembered 対戦設定 (who plays what, lives, time limit, gimmicks and CPU strength). */
   match: MatchStore;
   graphics: GraphicsSettingsBinding;
+  /**
+   * The stage the next match runs on (THE FLOATING GARDEN when absent). Its gimmick constraints
+   * lock the matching toggles on the title and are explained there before the match starts.
+   */
+  stage?: () => StageInfo;
 }
+
+/** What the preset (or カスタム) means, shown under the picker for touch and pad players too. */
+const PRESET_DETAILS: Record<PresetId | "custom", string> = {
+  standard: RULE_PRESETS.standard.detail,
+  short: RULE_PRESETS.short.detail,
+  noGimmicks: RULE_PRESETS.noGimmicks.detail,
+  custom: "プリセットから残機・制限時間・ギミックを変えた自分だけのルール",
+};
 
 /** What the graphics settings dialog reads and writes; renderer values are null until it is ready. */
 export interface GraphicsSettingsBinding {
@@ -121,6 +153,14 @@ const modes: Record<MatchMode, { label: string; en: string; detail: string; numb
 
 const levelLabels: Record<AiLevel, string> = { easy: "よわい", normal: "ふつう", hard: "つよい" };
 
+/** Short button labels; the rules summary under them spells every gimmick out. */
+const gimmickShort: Record<GimmickId, string> = {
+  collapse: "崩壊",
+  safeZone: "ゾーン",
+  bombs: "爆撃",
+  wind: "風",
+};
+
 /** The fighters each mode puts on the island, by slot (slot 0 is always a player). */
 const FIGHTER_NAMES = ["コハク", "シロ", "モカ", "スミ"] as const;
 const fighterCount = (mode: MatchMode) => (mode === "rumble" ? 4 : 2);
@@ -145,19 +185,34 @@ function matchOptionsMarkup(): string {
     `<button type="button" data-${attribute}="${value}" aria-pressed="false"${extra}>${label}</button>`;
   return `
           <section class="match-options" aria-labelledby="match-options-title">
-            <div class="match-options-head"><h2 id="match-options-title">対戦設定</h2><span>MATCH RULES</span></div>
+            <div class="match-options-head"><h2 id="match-options-title">対戦設定</h2><span class="rule-preset-badge match-rule" role="status" aria-label="現在のルール"></span><span>MATCH RULES</span></div>
             <div class="match-options-body">
+              <div class="match-option match-rule">
+                <span class="match-option-label" id="match-preset-label">ルール</span>
+                <div class="segmented match-segmented" role="group" aria-labelledby="match-preset-label">${PRESET_IDS.map((id) => segment("preset", id, RULE_PRESETS[id].label, ` title="${RULE_PRESETS[id].detail}"`)).join("")}</div>
+              </div>
               <div class="match-option match-rule">
                 <span class="match-option-label" id="match-stocks-label">残機</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-stocks-label">${STOCK_CHOICES.map((n) => segment("stocks", n, String(n), ` aria-label="${n}機"`)).join("")}</div>
               </div>
+              <div class="match-option match-rule">
+                <span class="match-option-label" id="match-time-label">制限時間</span>
+                <div class="segmented match-segmented" role="group" aria-labelledby="match-time-label">${TIME_RULES.map((time) => segment("time", time, "")).join("")}</div>
+              </div>
+              <div class="match-option match-rule">
+                <span class="match-option-label" id="match-gimmicks-label">ギミック</span>
+                <div class="segmented match-segmented gimmick-toggles" role="group" aria-labelledby="match-gimmicks-label">${GIMMICK_IDS.map((id) => segment("gimmick", id, gimmickShort[id], ` aria-label="${GIMMICK_LABELS[id]}" title="${GIMMICK_LABELS[id]}：${GIMMICK_DETAILS[id]}"`)).join("")}</div>
+              </div>
+              <p class="rules-preset-detail match-rule"><strong class="rules-preset-name"></strong><span class="rules-preset-text"></span></p>
+              <p class="rules-summary match-rule" aria-live="polite"></p>
+              <ul class="rules-notes match-rule" hidden></ul>
               <div class="match-option match-rule">
                 <span class="match-option-label" id="match-level-label">CPU の強さ</span>
                 <div class="segmented match-segmented" role="group" aria-labelledby="match-level-label">${AI_LEVEL_IDS.map((level) => segment("difficulty", level, levelLabels[level])).join("")}</div>
               </div>
               <div class="player-rows"></div>
               <p class="join-hint" aria-live="polite"></p>
-              <p class="match-options-note" hidden>稽古は残機が無制限。CPU の相手は動きません。</p>
+              <p class="match-options-note" hidden>稽古は残機が無制限・時間制限なし・ギミックなし。CPU の相手は動きません。</p>
             </div>
           </section>`;
 }
@@ -322,6 +377,18 @@ export class GameUI {
           <div class="help-callout"><span class="callout-icon">${icons.sword}</span><div><strong>長押しでためる。<kbd>Q</kbd> でフェイント。</strong><p>ため中はキャンセルやステップに移れる。振りかぶり中は向きをゆっくり直せて、Qで止めることもできるが、スタミナは戻らず、遅く止めるほど隙が残る。斬りかかった剣は向きが固まり、最後まで振り抜く。</p></div></div>
           <div class="help-tips"><div><span>01</span><p><strong>剣と剣がぶつかると相殺。</strong>被弾時は移動入力で吹っ飛び方向を少し調整できる。</p></div><div><span>02</span><p><strong>復帰は上昇・突き・空中回避で。</strong>空中で各1回。着地すれば再び使える。</p></div><div><span>03</span><p><strong>光る円の内側が安全地帯。</strong>外では%とゲージが増加。5秒分たまるとアウト、内側ではゲージが回復する。</p></div><div><span>04</span><p><strong>赤い予告は爆撃、縁の点滅は崩壊。</strong>足場とスタミナを残して攻めよう。</p></div></div>
           <p class="controller-note">マウス左クリックは振り下ろし、右クリックは横振り。中ボタンでロックオンの切り替え。</p>
+          <section class="rules-help" aria-labelledby="rules-help-title">
+            <h3 id="rules-help-title">RULES / 対戦ルール</h3>
+            <p>タイトルの「対戦設定」でルールを選べます。一騎打ちと乱闘は同じルールで戦い、稽古は常に残機無制限・ギミックなしです。</p>
+            <dl class="key-list">
+              <div><dt>${RULE_PRESETS.standard.label}</dt><dd>${RULE_PRESETS.standard.detail}。制限時間は残機に応じて伸びる</dd></div>
+              <div><dt>${RULE_PRESETS.short.label}</dt><dd>${RULE_PRESETS.short.detail}</dd></div>
+              <div><dt>${RULE_PRESETS.noGimmicks.label}</dt><dd>${RULE_PRESETS.noGimmicks.detail}</dd></div>
+              <div><dt>${PRESET_LABELS.custom}</dt><dd>残機・制限時間・ギミックをプリセットから変えると表示。実際に使われるルールは設定欄の下にいつも表示される</dd></div>
+            </dl>
+            <p><strong>ギミックは1つずつ切り替えられる。</strong>${GIMMICK_IDS.map((id) => `${GIMMICK_LABELS[id]}（${GIMMICK_DETAILS[id]}）`).join("、")}。オフにしたギミックは表示も効果もなくなる。</p>
+            <p><strong>残機と制限時間。</strong>残機を削りきるか場外へ落とせば決着。時間切れになったら残機の多い選手、同数なら蓄積ダメージの少ない選手が勝つ。標準の制限時間は ${formatClock(timeLimitFor(1))}＋残機1つごとに ${formatClock(timeLimitFor(2) - timeLimitFor(1))}、短めは残機に関係なく ${formatClock(timeLimitFor(1, "short"))}。</p>
+          </section>
           <section class="pad-help" aria-labelledby="pad-help-title">
             <h3 id="pad-help-title">GAMEPAD / パッド</h3>
             <p class="pad-help-lead">パッドは4台まで、何人でも参加できます。キーボードとマウス（タッチ）はひとり分。タイトルでパッドの <kbd>A</kbd> か <kbd>Start</kbd> を押すと参加、<kbd>B</kbd> で抜けます。</p>
@@ -421,6 +488,51 @@ export class GameUI {
     };
     pressed("[data-stocks]", (b) => Number(b.dataset.stocks) === options.stocks);
     pressed("[data-difficulty]", (b) => b.dataset.difficulty === options.difficulty);
+    // The preset is derived from the rules, so the badge can never contradict them.
+    const preset = presetOf(options);
+    pressed("[data-preset]", (b) => b.dataset.preset === preset);
+    pressed("[data-time]", (b) => b.dataset.time === options.time);
+    const rules = effectiveRules(options, mode, this.stage());
+    // Toggles show what the match will run with; a gimmick the stage fixes can't be switched.
+    pressed("[data-gimmick]", (b) => rules.gimmicks[b.dataset.gimmick as GimmickId]);
+    for (const button of block.querySelectorAll<HTMLButtonElement>("[data-gimmick]")) {
+      const id = button.dataset.gimmick as GimmickId;
+      const constraint = rules.locked[id];
+      button.disabled = Boolean(constraint);
+      button.classList.toggle("locked", Boolean(constraint));
+      const label = constraint
+        ? `${GIMMICK_LABELS[id]}（${constraint.forced ? "常にあり" : "なし"}：${constraint.reason}）`
+        : GIMMICK_LABELS[id];
+      if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+    }
+    for (const button of block.querySelectorAll<HTMLElement>("[data-time]")) {
+      const time = button.dataset.time as TimeRule;
+      const clock = formatClock(timeLimitFor(options.stocks, time));
+      setText(button, time === "short" ? `短め ${clock}` : `標準 ${clock}`);
+      button.setAttribute(
+        "aria-label",
+        time === "short" ? `短め、${clock}で決着` : `標準、残機${options.stocks}で${clock}`,
+      );
+    }
+    const badge = this.query(".rule-preset-badge");
+    badge.classList.toggle("custom", preset === "custom");
+    setText(badge, PRESET_LABELS[preset]);
+    setText(this.query(".rules-preset-name"), `${PRESET_LABELS[preset]}：`);
+    setText(this.query(".rules-preset-text"), PRESET_DETAILS[preset]);
+    setText(this.query(".rules-summary"), describeRules(rules));
+    // Every gimmick the stage fixes is explained, also when the saved choice already matches.
+    const notes = this.query(".rules-notes");
+    const changed = new Set(rules.notes.map((note) => note.gimmick));
+    const lockedIds = GIMMICK_IDS.filter((id) => rules.locked[id]);
+    const notesMarkup = lockedIds
+      .map((id) => {
+        const constraint = rules.locked[id]!;
+        const overridden = changed.has(id) ? "（選んだ設定は使われません）" : "";
+        return `<li>${GIMMICK_LABELS[id]}: ${constraint.forced ? "常にあり" : "なし"}（${escapeHtml(constraint.reason)}）${overridden}</li>`;
+      })
+      .join("");
+    if (notes.innerHTML !== notesMarkup) notes.innerHTML = notesMarkup;
+    notes.hidden = training || lockedIds.length === 0;
 
     const connected = (pad: number) => this.connectedPads.includes(pad);
     const { options: playable, substitutes } = playableOptions(options, count, connected);
@@ -642,6 +754,11 @@ export class GameUI {
     this.hud.classList.toggle("lock-off", legendLock ? !legendLock.on : false);
   }
 
+  /** The stage the next match runs on. */
+  private stage(): StageInfo {
+    return this.callbacks.stage?.() ?? FLOATING_GARDEN;
+  }
+
   private query<T extends HTMLElement = HTMLElement>(selector: string): T {
     const element = this.host.querySelector<T>(selector);
     if (!element) throw new Error(`Missing UI element: ${selector}`);
@@ -651,7 +768,7 @@ export class GameUI {
   private handleClick = (event: MouseEvent): void => {
     // Buttons only: the host itself carries data-mode (the running match's mode).
     const target = (event.target as Element).closest<HTMLElement>(
-      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty]",
+      "[data-action], button[data-mode], [data-shadow], [data-stocks], [data-difficulty], [data-preset], [data-time], [data-gimmick]",
     );
     if (!target) return;
     const shadow = target.dataset.shadow as ShadowLevel | undefined;
@@ -665,6 +782,20 @@ export class GameUI {
     }
     if (target.dataset.difficulty) {
       this.match.set({ difficulty: target.dataset.difficulty as AiLevel });
+      return;
+    }
+    if (target.dataset.preset) {
+      this.match.preset(target.dataset.preset as PresetId);
+      return;
+    }
+    if (target.dataset.time) {
+      this.match.set({ time: target.dataset.time as TimeRule });
+      return;
+    }
+    if (target.dataset.gimmick) {
+      // A gimmick the stage fixes is locked: the choice would have no effect.
+      if ((target as HTMLButtonElement).disabled || target.classList.contains("locked")) return;
+      this.match.toggleGimmick(target.dataset.gimmick as GimmickId);
       return;
     }
     const mode = target.dataset.mode as MatchMode | undefined;
@@ -836,12 +967,16 @@ export class GameUI {
         this.result.querySelector<HTMLButtonElement>('[data-action="restart"]')?.focus();
     }
 
-    const time = `${Math.floor(state.elapsed / 60)
-      .toString()
-      .padStart(2, "0")}:${Math.floor(state.elapsed % 60)
-      .toString()
-      .padStart(2, "0")}`;
-    this.query(".match-time").textContent = time;
+    const clock = (seconds: number) =>
+      `${Math.floor(seconds / 60)
+        .toString()
+        .padStart(2, "0")}:${Math.floor(seconds % 60)
+        .toString()
+        .padStart(2, "0")}`;
+    const time = clock(state.elapsed);
+    const limit = state.rules.timeLimit;
+    // The clock shows the time limit beside it, so a short match never ends by surprise.
+    setText(this.query(".match-time"), limit === null ? time : `${time} / ${clock(limit)}`);
     this.query(".match-mode").textContent = modes[state.mode].en;
     // Training respawns everyone for ever; elsewhere a fighter is in the match while it has lives.
     const training = state.mode === "training";
@@ -856,6 +991,8 @@ export class GameUI {
     if (state.mode === "training") setText(arenaStatus, "PRACTICE FIELD  ·  ギミックなし");
     else if (state.arena.warningRing) setText(arenaStatus, `外周崩壊まで ${nextCollapse} 秒`);
     else if (state.arena.safeZone.active) setText(arenaStatus, "SAFE ZONE MOVING  ·  光の円へ");
+    else if (GIMMICK_IDS.every((id) => !state.rules.gimmicks[id]))
+      setText(arenaStatus, "THE FLOATING GARDEN  ·  ギミックなし");
     else setText(arenaStatus, "THE FLOATING GARDEN");
 
     const announcement = this.query(".center-announcement");

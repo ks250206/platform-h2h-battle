@@ -1,4 +1,5 @@
 import type { AiLevel, MatchOptions } from "./match";
+import type { EffectiveRules } from "./rules";
 
 export type AttackId = "overhead" | "rising" | "sweep" | "thrust";
 export type FighterMode =
@@ -143,6 +144,8 @@ export interface GameState {
   pausedFrom: "playing" | "countdown";
   /** What this match was started with. */
   options: MatchOptions;
+  /** The rules it runs with: lives, time limit and gimmicks after the mode and stage had a say. */
+  rules: EffectiveRules;
   stats: { hits: number; clashes: number; dodges: number; maxDamage: number };
 }
 
