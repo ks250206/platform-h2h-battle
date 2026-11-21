@@ -69,7 +69,7 @@ for (const size of PHONES) {
     }
     await noHorizontalOverflow(page);
     // The headline is still there for screen readers, just not drawn over the arena.
-    await expect(page.getByRole("heading", { name: /小さな体に、.*大きな一撃。/ })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: "BRAMBLE" })).toHaveCount(1);
 
     // The top bar and the sheet never meet; the hero band in between is left to the 3D scene.
     const topbar = await box(page.locator(".topbar"));

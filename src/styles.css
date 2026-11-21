@@ -285,32 +285,15 @@ svg {
   letter-spacing: 0.19em;
   font-weight: 650;
 }
+/* The title's eyebrow sits right above the mode picker now that the headline is read out only. */
+.menu-content > .eyebrow {
+  margin-bottom: 10px;
+}
 .tiny-rule {
   display: block;
   width: 24px;
   height: 1px;
   background: currentColor;
-}
-h1 {
-  margin: 20px 0 14px;
-  font-size: clamp(32px, 3.2vw, 48px);
-  font-weight: 800;
-  letter-spacing: 0.035em;
-  line-height: 1.5;
-}
-h1 > span {
-  color: var(--coral-text);
-  text-decoration: underline wavy var(--sun);
-  text-decoration-thickness: 0.07em;
-  text-underline-offset: 0.2em;
-  text-decoration-skip-ink: none;
-}
-.menu-description {
-  margin: 0 0 22px;
-  font-size: 12px;
-  line-height: 2;
-  letter-spacing: 0.075em;
-  color: var(--ink-soft);
 }
 .mode-picker {
   display: grid;
@@ -2550,12 +2533,6 @@ kbd {
     width: 420px;
     left: 8%;
   }
-  h1 {
-    font-size: 54px;
-  }
-  .menu-description {
-    font-size: 14px;
-  }
   .mode-label {
     font-size: 15px;
   }
@@ -2576,9 +2553,6 @@ kbd {
   }
   .mode-number {
     display: none;
-  }
-  h1 {
-    font-size: 37px;
   }
   .arena-caption {
     right: 3.5%;
@@ -2615,15 +2589,6 @@ kbd {
     top: 76px;
     bottom: 34px;
   }
-  h1 {
-    font-size: 32px;
-    margin: 12px 0 8px;
-    line-height: 1.4;
-  }
-  .menu-description {
-    margin-bottom: 12px;
-    line-height: 1.85;
-  }
   .mode-option {
     padding-top: 9px;
     padding-bottom: 10px;
@@ -2634,10 +2599,6 @@ kbd {
   }
   .match-options {
     margin-bottom: 13px;
-  }
-  /* Four player rows: the tagline under the headline makes way too. */
-  .menu-content:has(.match-options.four-players:not(.practice)) .menu-description {
-    display: none;
   }
   .start-button {
     padding-top: 13px;
@@ -2660,10 +2621,41 @@ kbd {
     top: 81px;
   }
 }
-/* The stage row took the taglines' line on a short desktop screen. */
+/* A short desktop screen (1280x720): the stage row makes way and the column tightens a little, so
+   the default Duel menu fits without scrolling, the start and tutorial included. */
 @media (max-height: 760px) and (min-width: 701px) {
   .menu-features {
     display: none;
+  }
+  .menu-content {
+    top: 68px;
+    bottom: 30px;
+    padding-bottom: 4px;
+  }
+  .mode-option {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .mode-description {
+    margin-top: 6px;
+    margin-bottom: 8px;
+  }
+  .match-options {
+    margin-bottom: 10px;
+  }
+  .match-options-head {
+    margin-bottom: 5px;
+  }
+  .match-options-body {
+    gap: 3px;
+  }
+  .start-button {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+  .menu-controls-link,
+  .menu-links {
+    margin-top: 8px;
   }
 }
 @media (max-height: 700px) and (min-width: 701px) {
@@ -2673,9 +2665,7 @@ kbd {
     scrollbar-width: thin;
     pointer-events: auto;
   }
-  .ladder-menu .menu-content > .eyebrow,
-  .ladder-menu h1,
-  .ladder-menu .menu-description {
+  .ladder-menu .menu-content > .eyebrow {
     display: none;
   }
 }
@@ -2732,22 +2722,8 @@ kbd {
   .menu-content > .eyebrow {
     font-size: 8px;
   }
-  /* The headline drops to one line to make room for the match options. */
-  h1 {
-    font-size: 22px;
-    line-height: 1.3;
-    margin: 6px 0 6px;
-  }
-  h1 br {
-    display: none;
-  }
-  /* The stage's own words (under its buttons, below) take the tagline's place on a phone. */
-  .menu-description {
-    display: none;
-  }
-  /* Four player rows: the headline makes way too, so the stage stays in view above them. */
-  .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow,
-  .menu-content:has(.match-options.four-players:not(.practice)) h1 {
+  /* Four player rows: the eyebrow makes way, so the stage stays in view above them. */
+  .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow {
     display: none;
   }
   .mode-option {
@@ -3028,19 +3004,7 @@ kbd {
   .menu-content::after {
     display: none;
   }
-  /* Read out, not shown: the headline and the taglines make way for the controls. */
-  .menu-content h1 {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
   .menu-content > .eyebrow,
-  .menu-description,
   .mode-description,
   .menu-bottom,
   .match-options-head {
@@ -3452,9 +3416,7 @@ kbd {
     pointer-events: auto;
     transform: none;
   }
-  .ladder-menu .menu-content > .eyebrow,
-  .ladder-menu h1,
-  .ladder-menu .menu-description {
+  .ladder-menu .menu-content > .eyebrow {
     display: none;
   }
   .ladder-overview {
@@ -3500,16 +3462,6 @@ kbd {
   }
   .menu-content > .eyebrow {
     font-size: 7px;
-  }
-  h1 {
-    font-size: 27px;
-    margin: 12px 0 8px;
-    line-height: 1.35;
-  }
-  .menu-description {
-    font-size: 10px;
-    margin-bottom: 9px;
-    line-height: 1.7;
   }
   .mode-option {
     padding: 7px 4px;

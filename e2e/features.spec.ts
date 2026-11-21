@@ -12,11 +12,21 @@ async function load(page: Page) {
   return errors;
 }
 
-test("default duel title scrolls at 1280x720, selects accept pointer clicks, and stages/presets persist", async ({
+test("default duel title fits without scrolling at 1280x720, selects accept pointer clicks, and stages/presets persist", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   const errors = await load(page);
+
+  // At 1280x720, the default Duel title menu fits its column: Start and Tutorial are in view unscrolled.
+  const menuContent = page.locator(".menu-content");
+  const fit = await menuContent.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    scrollTop: el.scrollTop,
+  }));
+  expect(fit.scrollTop).toBe(0);
+  expect(fit.scrollHeight).toBeLessThanOrEqual(fit.clientHeight + 1);
 
   // Title <select> controls accept real pointer interaction despite #interface pointer-events: none.
   const levelSelect = page.locator('.player-level[data-override="1"]');
@@ -36,11 +46,12 @@ test("default duel title scrolls at 1280x720, selects accept pointer clicks, and
     .poll(() => page.evaluate(() => window.__BRAMBLE__!.snapshot().rules.gimmicks))
     .toEqual({ collapse: false, safeZone: false, bombs: false, wind: false });
 
-  // At 1280x720, scrolling the title menu column reaches both Start and Tutorial via mouse.
-  const menuContent = page.locator(".menu-content");
-  await menuContent.evaluate((el) => {
-    el.scrollTop = el.scrollHeight;
-  });
+  // Still no scrolling after picking the Factory stage and the no-gimmick preset.
+  const fitAfter = await menuContent.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }));
+  expect(fitAfter.scrollHeight).toBeLessThanOrEqual(fitAfter.clientHeight + 1);
   const startButton = page.locator('[data-action="start"]');
   const tutorialButton = page.locator(".tutorial-entry");
   await expect(startButton).toBeInViewport();

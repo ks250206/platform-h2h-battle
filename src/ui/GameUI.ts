@@ -588,8 +588,7 @@ export class GameUI {
       <main class="menu-screen" aria-label="タイトル画面">
         <div class="menu-content">
           <div class="eyebrow"><span class="tiny-rule"></span> LITTLE PAWS. HEAVY SWORDS.</div>
-          <h1>小さな体に、<br>大きな<span>一撃。</span></h1>
-          <p class="menu-description">ためて、かわして、吹っ飛ばす。<br>浮島で繰り広げる、大剣の駆け引き。</p>
+          <h1 class="visually-hidden">BRAMBLE</h1>
           <div class="mode-picker" role="group" aria-label="ゲームモード">
             ${Object.entries(modes)
               .map(
