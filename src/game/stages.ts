@@ -229,7 +229,7 @@ export const STAGES: Record<StageId, StageDefinition> = {
     summary: "穴のない広い足場。外周から崩れ、最後は中央の小さな足場で決着がつく。",
     gimmicks: {
       collapse: { state: "on", note: "外周が2回崩れる" },
-      safeZone: { state: "on", note: "予告した対角線上を移動する" },
+      safeZone: { state: "on", note: "予告した場所へ大きく移動する" },
       bombs: { state: "on", note: "予告のあとに落ちる" },
       wind: { state: "on", note: "ときどき弱く吹く" },
       conveyor: { state: "off", note: "なし" },
@@ -298,7 +298,7 @@ export const STAGES: Record<StageId, StageDefinition> = {
       "矢印の向きへ流れるコンベアの工場。環状ベルトは中央を一周し、外側の2本は場外へ流れ出る。",
     gimmicks: {
       collapse: { state: "limited", note: "2回まで崩れる" },
-      safeZone: { state: "on", note: "予告した対角線上を移動する" },
+      safeZone: { state: "on", note: "予告した場所へ大きく移動する" },
       bombs: { state: "on", note: "予告のあとに落ちる" },
       wind: { state: "off", note: "吹かない" },
       conveyor: { state: "on", note: "地上の全員を同じ速さで運ぶ" },

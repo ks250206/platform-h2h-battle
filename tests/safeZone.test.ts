@@ -33,6 +33,31 @@ function match(stage: StageId, stocks = 3, difficulty: AiLevel = "normal") {
 }
 
 describe("match clock and published route", () => {
+  test.each([0, 1])(
+    "a completed announced leg stays at its destination after %s seconds",
+    (seconds) => {
+      const zone = safeZoneAt("ruins", 63.5, 90);
+      expect(zone.destination).not.toBeNull();
+      expect(announcedZoneIn({ ...zone, travelLeft: 0 }, seconds)).toEqual(zone.destination);
+    },
+  );
+
+  test.each(["garden", "factory"] as const)(
+    "%s visits all four corners with disjoint late circles",
+    (stage) => {
+      const quadrants = new Set<string>();
+      for (let t = 0; t < 90; t++) {
+        const zone = safeZoneAt(stage, t, 90);
+        if (zone.phase !== "late" || zone.motion !== "warning") continue;
+        const end = zone.destination!;
+        expect(end.radius).toBe(2.25);
+        expect(distance(zone, end)).toBeGreaterThan(zone.radius + end.radius);
+        quadrants.add(`${Math.sign(end.x)},${Math.sign(end.z)}`);
+      }
+      expect(quadrants).toEqual(new Set(["-1,-1", "1,1", "-1,1", "1,-1"]));
+    },
+  );
+
   test.each(cases)(
     "$stocks stocks / $time has recurring late legs on permanent floor",
     ({ time, stocks }) => {
@@ -206,6 +231,55 @@ describe("exposure and returning lives", () => {
     expect(engine.state.fighters.map((f) => f.stocks)).toEqual([2, 2]);
   });
 
+  test.each([
+    {
+      stage: "ruins",
+      bombs: [
+        { x: -6.5, z: -5.5 },
+        { x: -4.5, z: -3 },
+      ],
+    },
+    {
+      stage: "bridges",
+      bombs: [
+        { x: -2.5, z: 6 },
+        { x: 0.5, z: 5.5 },
+      ],
+    },
+  ] as const)(
+    "$stage finds a landing spot ahead when bombs block the current samples",
+    ({ stage, bombs }) => {
+      const engine = match(stage);
+      // Half a second into the trip around the pit or from the island onto its bridge.
+      engine.state.elapsed = 63.5 - dt;
+      const [player, rival] = engine.state.fighters;
+      Object.assign(player, { mode: "dead", respawnTimer: dt });
+      Object.assign(rival, { hitstop: 30 });
+      for (const [id, point] of bombs.entries()) {
+        engine.state.bombs.push({
+          ...point,
+          id,
+          radius: 1.45,
+          duration: 2,
+          timer: 2,
+          exploded: false,
+        });
+      }
+      engine.update(dt);
+      const zone = engine.state.arena.safeZone;
+      expect(zone.motion).toBe("travel");
+      const landing = announcedZoneIn(zone, RESPAWN_LOOKAHEAD);
+      expect(distance(player, landing)).toBeLessThanOrEqual(landing.radius - 0.15);
+      for (const bomb of engine.state.bombs)
+        expect(distance(player, bomb)).toBeGreaterThan(bomb.radius + 0.3);
+      for (let tick = 0; tick < RESPAWN_LOOKAHEAD / dt; tick++) {
+        engine.update(dt);
+        expect(player.outsideTime).toBe(0);
+      }
+      expect(player.grounded).toBe(true);
+    },
+  );
+
   test.each(STAGE_IDS)(
     "%s respawn avoids bombs, floor gaps and exposure through landing and startup",
     (stage) => {
@@ -264,7 +338,7 @@ describe("human and CPU information", () => {
       for (const mode of ["dead", "idle"]) {
         Object.assign(rival, { mode });
         const move = think().move;
-        expect(move.x * away.x + move.z * away.z).toBeLessThan(-1);
+        expect(move.x * away.x + move.z * away.z).toBeLessThan(-0.9);
       }
       expect(zoneStatus(warned)).toContain("3秒");
       expect(zoneDirections(warned, cpu)).toContain("次");

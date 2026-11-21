@@ -1176,6 +1176,13 @@ export class BattleEngine {
     const { safeZone: zone, stageId } = this.state.arena;
     const floor = this.footingHalfSize();
     const candidates = respawnCandidates(stageId, floor, zone.active ? zone : null);
+    const landing = announcedZoneIn(zone, RESPAWN_LOOKAHEAD);
+    if (
+      zone.active &&
+      (landing.x !== zone.x || landing.z !== zone.z || landing.radius !== zone.radius)
+    ) {
+      candidates.push(...respawnCandidates(stageId, floor, landing));
+    }
     const clear = candidates.filter(
       (p) =>
         !this.state.bombs.some(
@@ -1183,7 +1190,6 @@ export class BattleEngine {
         ),
     );
     const available = clear.length > 0 ? clear : candidates;
-    const landing = announcedZoneIn(zone, RESPAWN_LOOKAHEAD);
     const safeAtLanding = zone.active
       ? available.filter((p) => {
           // Belts begin carrying the fighter only after touching down.
@@ -1197,7 +1203,12 @@ export class BattleEngine {
           );
         })
       : available;
-    const pool = safeAtLanding.length > 0 ? safeAtLanding : available;
+    const landingPool = safeAtLanding.length > 0 ? safeAtLanding : available;
+    // Exposure starts during the drop. Prefer the overlap when both circles have clear floor.
+    const safeThroughout = zone.active
+      ? landingPool.filter((p) => Math.hypot(p.x - zone.x, p.z - zone.z) <= zone.radius)
+      : landingPool;
+    const pool = safeThroughout.length > 0 ? safeThroughout : landingPool;
     const opponents = this.state.fighters.filter((o) => o.id !== f.id && o.mode !== "dead");
     const room = (p: Vec2) =>
       Math.min(...opponents.map((o) => Math.hypot(o.x - p.x, o.z - p.z)), Infinity);

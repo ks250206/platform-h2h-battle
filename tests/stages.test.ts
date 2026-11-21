@@ -807,7 +807,7 @@ describe("the safe zone and the collapse always leave floor to stand on", () => 
     for (const halfSize of collapseSteps(id)) {
       for (let elapsed = RULES.safeZoneStart; elapsed <= 400; elapsed += 0.5) {
         const zone = safeZoneAt(id, elapsed, 270);
-        expect(zone.radius).toBeGreaterThan(2.5);
+        expect(zone.radius).toBeGreaterThanOrEqual(solid ? 2.25 : 2.5);
         expect(canStandAtStage(id, zone.x, zone.z, halfSize), `${id} ${halfSize} ${elapsed}`).toBe(
           true,
         );

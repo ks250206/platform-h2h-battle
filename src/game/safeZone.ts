@@ -43,6 +43,12 @@ const RIM = [
   { x: -5, z: -5 },
   { x: -5, z: 5 },
 ];
+const DECK_CORNERS = [
+  { x: -1, z: -1 },
+  { x: 1, z: 1 },
+  { x: -1, z: 1 },
+  { x: 1, z: -1 },
+];
 const ISLANDS = [
   { x: 6.4, z: 0 },
   { x: 0, z: 6.4 },
@@ -59,10 +65,11 @@ function waypoint(stage: StageId, index: number, pressure: number): ZoneCircle {
     const center = index % 2 === 0 ? ORIGIN : ISLANDS[((index - 1) / 2) % ISLANDS.length];
     return { x: center.x, z: center.z, radius: 8.4 - 5.7 * pressure };
   }
-  // Opposite corners of the permanent 5x5 deck. The whole circle fits at every interpolation.
-  const radius = RULES.minHalfSize - (RULES.minHalfSize - 2.65) * pressure;
-  const corner = (index % 2 === 0 ? -1 : 1) * (RULES.minHalfSize - radius);
-  return { x: corner, z: corner, radius };
+  // Four corners of the permanent 5x5 deck. The whole circle fits at every interpolation.
+  const radius = RULES.minHalfSize - (RULES.minHalfSize - 2.25) * pressure;
+  const offset = RULES.minHalfSize - radius;
+  const corner = DECK_CORNERS[index % DECK_CORNERS.length];
+  return { x: corner.x * offset, z: corner.z * offset, radius };
 }
 
 function between(a: ZoneCircle, b: ZoneCircle, t: number): ZoneCircle {
@@ -105,6 +112,7 @@ export function safeZoneAt(stage: StageId, elapsed: number, timeLimit: number | 
 /** Predict only the announced leg; during a hold the next departure is still private. */
 export function announcedZoneIn(zone: SafeZone, seconds: number): ZoneCircle {
   if (!zone.destination) return zone;
+  if (zone.travelLeft <= 1e-9) return zone.destination;
   const t = Math.min(1, Math.max(0, seconds - zone.startsIn) / zone.travelLeft);
   return between(zone, zone.destination, t);
 }
