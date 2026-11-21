@@ -20,13 +20,37 @@ async function load(page: Page) {
   return errors;
 }
 
-async function start(page: Page, mode: string) {
+type Level = "easy" | "normal" | "hard";
+
+/** Picks the title menu's 対戦設定 through its buttons (the mode must already be selected). */
+async function chooseMatch(
+  page: Page,
+  options: { stocks?: number; difficulty?: Level; overrides?: Record<number, Level> },
+) {
+  if (options.stocks) await page.locator(`[data-stocks="${options.stocks}"]`).click();
+  if (options.difficulty) await page.locator(`[data-difficulty="${options.difficulty}"]`).click();
+  const overrides = Object.entries(options.overrides ?? {});
+  if (overrides.length) {
+    const details = page.locator(".match-overrides");
+    if (!(await details.evaluate((element) => (element as HTMLDetailsElement).open)))
+      await details.locator("summary").click();
+    for (const [id, level] of overrides)
+      await page.locator(`[data-override="${id}"][data-override-level="${level}"]`).click();
+  }
+}
+
+async function start(page: Page, mode: string, options?: Parameters<typeof chooseMatch>[1]) {
   const started = Date.now();
-  await page.locator('[data-mode="' + mode + '"]').click();
+  // The button: the UI root also carries data-mode (the current match's mode).
+  await page.locator(`button[data-mode="${mode}"]`).click();
+  if (options) await chooseMatch(page, options);
   await page.locator('[data-action="start"]').click();
   await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "playing");
   console.info(`${mode} countdown completed in ${Date.now() - started}ms`);
 }
+
+type Spot = { x: number; z: number };
+type AimProbe = { __aimGap: (self: Spot & { facing: number }, to: Spot) => number };
 
 test("title, real 3D canvas, help and keyboard navigation load without errors", async ({
   page,
@@ -53,9 +77,49 @@ test("training accepts movement, jump, charged feint, all attacks and pause", as
   await page.keyboard.down("KeyD");
   await page.waitForFunction((x) => window.__BRAMBLE__!.snapshot().fighters[0].x > x + 0.5, before);
   await page.keyboard.up("KeyD");
-  await page.keyboard.press("Space");
-  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].y > 0.2);
-  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].grounded);
+
+  // Jump, then an air dodge with a direction held. The whole airtime is under a second, so the
+  // inputs are sent from inside the page and every frame is logged for the assertions below.
+  const air = await page.evaluate(
+    () =>
+      new Promise<{ mode: string; grounded: boolean; y: number; airStepUsed: boolean }[]>(
+        (resolve) => {
+          const key = (type: "keydown" | "keyup", code: string) =>
+            window.dispatchEvent(new KeyboardEvent(type, { code, bubbles: true }));
+          const log: { mode: string; grounded: boolean; y: number; airStepUsed: boolean }[] = [];
+          let dodged = false;
+          const poll = () => {
+            const { mode, grounded, y, airStepUsed } = window.__BRAMBLE__!.snapshot().fighters[0];
+            log.push({ mode, grounded, y, airStepUsed });
+            if (!dodged && !grounded && y > 0.3) {
+              dodged = true;
+              key("keydown", "KeyA");
+              key("keydown", "ShiftLeft");
+              key("keyup", "ShiftLeft");
+            }
+            if (dodged && grounded) {
+              key("keyup", "KeyA");
+              resolve(log);
+            } else if (log.length > 600) resolve(log);
+            else requestAnimationFrame(poll);
+          };
+          key("keydown", "Space");
+          key("keyup", "Space");
+          requestAnimationFrame(poll);
+        },
+      ),
+  );
+  expect(air.some((frame) => frame.y > 0.2)).toBe(true);
+  expect(air.some((frame) => frame.mode === "step" && !frame.grounded && frame.airStepUsed)).toBe(
+    true,
+  );
+  expect(air.at(-1)!.grounded).toBe(true);
+  expect(air.at(-1)!.airStepUsed).toBe(false);
+  // Landing gives the air dodge back; wait for the step's stamina to refill before the feints.
+  await page.waitForFunction(() => {
+    const f = window.__BRAMBLE__!.snapshot().fighters[0];
+    return f.grounded && !f.airStepUsed && f.mode === "idle" && f.stamina >= 100;
+  });
   // Records the fighter's mode every frame: short-lived states are asserted from this log
   // rather than waited for, so a slow software-rendered frame cannot make the test miss them.
   const record = () =>
@@ -156,15 +220,25 @@ test("training accepts movement, jump, charged feint, all attacks and pause", as
   await page.screenshot({ path: "test-results/training-desktop.png" });
 });
 
-test("rumble shows four different fighters and CPU combat progresses", async ({ page }) => {
+test("rumble starts with the chosen match settings, four fighters and CPU combat", async ({
+  page,
+}) => {
   const errors = await load(page);
-  await start(page, "rumble");
+  await start(page, "rumble", { stocks: 4, difficulty: "hard", overrides: { 2: "easy" } });
   await expect(page.locator(".fighter-card")).toHaveCount(4);
-  expect(
-    await page.evaluate(
-      () => new Set(window.__BRAMBLE__!.snapshot().fighters.map((f) => f.species)).size,
-    ),
-  ).toBe(4);
+  const state = await page.evaluate(() => window.__BRAMBLE__!.snapshot());
+  expect(state.options).toMatchObject({ stocks: 4, difficulty: "hard" });
+  expect(state.options.overrides).toEqual({ 2: "easy" });
+  expect(state.fighters.map((f) => f.stocks)).toEqual([4, 4, 4, 4]);
+  expect(state.fighters.slice(1).map((f) => f.aiLevel)).toEqual(["hard", "easy", "hard"]);
+  expect(new Set(state.fighters.map((f) => f.species)).size).toBe(4);
+  // The HUD shows each CPU's strength and four life pips per fighter.
+  await expect(page.locator(".opponent-card .fighter-level")).toHaveText([
+    "つよい",
+    "よわい",
+    "つよい",
+  ]);
+  await expect(page.locator(".player-card .fighter-life i")).toHaveCount(4);
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().stats.hits > 0, undefined, {
     timeout: 25_000,
   });
@@ -221,6 +295,9 @@ test("graphics settings apply, persist across a reload and reflect in the dialog
   await expect(dialog).not.toBeVisible();
   await expect(page.locator(".fps-counter")).toBeVisible();
   await expect(page.locator(".fps-counter")).toHaveText(/\d+ FPS/);
+  // The title's 対戦設定 are remembered across the same reload.
+  await chooseMatch(page, { stocks: 5, difficulty: "hard", overrides: { 1: "easy" } });
+  await expect(page.locator(".override-count")).toHaveText("1体を変更中");
 
   await page.reload();
   await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
@@ -228,6 +305,19 @@ test("graphics settings apply, persist across a reload and reflect in the dialog
     JSON.parse(localStorage.getItem("bramble.settings.v1") ?? "{}"),
   );
   expect(stored).toMatchObject({ shadows: "high", antialiasing: "fxaa", showFps: true });
+  const match = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("bramble.match.v1") ?? "{}"),
+  );
+  expect(match).toMatchObject({ stocks: 5, difficulty: "hard" });
+  expect(match.overrides).toEqual({ 1: "easy" });
+  await expect(page.locator('[data-stocks="5"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('[data-stocks="3"]')).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator('[data-difficulty="hard"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".match-overrides")).toHaveAttribute("open", "");
+  await expect(page.locator('[data-override="1"][data-override-level="easy"]')).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(page.locator(".fps-counter")).toBeVisible();
   await page.locator(".menu-links [data-action='settings']").click();
   await expect(dialog).toBeVisible();
@@ -244,5 +334,134 @@ test("graphics settings apply, persist across a reload and reflect in the dialog
   await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await page.screenshot({ path: "test-results/settings-persisted.png" });
+  expect(errors).toEqual([]);
+});
+
+test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", async ({ page }) => {
+  // Angle (degrees, 0-180) between a fighter's facing and the bearing to a ground point.
+  await page.addInitScript(() => {
+    (window as unknown as AimProbe).__aimGap = (self, to) => {
+      const bearing = Math.atan2(to.x - self.x, to.z - self.z);
+      const d = (((self.facing - bearing) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2);
+      return Math.abs(((d - Math.PI) * 180) / Math.PI);
+    };
+  });
+  const errors = await load(page);
+  // V on the title turns the follow camera off, so the view (and the mouse's ground point) is fixed.
+  const camera = page.locator('[data-action="camera"]');
+  await expect(camera).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("KeyV");
+  await expect(camera).toHaveAttribute("aria-pressed", "false");
+  await start(page, "duel", { stocks: 2, difficulty: "easy" });
+  const state = await page.evaluate(() => window.__BRAMBLE__!.snapshot());
+  expect(state.options.stocks).toBe(2);
+  expect(state.fighters.map((f) => f.stocks)).toEqual([2, 2]);
+  expect(state.fighters[1].aiLevel).toBe("easy");
+
+  // A ground point beside the player, well away from the opponent's bearing, and where it is on
+  // screen; the mouse sweeps across the canvas from the opposite side to there.
+  const player = state.fighters[0];
+  const point = { x: player.x, z: player.z + 5 };
+  const box = (await page.locator("#arena canvas").boundingBox())!;
+  const onScreen = (await page.evaluate(({ x, z }) => window.__BRAMBLE__!.screen(x, 0, z), point))!;
+  const target = { x: box.x + onScreen.x, y: box.y + onScreen.y };
+
+  // Lock-on is on from the start: the LOCK chip sits on the opponent's card. Every frame of the
+  // sweep is logged in the page; the facing must stay on the opponent whenever the player is free.
+  await expect(page.locator(".opponent-card .fighter-lock")).toBeVisible();
+  await expect(page.locator(".game-hud")).not.toHaveClass(/lock-off/);
+  await page.evaluate(() => {
+    const recorder = window as unknown as AimProbe & { __aim?: { gap: number; mode: string }[] };
+    recorder.__aim = [];
+    const poll = () => {
+      if (!recorder.__aim) return;
+      const [self, other] = window.__BRAMBLE__!.snapshot().fighters;
+      recorder.__aim.push({ gap: recorder.__aimGap(self, other), mode: self.mode });
+      requestAnimationFrame(poll);
+    };
+    requestAnimationFrame(poll);
+  });
+  await page.mouse.move(box.x + box.width - target.x, box.y + box.height - target.y);
+  await page.mouse.move(target.x, target.y, { steps: 8 });
+  await page.waitForFunction(() => (window as unknown as { __aim: unknown[] }).__aim.length > 10);
+  const locked = await page.evaluate(() => {
+    const recorder = window as unknown as { __aim?: { gap: number; mode: string }[] };
+    const log = recorder.__aim!;
+    delete recorder.__aim;
+    return log;
+  });
+  const free = locked.filter((frame) => frame.mode === "idle");
+  expect(free.length).toBeGreaterThan(5);
+  for (const frame of free) expect(frame.gap).toBeLessThan(5);
+
+  // Tab turns the lock off: the chip goes, and the cursor now steers the facing (a steady state,
+  // so waiting for it is safe even if a hit briefly freezes the player).
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".game-hud")).toHaveClass(/lock-off/);
+  await expect(page.locator(".opponent-card .fighter-lock")).toBeHidden();
+  await page.mouse.move(target.x + 1, target.y);
+  await page.waitForFunction((p) => {
+    const probe = window as unknown as AimProbe;
+    const [self, other] = window.__BRAMBLE__!.snapshot().fighters;
+    return self.mode === "idle" && probe.__aimGap(self, p) < 6 && probe.__aimGap(self, other) > 30;
+  }, point);
+
+  // Tab again locks back on, and the facing returns to the opponent.
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".opponent-card .fighter-lock")).toBeVisible();
+  await page.waitForFunction(() => {
+    const [self, other] = window.__BRAMBLE__!.snapshot().fighters;
+    return self.mode === "idle" && (window as unknown as AimProbe).__aimGap(self, other) < 5;
+  });
+
+  // Walk off the island (screen up-left is world −x, the player's near edge). The HUD card's
+  // status and invulnerability badge are logged every frame from here on.
+  await page.evaluate(() => {
+    const recorder = window as unknown as { __hud: { status: string; shield: boolean }[] };
+    recorder.__hud = [];
+    const card = document.querySelector(".player-card")!;
+    const poll = () => {
+      recorder.__hud.push({
+        status: card.querySelector(".fighter-status")!.textContent ?? "",
+        shield: !card.querySelector<HTMLElement>(".fighter-invulnerable")!.hidden,
+      });
+      requestAnimationFrame(poll);
+    };
+    requestAnimationFrame(poll);
+  });
+  await page.keyboard.down("KeyA");
+  await page.keyboard.down("KeyW");
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].stocks === 1, null, {
+    timeout: 30_000,
+  });
+  await page.keyboard.up("KeyA");
+  await page.keyboard.up("KeyW");
+  // The respawned fighter, as the first poll that finds it back in play sees it.
+  const back = (await (
+    await page.waitForFunction(() => {
+      const f = window.__BRAMBLE__!.snapshot().fighters[0];
+      return f.mode === "dead" ? null : f;
+    })
+  ).jsonValue())!;
+  const after = await page.evaluate(() => window.__BRAMBLE__!.snapshot());
+  expect(back.stocks).toBe(1);
+  expect(back.invulnerable).toBeGreaterThan(0);
+  expect(Math.abs(back.x)).toBeLessThan(after.arena.halfSize);
+  expect(Math.abs(back.z)).toBeLessThan(after.arena.halfSize);
+  expect(after.phase).toBe("playing");
+  expect(after.fighters[1].stocks).toBe(2);
+  // The card lost a pip, said 復帰中 while down, and showed 無敵 once back.
+  const lives = page.locator(".player-card .fighter-life");
+  await expect(lives).toHaveAttribute("aria-label", "残機 1");
+  await expect(lives.locator("i")).toHaveCount(2);
+  await expect(lives.locator("i.lost")).toHaveCount(1);
+  await page.waitForFunction(() =>
+    (window as unknown as { __hud: { shield: boolean }[] }).__hud.some((frame) => frame.shield),
+  );
+  const hud = await page.evaluate(
+    () => (window as unknown as { __hud: { status: string }[] }).__hud,
+  );
+  expect(hud.some((frame) => frame.status === "復帰中")).toBe(true);
+  await page.screenshot({ path: "test-results/duel-respawn.png" });
   expect(errors).toEqual([]);
 });
