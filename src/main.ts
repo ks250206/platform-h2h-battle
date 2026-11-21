@@ -3,7 +3,8 @@ import "./touch.css";
 import { BattleEngine } from "./game/engine";
 import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
-import { ArenaRenderer } from "./render/renderer";
+import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
+import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
 import type { GameState, MatchMode } from "./game/types";
 
@@ -21,6 +22,17 @@ let animation = 0;
 let stopped = false;
 let lastTime = performance.now();
 let lastUI = 0;
+// The FPS cap's next due time and the smoothed frame rate for the optional counter.
+let nextFrameDue = 0;
+let fps = 0;
+
+// The device profile picks the defaults; saved choices override them field by field.
+const software = hasSoftwareRenderer();
+const settings = createSettingsStore(defaultSettings({ software, touch: detectTouch() }));
+settings.subscribe((next) => {
+  renderer?.applySettings(next);
+  nextFrameDue = 0;
+});
 
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
@@ -51,12 +63,18 @@ const ui = new GameUI(overlay, {
     sound.unlock();
     sound.setEnabled(enabled);
   },
+  graphics: {
+    store: settings,
+    renderSize: () => renderer?.renderSize ?? null,
+    supportedMsaa: (ambientOcclusion) => renderer?.supportedMsaa(ambientOcclusion) ?? null,
+    supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
+  },
 });
 ui.update(engine.state);
 
 async function boot() {
   try {
-    renderer = await ArenaRenderer.create(host);
+    renderer = await ArenaRenderer.create(host, settings.get(), software);
     input = new BattleInput(
       renderer.canvas,
       (x, y) => renderer!.screenToWorld(x, y),
@@ -67,8 +85,21 @@ async function boot() {
     lastTime = performance.now();
     const frame = (now: number) => {
       if (stopped || !renderer || !input) return;
-      const dt = Math.min(0.1, (now - lastTime) / 1000);
+      animation = requestAnimationFrame(frame);
+      const limit = settings.get().fpsLimit;
+      if (limit > 0) {
+        // Skip display frames until the cap's budget has elapsed. The due time advances in whole
+        // intervals so a 60 FPS cap on a 144 Hz screen averages 60, not the nearest divisor.
+        const interval = 1000 / limit;
+        if (now < nextFrameDue - 1) return;
+        nextFrameDue = now - nextFrameDue > interval ? now + interval : nextFrameDue + interval;
+      }
+      // The simulation receives the real time since the last rendered frame.
+      const elapsed = now - lastTime;
+      const dt = Math.min(0.1, elapsed / 1000);
       lastTime = now;
+      if (elapsed > 0 && elapsed < 1000)
+        fps = fps ? fps + (1000 / elapsed - fps) * Math.min(1, elapsed / 500) : 1000 / elapsed;
       input.updateVisibility(engine.state);
       const control = input.sample(engine.state);
       engine.update(dt, control);
@@ -76,9 +107,9 @@ async function boot() {
       sound.update(engine.state);
       if (now - lastUI > 33) {
         ui.update(engine.state);
+        ui.setFps(fps);
         lastUI = now;
       }
-      animation = requestAnimationFrame(frame);
     };
     animation = requestAnimationFrame(frame);
     // Readable snapshots for automation; mutating helpers are available in development only.

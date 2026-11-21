@@ -1,0 +1,149 @@
+diff --git a/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.js b/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.js
+index 02691ec147dac3272f4bbf4feaf72d1cfa889880..c7de8de5dfe2ddf782aac924e974f2a576cfbcfd 100644
+--- a/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.js
++++ b/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.js
+@@ -648,7 +648,7 @@ class GlRenderTargetAdaptor {
+     if (glRenderTarget.msaa) {
+       gl.renderbufferStorageMultisample(
+         gl.RENDERBUFFER,
+-        4,
++        this._renderer.texture.msaaSamples,
+         gl.DEPTH24_STENCIL8,
+         glRenderTarget.width,
+         glRenderTarget.height
+diff --git a/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.mjs b/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.mjs
+index f912d29dd223ed3955b519b756f38e6a9465e287..d4d4917338be6cb26225c92981e3a24def8a110c 100644
+--- a/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.mjs
++++ b/lib/rendering/renderers/gl/renderTarget/GlRenderTargetAdaptor.mjs
+@@ -646,7 +646,7 @@ class GlRenderTargetAdaptor {
+     if (glRenderTarget.msaa) {
+       gl.renderbufferStorageMultisample(
+         gl.RENDERBUFFER,
+-        4,
++        this._renderer.texture.msaaSamples,
+         gl.DEPTH24_STENCIL8,
+         glRenderTarget.width,
+         glRenderTarget.height
+diff --git a/lib/rendering/renderers/gl/texture/GlTexture.d.ts b/lib/rendering/renderers/gl/texture/GlTexture.d.ts
+index d350dc513dfbd4df76410532872a93d07055fc5d..dcefec51c190fd9da26229639d56a59c961cda33 100644
+--- a/lib/rendering/renderers/gl/texture/GlTexture.d.ts
++++ b/lib/rendering/renderers/gl/texture/GlTexture.d.ts
+@@ -37,6 +37,7 @@ export declare class GlTexture implements GPUData {
+      * The size `msaaRenderBuffer`'s storage was last allocated at, -1 until it is. This object outlives a
+      * resize of its source, so the storage is reallocated when the source's size no longer matches.
+      */
++    msaaSamples?: number;
+     msaaWidth: number;
+     msaaHeight: number;
+     constructor(texture: WebGLTexture);
+diff --git a/lib/rendering/renderers/gl/texture/GlTextureSystem.d.ts b/lib/rendering/renderers/gl/texture/GlTextureSystem.d.ts
+index 489eea568303474cc5de5b53514febf8124531af..9f269925364e0b52e47f6dcab9b3d8ce9963ab19 100644
+--- a/lib/rendering/renderers/gl/texture/GlTextureSystem.d.ts
++++ b/lib/rendering/renderers/gl/texture/GlTextureSystem.d.ts
+@@ -27,6 +27,8 @@ export declare class GlTextureSystem implements System, CanvasGenerator {
+      * @internal
+      */
+     static readonly uploadExtensions: Record<string, GLTextureUploader>;
++    /** Sample count for multisampled WebGL renderbuffers. Defaults to 4. */
++    msaaSamples: number;
+     private readonly _renderer;
+     private readonly _managedTextures;
+     /**
+diff --git a/lib/rendering/renderers/gl/texture/GlTextureSystem.js b/lib/rendering/renderers/gl/texture/GlTextureSystem.js
+index 2584a6e532c6e342940970977d4952097360f2c1..844f630425d213937b7d02e5f3a35453d55296f2 100644
+--- a/lib/rendering/renderers/gl/texture/GlTextureSystem.js
++++ b/lib/rendering/renderers/gl/texture/GlTextureSystem.js
+@@ -32,6 +32,7 @@ const _GlTextureSystem = class _GlTextureSystem {
+     // TODO - separate samplers will be a cool thing to add, but not right now!
+     this._useSeparateSamplers = false;
+     this._renderer = renderer;
++    this.msaaSamples = 4;
+     this._managedTextures = new GCManagedHash.GCManagedHash({
+       renderer,
+       type: "resource",
+@@ -411,13 +412,14 @@ const _GlTextureSystem = class _GlTextureSystem {
+     const gl = this._gl;
+     const glTexture = this.getGlSource(source);
+     glTexture.msaaRenderBuffer ?? (glTexture.msaaRenderBuffer = gl.createRenderbuffer());
+-    if (glTexture.msaaWidth !== source.pixelWidth || glTexture.msaaHeight !== source.pixelHeight) {
++    if (glTexture.msaaWidth !== source.pixelWidth || glTexture.msaaHeight !== source.pixelHeight || glTexture.msaaSamples !== this.msaaSamples) {
++      glTexture.msaaSamples = this.msaaSamples;
+       glTexture.msaaWidth = source.pixelWidth;
+       glTexture.msaaHeight = source.pixelHeight;
+       gl.bindRenderbuffer(gl.RENDERBUFFER, glTexture.msaaRenderBuffer);
+       gl.renderbufferStorageMultisample(
+         gl.RENDERBUFFER,
+-        4,
++        this.msaaSamples,
+         glTexture.internalFormat,
+         source.pixelWidth,
+         source.pixelHeight
+diff --git a/lib/rendering/renderers/gl/texture/GlTextureSystem.mjs b/lib/rendering/renderers/gl/texture/GlTextureSystem.mjs
+index fcc625e101524c9e5a8204eae5731685493aa909..f9df41041f553c46e9cd3187ae528e6bb2a70cb2 100644
+--- a/lib/rendering/renderers/gl/texture/GlTextureSystem.mjs
++++ b/lib/rendering/renderers/gl/texture/GlTextureSystem.mjs
+@@ -30,6 +30,7 @@ const _GlTextureSystem = class _GlTextureSystem {
+     // TODO - separate samplers will be a cool thing to add, but not right now!
+     this._useSeparateSamplers = false;
+     this._renderer = renderer;
++    this.msaaSamples = 4;
+     this._managedTextures = new GCManagedHash({
+       renderer,
+       type: "resource",
+@@ -409,13 +410,14 @@ const _GlTextureSystem = class _GlTextureSystem {
+     const gl = this._gl;
+     const glTexture = this.getGlSource(source);
+     glTexture.msaaRenderBuffer ?? (glTexture.msaaRenderBuffer = gl.createRenderbuffer());
+-    if (glTexture.msaaWidth !== source.pixelWidth || glTexture.msaaHeight !== source.pixelHeight) {
++    if (glTexture.msaaWidth !== source.pixelWidth || glTexture.msaaHeight !== source.pixelHeight || glTexture.msaaSamples !== this.msaaSamples) {
++      glTexture.msaaSamples = this.msaaSamples;
+       glTexture.msaaWidth = source.pixelWidth;
+       glTexture.msaaHeight = source.pixelHeight;
+       gl.bindRenderbuffer(gl.RENDERBUFFER, glTexture.msaaRenderBuffer);
+       gl.renderbufferStorageMultisample(
+         gl.RENDERBUFFER,
+-        4,
++        this.msaaSamples,
+         glTexture.internalFormat,
+         source.pixelWidth,
+         source.pixelHeight
+diff --git a/lib/ticker/Ticker.js b/lib/ticker/Ticker.js
+index e30d336b15c99a014ad790833eea92a5212af12c..448568ac8c2c0346d572ad5b71284dc0acea4612 100644
+--- a/lib/ticker/Ticker.js
++++ b/lib/ticker/Ticker.js
+@@ -429,11 +429,12 @@ const _Ticker = class _Ticker {
+       }
+       elapsedMS *= this.speed;
+       if (this._minElapsedMS) {
+-        const delta = currentTime - this._lastFrame | 0;
+-        if (delta < this._minElapsedMS) {
++        // RAF timestamps can be quantized to 0.1 ms. Keep the fractional frame interval.
++        const intervals = Math.floor((currentTime - this._lastFrame + 0.1) / this._minElapsedMS);
++        if (intervals < 1) {
+           return;
+         }
+-        this._lastFrame = currentTime - delta % this._minElapsedMS;
++        this._lastFrame += intervals * this._minElapsedMS;
+       }
+       this.deltaMS = elapsedMS;
+       this.deltaTime = this.deltaMS * _Ticker.targetFPMS;
+diff --git a/lib/ticker/Ticker.mjs b/lib/ticker/Ticker.mjs
+index 1e254b5cda9f1d4fd845ab1234a2b820132bcf47..84f8a804434a7ffcfeb294e0dca8e162632c3dee 100644
+--- a/lib/ticker/Ticker.mjs
++++ b/lib/ticker/Ticker.mjs
+@@ -427,11 +427,12 @@ const _Ticker = class _Ticker {
+       }
+       elapsedMS *= this.speed;
+       if (this._minElapsedMS) {
+-        const delta = currentTime - this._lastFrame | 0;
+-        if (delta < this._minElapsedMS) {
++        // RAF timestamps can be quantized to 0.1 ms. Keep the fractional frame interval.
++        const intervals = Math.floor((currentTime - this._lastFrame + 0.1) / this._minElapsedMS);
++        if (intervals < 1) {
+           return;
+         }
+-        this._lastFrame = currentTime - delta % this._minElapsedMS;
++        this._lastFrame += intervals * this._minElapsedMS;
+       }
+       this.deltaMS = elapsedMS;
+       this.deltaTime = this.deltaMS * _Ticker.targetFPMS;

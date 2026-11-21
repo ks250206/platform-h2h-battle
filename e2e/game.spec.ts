@@ -130,3 +130,49 @@ test("touch controls fit a portrait viewport and trigger an attack", async ({ br
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("graphics settings apply, persist across a reload and reflect in the dialog", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const errors = await load(page);
+  const dialog = page.locator(".settings-dialog");
+  await page.getByRole("button", { name: "グラフィック設定を開く" }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('[data-output="resolution"]')).toHaveText(/^\d+ × \d+$/);
+  await dialog.getByRole("button", { name: "高", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "高", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await dialog.getByLabel("アンチエイリアス").selectOption("fxaa");
+  await dialog.getByLabel("FPS を表示").check();
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator(".fps-counter")).toBeVisible();
+  await expect(page.locator(".fps-counter")).toHaveText(/\d+ FPS/);
+
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("bramble.settings.v1") ?? "{}"),
+  );
+  expect(stored).toMatchObject({ shadows: "high", antialiasing: "fxaa", showFps: true });
+  await expect(page.locator(".fps-counter")).toBeVisible();
+  await page.locator(".menu-links [data-action='settings']").click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "高", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(dialog.getByRole("button", { name: "なし", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(dialog.getByLabel("アンチエイリアス")).toHaveValue("fxaa");
+  await expect(dialog.getByLabel("FPS を表示")).toBeChecked();
+  await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.screenshot({ path: "test-results/settings-persisted.png" });
+  expect(errors).toEqual([]);
+});

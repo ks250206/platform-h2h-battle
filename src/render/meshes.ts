@@ -11,6 +11,7 @@ import {
 } from "@pixi/3d";
 import type { BaseMaterial3D } from "@pixi/3d";
 import type { Fighter } from "../game/types";
+import { ShadowedTileMaterial } from "./tileMaterial";
 
 const TAU = Math.PI * 2;
 
@@ -82,6 +83,33 @@ export class MeshLibrary {
     return result;
   }
 
+  /**
+   * Tile tops: the unlit baked-shade material, or with real shadows on, the same look plus the
+   * sun's shadow. Both are cached per colour, so swapping them every frame is free.
+   */
+  tileMaterial(color: number, shadowed: boolean): BaseMaterial3D {
+    if (!shadowed) return this.flatMaterial(color);
+    const key = `tile/${color}`;
+    let result = this.materials.get(key);
+    if (!result) {
+      result = new ShadowedTileMaterial({
+        baseColor: color,
+        vertexColors: true,
+        doubleSided: false,
+      });
+      this.materials.set(key, result);
+    }
+    return result;
+  }
+
+  /**
+   * Lit opaque surfaces (bodies, swords, scenery) cast and receive shadows. Unlit or see-through
+   * ones (rings, discs, sparks, the baked floor) stay out of the shadow pass.
+   */
+  static castsShadow(material: BaseMaterial3D): boolean {
+    return material.lit && material.alphaMode === "opaque";
+  }
+
   mesh(
     parent: Container3D,
     geometry: Geometry3D,
@@ -93,7 +121,8 @@ export class MeshLibrary {
     sy = sx,
     sz = sx,
   ): Mesh3D {
-    const mesh = new Mesh3D({ geometry, material, castShadow: false, receiveShadow: false });
+    const shadows = MeshLibrary.castsShadow(material);
+    const mesh = new Mesh3D({ geometry, material, castShadow: shadows, receiveShadow: shadows });
     mesh.position.set(x, y, z);
     mesh.scale.set(sx, sy, sz);
     parent.addChild(mesh);

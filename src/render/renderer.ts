@@ -1,6 +1,7 @@
 // Register 3D before app.init: Pixi loads the matching backend during initialization.
 import {
   AmbientLight,
+  Box,
   Container3D,
   DirectionalLight,
   Mesh3D,
@@ -8,9 +9,13 @@ import {
   Vector3,
   View3D,
 } from "@pixi/3d";
+import type { Pass3D, ShadowQuality } from "@pixi/3d";
+import { FxaaEffect, SsaoEffect } from "@pixi/3d/extras";
 import { Application, Container, Graphics, RendererType, Sprite, Text, Texture } from "pixi.js";
 import type { WebGLRenderer } from "pixi.js";
 import { CAMERA_FORWARD, CAMERA_OFFSET, CAMERA_RIGHT } from "../game/coordinates";
+import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/settings";
+import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
 import { createFighterMesh, MeshLibrary, poseFighter } from "./meshes";
 import type { FighterMesh } from "./meshes";
@@ -54,8 +59,16 @@ const MENU_PAN_UP = -0.2;
 const FACING_CAMERA = Math.atan2(-CAMERA_FORWARD.x, -CAMERA_FORWARD.z);
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
 
+const SHADOW_QUALITY: Record<Exclude<ShadowLevel, "off">, ShadowQuality> = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+};
+/** Scene pixels a software rasteriser can afford while dynamic resolution is on (today's budget). */
+const SOFTWARE_PIXEL_BUDGET = 360_000;
+
 /** Only affects rendering quality. Simulation, input, UI and test timing stay unchanged. */
-function hasSoftwareRenderer(): boolean {
+export function hasSoftwareRenderer(): boolean {
   const probe = document.createElement("canvas");
   const gl = probe.getContext("webgl2");
   if (!gl) return false;
@@ -137,16 +150,32 @@ export class ArenaRenderer {
   private lastElapsed = 0;
   private destroyed = false;
   private readonly software: boolean;
+  private readonly sun: DirectionalLight;
+  private settings: GraphicsSettings;
+  private msaaSupport: { standard: MsaaSamples[]; hdr: MsaaSamples[] } = {
+    standard: [],
+    hdr: [],
+  };
+  private ssao: SsaoEffect | null = null;
+  private fxaa: FxaaEffect | null = null;
+  private shadowsActive = false;
+  private maxRenderSizeCache = 0;
   private qualityScale = 1;
-  private baseResolution = 1;
+  private sceneScale = 1;
   private previousRenderAt = 0;
   private sampleFrameTime = 0;
   private sampleFrameCount = 0;
 
-  private constructor(app: Application, host: HTMLElement, software: boolean) {
+  private constructor(
+    app: Application,
+    host: HTMLElement,
+    software: boolean,
+    settings: GraphicsSettings,
+  ) {
     this.app = app;
     this.host = host;
     this.software = software;
+    this.settings = settings;
     this.canvas = app.canvas;
     this.canvas.setAttribute("aria-label", "浮島で大剣を振るう動物たちの3Dバトル");
     this.canvas.style.display = "block";
@@ -173,6 +202,8 @@ export class ArenaRenderer {
       height: host.clientHeight || 720,
       composite: true,
       resolution: 1,
+      shadowQuality: settings.shadows === "off" ? "medium" : SHADOW_QUALITY[settings.shadows],
+      shadowFilter: "pcf",
       toneMapping: "none",
       exposure: 1,
       // Matte low-poly art needs no HDR cubemap generation or per-pixel IBL reflection.
@@ -187,7 +218,18 @@ export class ArenaRenderer {
     this.view.camera.fov = CAMERA_FOV;
     this.view.camera.near = CAMERA_NEAR;
     this.view.camera.far = CAMERA_FAR;
-    const sun = new DirectionalLight({ color: 0xffe9c0, intensity: 2.2, castShadow: false });
+    // Fixed shadow box around the arena (tiles span ±9, fighters jump a few units) so the
+    // shadow map's texels are not spent on the far-off floating islands.
+    const sun = new DirectionalLight({
+      color: 0xffe9c0,
+      intensity: 2.2,
+      castShadow: false,
+      shadow: {
+        bounds: Box.fromCenterSize({ x: 0, y: 1.5, z: 0 }, { x: 20, y: 8, z: 20 }),
+        normalBias: 0.03,
+      },
+    });
+    this.sun = sun;
     sun.position.set(-10, 22, 14);
     this.view.root.addChild(sun);
     sun.lookAt({ x: 0, y: 0, z: 0 });
@@ -230,23 +272,31 @@ export class ArenaRenderer {
       line.visible = false;
       this.windLines.push(line);
     }
+    this.readMsaaSupport();
+    this.applySettings(settings, true);
+    this.canvas.addEventListener("webglcontextrestored", this.handleContextRestored);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
   }
 
-  static async create(host: HTMLElement): Promise<ArenaRenderer> {
+  static async create(
+    host: HTMLElement,
+    settings: GraphicsSettings,
+    software = hasSoftwareRenderer(),
+  ): Promise<ArenaRenderer> {
     const app = new Application();
-    const software = hasSoftwareRenderer();
     try {
       await app.init({
         preference: "webgl",
         width: host.clientWidth || 1280,
         height: host.clientHeight || 720,
         background: 0x132b34,
+        // Context MSAA keeps the 2D labels smooth; the 3D scene's MSAA follows the settings.
         antialias: !software,
         autoDensity: true,
-        resolution: Math.min(window.devicePixelRatio || 1, software ? 1 : 1.75),
+        // The canvas (2D labels) stays sharp; only the 3D view's resolution follows the settings.
+        resolution: Math.min(window.devicePixelRatio || 1, software ? 1 : 2),
         autoStart: false,
         powerPreference: "high-performance",
       });
@@ -260,7 +310,7 @@ export class ArenaRenderer {
         throw new Error("3D描画に対応したブラウザーで開いてください。");
       }
       app.ticker.stop();
-      return new ArenaRenderer(app, host, software);
+      return new ArenaRenderer(app, host, software, settings);
     } catch (error) {
       if (app.renderer) app.destroy({ removeView: true }, { children: true });
       throw error;
@@ -285,6 +335,8 @@ export class ArenaRenderer {
             ? 0x86ad9a
             : 0xa4c1a8;
         const top = a.mesh(root, a.tile, a.flatMaterial(tint));
+        // Only takes effect while the shadow-receiving tile material is in use.
+        top.receiveShadow = true;
         const outline = a.mesh(root, a.ring, a.material(0xf7b36e, 0.8, 0.2), 0, 0.025, 0, 0.75);
         outline.visible = false;
         this.tiles.push({ root, top, outline, x, z, tint, fallenAt: null });
@@ -311,7 +363,7 @@ export class ArenaRenderer {
       }
     }
     // A pale compass is a useful reference for depth and directional inputs.
-    const compass = a.mesh(this.scene, a.ring, a.material(0xf5e7bf, 0.3), 0, 0.012, 0, 2.6);
+    a.mesh(this.scene, a.ring, a.material(0xf5e7bf, 0.3), 0, 0.012, 0, 2.6);
     for (let i = 0; i < 4; i++) {
       const mark = a.box(
         this.scene,
@@ -401,7 +453,7 @@ export class ArenaRenderer {
         state.arena.warningRing &&
         Math.max(Math.abs(tile.x), Math.abs(tile.z)) >= state.arena.halfSize - 2;
       const unsafe = safe.active && Math.hypot(tile.x - safe.x, tile.z - safe.z) > safe.radius;
-      tile.top.material = a.flatMaterial(
+      tile.top.material = a.tileMaterial(
         warning
           ? Math.sin(this.time * 7) > 0
             ? 0xdca36f
@@ -409,6 +461,7 @@ export class ArenaRenderer {
           : unsafe
             ? 0x91a4a5
             : tile.tint,
+        this.shadowsActive,
       );
       tile.outline.visible = warning;
       if (warning) tile.outline.scale.set(0.5 + (Math.sin(this.time * 5) + 1) * 0.12);
@@ -472,7 +525,8 @@ export class ArenaRenderer {
       view.mesh.root.rotation.y = FACING_CAMERA + (f.human ? 0.42 : -0.36);
     const onPlatform =
       Math.abs(f.x) <= state.arena.halfSize && Math.abs(f.z) <= state.arena.halfSize;
-    view.mesh.shadow.visible &&= onPlatform;
+    // The blob is a stand-in for a shadow; with real shadow maps it would double up.
+    view.mesh.shadow.visible &&= onPlatform && !this.shadowsActive;
     view.mesh.footRing.visible &&= onPlatform;
     const point = this.view.worldToScreen({ x: f.x, y: Math.max(f.y, -1) + 2.65, z: f.z });
     const labelVisible = f.mode !== "dead" && point !== null;
@@ -693,12 +747,6 @@ export class ArenaRenderer {
     this.view.width = this.width;
     this.view.height = this.height;
     const aspect = this.width / this.height;
-    const pixelBudget = this.software ? 360_000 : 2_000_000;
-    this.baseResolution = Math.min(
-      window.devicePixelRatio || 1,
-      1.5,
-      Math.sqrt(pixelBudget / (this.width * this.height)),
-    );
     this.setSceneResolution();
     const touch = window.matchMedia?.("(pointer: coarse)").matches ?? false;
     const { top, bottom } = hudBand(this.height, touch);
@@ -732,6 +780,7 @@ export class ArenaRenderer {
     const now = performance.now();
     const elapsed = this.previousRenderAt ? now - this.previousRenderAt : 0;
     this.previousRenderAt = now;
+    if (!this.settings.dynamicResolution) return;
     if (state.phase === "paused" || document.hidden || elapsed <= 0 || elapsed > 2000) return;
     this.sampleFrameTime += elapsed;
     this.sampleFrameCount++;
@@ -746,10 +795,171 @@ export class ArenaRenderer {
     this.sampleFrameTime = 0;
   }
 
+  /**
+   * 3D scene texels per CSS pixel: the resolution preset (by the view's short side), lowered by
+   * the dynamic scale, doubled for SSAA, and kept inside the GPU's texture and renderbuffer limit.
+   * The canvas, and with it every 2D label, keeps its own resolution.
+   */
   private setSceneResolution(): void {
-    this.view.resolution = this.baseResolution * this.qualityScale;
-    this.canvas.dataset.sceneResolution = this.view.resolution.toFixed(3);
+    const { width, height, settings } = this;
+    const limit = this.maxRenderSize() / Math.max(width, height);
+    let scale = resolutionScale(
+      settings.resolution,
+      Math.min(width, height),
+      window.devicePixelRatio || 1,
+    );
+    if (settings.dynamicResolution) {
+      // A software rasteriser starts within the pixel budget it has always had.
+      if (this.software)
+        scale = Math.min(
+          scale,
+          this.app.renderer.resolution,
+          Math.sqrt(SOFTWARE_PIXEL_BUDGET / (width * height)),
+        );
+      scale *= this.qualityScale;
+    }
+    this.sceneScale = Math.min(scale, limit);
+    const resolution =
+      settings.antialiasing === "ssaa" ? Math.min(this.sceneScale * 2, limit) : this.sceneScale;
+    this.view.resolution = resolution;
+    this.canvas.dataset.sceneResolution = resolution.toFixed(3);
   }
+
+  private maxRenderSize(): number {
+    if (this.maxRenderSizeCache) return this.maxRenderSizeCache;
+    let size = 8192;
+    if (this.app.renderer.type === RendererType.WEBGL) {
+      const { gl } = this.app.renderer as WebGLRenderer;
+      size = Math.min(
+        size,
+        gl.getParameter(gl.MAX_TEXTURE_SIZE) as number,
+        gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number,
+      );
+    }
+    // A lost context reports 0; fall back without caching so a restore reads the real limit.
+    if (!size) return 4096;
+    this.maxRenderSizeCache = size;
+    return size;
+  }
+
+  /**
+   * Applies graphics settings; only what changed since the last call is touched unless `force`.
+   * Safe to call at any time, including every frame.
+   */
+  applySettings(settings: GraphicsSettings, force = false): void {
+    const previous = this.settings;
+    this.settings = settings;
+    if (this.destroyed) return;
+    const view = this.view;
+
+    if (
+      force ||
+      previous.resolution !== settings.resolution ||
+      previous.antialiasing !== settings.antialiasing ||
+      previous.dynamicResolution !== settings.dynamicResolution
+    ) {
+      // A new choice starts from full quality; the dynamic scale measures it afresh.
+      this.qualityScale = 1;
+      this.sampleFrameCount = 0;
+      this.sampleFrameTime = 0;
+      this.setSceneResolution();
+    }
+
+    if (force || previous.shadows !== settings.shadows) {
+      const enabled = settings.shadows !== "off";
+      if (enabled)
+        view.shadowQuality = SHADOW_QUALITY[settings.shadows as Exclude<ShadowLevel, "off">];
+      this.sun.castShadow = enabled;
+      this.shadowsActive = enabled;
+    }
+
+    if (
+      force ||
+      previous.ambientOcclusion !== settings.ambientOcclusion ||
+      previous.antialiasing !== settings.antialiasing ||
+      previous.msaaSamples !== settings.msaaSamples
+    ) {
+      const samples =
+        settings.antialiasing === "msaa"
+          ? effectiveSamples(settings.msaaSamples, this.supportedMsaa(settings.ambientOcclusion))
+          : undefined;
+      if (this.app.renderer.type === RendererType.WEBGL) {
+        // The view composites, so its scene buffer follows this flag when the graph is rebuilt
+        // (assigning `passes` below always rebuilds it). The patched pixi.js reads the count.
+        this.app.renderer.view.antialias = samples !== undefined;
+        if (samples) (this.app.renderer as WebGLRenderer).texture.msaaSamples = samples;
+      }
+      const passes: Pass3D[] = [];
+      if (settings.ambientOcclusion && this.canRenderFloat()) {
+        this.ssao ??= new SsaoEffect({ radius: 0.45, intensity: 1.15 });
+        passes.push(this.ssao);
+      }
+      if (settings.antialiasing === "fxaa") {
+        this.fxaa ??= new FxaaEffect();
+        passes.push(this.fxaa);
+      }
+      view.passes = passes;
+    }
+  }
+
+  /** MSAA sample counts this GPU can use for the scene buffer (float buffers while SSAO is on). */
+  supportedMsaa(ambientOcclusion = this.settings.ambientOcclusion): readonly MsaaSamples[] {
+    return ambientOcclusion && this.canRenderFloat()
+      ? this.msaaSupport.hdr
+      : this.msaaSupport.standard;
+  }
+
+  /** Whether SSAO can run (it needs float render targets). */
+  get supportsAmbientOcclusion(): boolean {
+    return this.canRenderFloat();
+  }
+
+  /** The 3D scene's drawn size in pixels, before SSAA's 2× supersampling. */
+  get renderSize(): { width: number; height: number } {
+    return {
+      width: Math.max(1, Math.round(this.width * this.sceneScale)),
+      height: Math.max(1, Math.round(this.height * this.sceneScale)),
+    };
+  }
+
+  /** Whether the sun currently casts real shadow maps (the fake blob shadows are hidden then). */
+  get realShadows(): boolean {
+    return this.shadowsActive;
+  }
+
+  /** The player's screen-shake preference, for impact effects. */
+  get cameraShake(): boolean {
+    return this.settings.cameraShake;
+  }
+
+  private readMsaaSupport(): void {
+    if (this.app.renderer.type !== RendererType.WEBGL) {
+      // WebGPU supports 4x only.
+      this.msaaSupport = { standard: [4], hdr: [4] };
+      return;
+    }
+    const { gl } = this.app.renderer as WebGLRenderer;
+    const counts = (format: number): Int32Array =>
+      (gl.getInternalformatParameter(gl.RENDERBUFFER, format, gl.SAMPLES) as Int32Array | null) ??
+      new Int32Array();
+    const depth = counts(gl.DEPTH24_STENCIL8);
+    const color = counts(gl.RGBA8);
+    const standard = MSAA_SAMPLES.filter((n) => depth.includes(n) && color.includes(n));
+    const hdrColor = this.canRenderFloat() ? counts(gl.RGBA16F) : new Int32Array();
+    this.msaaSupport = { standard, hdr: standard.filter((n) => hdrColor.includes(n)) };
+  }
+
+  private canRenderFloat(): boolean {
+    const renderer = this.app.renderer;
+    if (renderer.type !== RendererType.WEBGL) return true;
+    return Boolean((renderer as WebGLRenderer).context.extensions.colorBufferFloat);
+  }
+
+  private readonly handleContextRestored = (): void => {
+    this.maxRenderSizeCache = 0;
+    this.readMsaaSupport();
+    this.applySettings(this.settings, true);
+  };
 
   private destroyFighter(view: FighterView): void {
     view.mesh.root.destroy({ children: true });
@@ -763,7 +973,11 @@ export class ArenaRenderer {
     if (this.destroyed) return;
     this.destroyed = true;
     this.resizeObserver.disconnect();
+    this.canvas.removeEventListener("webglcontextrestored", this.handleContextRestored);
+
     this.view.destroy({ children: true });
+    this.ssao?.destroy();
+    this.fxaa?.destroy();
     this.assets.destroy();
     this.skyTexture.destroy(true);
     this.app.destroy({ removeView: true }, { children: true });
