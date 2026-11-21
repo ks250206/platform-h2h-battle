@@ -1,5 +1,14 @@
 // Match options the player chooses before a fight. Importable in node (tests): no DOM access.
 
+import {
+  isTimeRule,
+  presetRules,
+  sanitizeGimmicks,
+  DEFAULT_PRESET,
+  type Gimmicks,
+  type TimeRule,
+} from "./rules";
+
 /** How well a CPU fighter plays. */
 export type AiLevel = "easy" | "normal" | "hard";
 export const AI_LEVEL_IDS: readonly AiLevel[] = ["easy", "normal", "hard"];
@@ -31,14 +40,28 @@ export interface MatchOptions {
   difficulty: AiLevel;
   /** Per-CPU strength keyed by fighter id (1-3). A missing id follows `difficulty`. */
   overrides: Partial<Record<number, AiLevel>>;
+  /** The time limit rule (see `timeLimitFor`). Training ignores it. */
+  time: TimeRule;
+  /** Which arena gimmicks run. Training ignores it: it never has any. */
+  gimmicks: Gimmicks;
 }
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
   controls: { 0: "keyboard" },
-  stocks: 3,
   difficulty: "normal",
   overrides: {},
+  ...presetRules(DEFAULT_PRESET),
 };
+
+/** A deep copy: changing it never changes `options`. */
+export function copyMatchOptions(options: MatchOptions): MatchOptions {
+  return {
+    ...options,
+    controls: { ...options.controls },
+    overrides: { ...options.overrides },
+    gimmicks: { ...options.gimmicks },
+  };
+}
 
 /** The strength a given CPU fighter plays at. */
 export function levelFor(options: MatchOptions, fighterId: number): AiLevel {
@@ -106,5 +129,7 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
       : DEFAULT_MATCH_OPTIONS.stocks,
     difficulty: isLevel(source.difficulty) ? source.difficulty : DEFAULT_MATCH_OPTIONS.difficulty,
     overrides,
+    time: isTimeRule(source.time) ? source.time : DEFAULT_MATCH_OPTIONS.time,
+    gimmicks: sanitizeGimmicks(source.gimmicks),
   };
 }

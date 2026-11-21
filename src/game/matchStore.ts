@@ -3,6 +3,7 @@
 // access to it is guarded, and the storage can be injected.
 
 import {
+  copyMatchOptions as copy,
   DEFAULT_MATCH_OPTIONS,
   MAX_FIGHTERS,
   padIndex,
@@ -10,6 +11,7 @@ import {
   type ControlDevice,
   type MatchOptions,
 } from "./match";
+import { presetRules, type GimmickId, type PresetId } from "./rules";
 
 type Controls = MatchOptions["controls"];
 
@@ -119,7 +121,15 @@ export function playableOptions(
       substitutes.push({ slot: 0, device: options.controls[0], by: "keyboard" });
     substitutes.sort((a, b) => a.slot - b.slot);
   }
-  return { options: { ...options, controls, overrides: { ...options.overrides } }, substitutes };
+  return { options: { ...copy(options), controls }, substitutes };
+}
+
+/**
+ * `options` with a preset's rules (lives, time limit, gimmicks). Who plays which slot and how
+ * strong the CPUs are stay exactly as they were.
+ */
+export function applyPreset(options: MatchOptions, id: PresetId): MatchOptions {
+  return { ...copy(options), ...presetRules(id) };
 }
 
 export const MATCH_STORAGE_KEY = "bramble.match.v1";
@@ -135,12 +145,6 @@ function browserStorage(): MatchStorage | null {
     return null;
   }
 }
-
-const copy = (options: MatchOptions): MatchOptions => ({
-  ...options,
-  controls: { ...options.controls },
-  overrides: { ...options.overrides },
-});
 
 /** The saved options, every corrupt or missing field replaced by its default. */
 export function loadMatchOptions(storage: MatchStorage | null = browserStorage()): MatchOptions {
@@ -166,8 +170,15 @@ export function saveMatchOptions(
 export interface MatchStore {
   /** A copy of the current options; changing it does not change the store. */
   get(): MatchOptions;
-  /** Merges `patch` (a `controls` or `overrides` patch replaces that map), sanitizes and saves. */
+  /**
+   * Merges `patch` (a `controls`, `overrides` or `gimmicks` patch replaces that map), sanitizes
+   * and saves.
+   */
   set(patch: Partial<MatchOptions>): void;
+  /** Applies a rule preset: lives, time limit and gimmicks only (`applyPreset`). */
+  preset(id: PresetId): void;
+  /** Switches one gimmick on or off; the other rules stay. */
+  toggleGimmick(id: GimmickId, on?: boolean): void;
   /** Puts a device (null: a CPU) on a slot, swapping with the slot that had it (`assignDevice`). */
   assign(slot: number, device: ControlDevice | null, fighterCount: number): void;
   /** Pad `index` joins on the first CPU slot; returns that slot, or null (`joinPad`). */
@@ -190,6 +201,12 @@ export function createMatchStore(storage: MatchStorage | null = browserStorage()
   return {
     get: () => copy(current),
     set,
+    preset(id) {
+      set(presetRules(id));
+    },
+    toggleGimmick(id, on = !current.gimmicks[id]) {
+      set({ gimmicks: { ...current.gimmicks, [id]: on } });
+    },
     assign(slot, device, fighterCount) {
       const controls = assignDevice(current.controls, slot, device, fighterCount);
       if (JSON.stringify(controls) !== JSON.stringify(current.controls)) set({ controls });

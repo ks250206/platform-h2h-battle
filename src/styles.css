@@ -554,6 +554,39 @@ h1 > span {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+/* The preset the rules match (or カスタム), and the rules a match will actually run with. */
+.match-options-head .rule-preset-badge {
+  margin-left: auto;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.match-options-head .rule-preset-badge.custom {
+  background: var(--pink);
+}
+.gimmick-toggles button[aria-pressed="false"] {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.rules-summary {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.rules-notes {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--danger-text);
+}
 .match-options-note {
   margin: 0;
   font-size: 10px;
@@ -1658,11 +1691,13 @@ kbd {
   margin-top: 19px;
 }
 /* The pad bindings: a two-column table, read in pairs (RB / RT, LB / LT, …). */
+.rules-help,
 .pad-help {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+.rules-help h3,
 .pad-help h3 {
   font-size: 9px;
   letter-spacing: 0.13em;
@@ -1670,6 +1705,7 @@ kbd {
   color: var(--violet);
   font-weight: 600;
 }
+.rules-help p,
 .pad-help-lead,
 .pad-help-foot {
   margin: 0;
@@ -1679,6 +1715,9 @@ kbd {
 }
 .pad-help-foot {
   margin-top: 10px;
+}
+.rules-help .key-list {
+  margin: 8px 0;
 }
 .pad-table {
   display: grid;

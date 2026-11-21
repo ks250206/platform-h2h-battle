@@ -1,5 +1,7 @@
 import { describe, expect, test, vi } from "vite-plus/test";
 import { DEFAULT_MATCH_OPTIONS } from "../src/game/match";
+
+const ALL = { collapse: true, safeZone: true, bombs: true, wind: true };
 import {
   assignDevice,
   createMatchStore,
@@ -30,6 +32,8 @@ describe("match options store", () => {
       stocks: 3,
       difficulty: "normal",
       overrides: {},
+      time: "standard",
+      gimmicks: ALL,
     });
   });
 
@@ -50,12 +54,16 @@ describe("match options store", () => {
       stocks: 1,
       difficulty: "hard",
       overrides: { 2: "easy" },
+      time: "standard",
+      gimmicks: ALL,
     });
     expect(createMatchStore(storage).get()).toEqual({
       controls: { 0: "keyboard" },
       stocks: 1,
       difficulty: "hard",
       overrides: { 2: "easy" },
+      time: "standard",
+      gimmicks: ALL,
     });
   });
 
@@ -72,6 +80,8 @@ describe("match options store", () => {
       stocks: 3,
       difficulty: "hard",
       overrides: {},
+      time: "standard",
+      gimmicks: ALL,
     });
     const other = JSON.stringify({ stocks: 2, difficulty: "insane", overrides: { 1: "mega" } });
     expect(loadMatchOptions(memoryStorage(other))).toEqual({
@@ -79,6 +89,8 @@ describe("match options store", () => {
       stocks: 2,
       difficulty: "normal",
       overrides: {},
+      time: "standard",
+      gimmicks: ALL,
     });
     const store = createMatchStore(memoryStorage());
     store.set({ stocks: 0 });
@@ -115,6 +127,7 @@ describe("match options store", () => {
     const options = store.get();
     options.stocks = 5;
     options.overrides[1] = "hard";
+    options.gimmicks.bombs = false;
     expect(store.get()).toEqual(DEFAULT_MATCH_OPTIONS);
   });
 
