@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
+import { DEFAULT_LOADOUTS } from "../src/game/characters";
 import { BattleEngine, canStandAt, matchTimeLimit } from "../src/game/engine";
 import { DEFAULT_MATCH_OPTIONS, sanitizeMatchOptions, type MatchOptions } from "../src/game/match";
 import {
@@ -25,6 +26,7 @@ import {
   type Gimmicks,
   type StageInfo,
 } from "../src/game/rules";
+import { stageInfoFor } from "../src/game/stages";
 import { RULES } from "../src/game/tuning";
 import { emptyInput, type MatchMode } from "../src/game/types";
 
@@ -190,6 +192,8 @@ describe("storage", () => {
       overrides: { 1: "hard" },
       time: "standard",
       gimmicks: ALL_GIMMICKS,
+      loadouts: DEFAULT_LOADOUTS,
+      stage: "garden",
     });
     expect(presetOf(options)).toBe("standard");
     expect(presetOf(loadMatchOptions(memoryStorage(JSON.stringify({ stocks: 1 }))))).toBe("custom");
@@ -561,5 +565,30 @@ describe("stage constraints in the engine", () => {
     const engine = new BattleEngine(5);
     engine.start("training", { gimmicks: ALL_GIMMICKS }, holeStage);
     expect(engine.state.rules.gimmicks).toEqual(NO_GIMMICKS);
+  });
+
+  test("built-in stages derive their gimmick locks automatically", () => {
+    expect(stageInfoFor("garden").constraints).toEqual({});
+    expect(stageInfoFor("ruins").constraints).toEqual({});
+    expect(Object.keys(stageInfoFor("bridges").constraints).sort()).toEqual(["collapse", "wind"]);
+    expect(Object.keys(stageInfoFor("factory").constraints)).toEqual(["wind"]);
+
+    const engine = new BattleEngine(5);
+    engine.start("duel", { stage: "bridges", gimmicks: ALL_GIMMICKS });
+    expect(engine.state.rules.gimmicks).toEqual({
+      collapse: false,
+      safeZone: true,
+      bombs: true,
+      wind: false,
+    });
+    expect(engine.state.rules.locked.collapse?.forced).toBe(false);
+    expect(engine.state.rules.locked.wind?.forced).toBe(false);
+    expect(engine.state.rules.notes.map((n) => n.gimmick).sort()).toEqual(["collapse", "wind"]);
+
+    engine.start("duel", { stage: "factory", gimmicks: ALL_GIMMICKS });
+    expect(engine.state.rules.gimmicks.wind).toBe(false);
+    expect(engine.state.rules.gimmicks.collapse).toBe(true);
+    expect(engine.state.rules.locked.wind?.forced).toBe(false);
+    expect(engine.state.rules.locked.collapse).toBeUndefined();
   });
 });

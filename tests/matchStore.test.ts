@@ -39,6 +39,7 @@ describe("match options store", () => {
       time: "standard",
       gimmicks: ALL,
       loadouts,
+      stage: "garden",
     });
   });
 
@@ -68,6 +69,7 @@ describe("match options store", () => {
         loadouts[2],
         loadouts[3],
       ],
+      stage: "garden",
     };
     expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!)).toEqual(saved);
     expect(createMatchStore(storage).get()).toEqual(saved);
@@ -89,6 +91,7 @@ describe("match options store", () => {
       time: "standard",
       gimmicks: ALL,
       loadouts,
+      stage: "garden",
     });
     const other = JSON.stringify({ stocks: 2, difficulty: "insane", overrides: { 1: "mega" } });
     expect(loadMatchOptions(memoryStorage(other))).toEqual({
@@ -99,10 +102,44 @@ describe("match options store", () => {
       time: "standard",
       gimmicks: ALL,
       loadouts,
+      stage: "garden",
     });
     const store = createMatchStore(memoryStorage());
     store.set({ stocks: 0 });
     expect(store.get().stocks).toBe(3);
+  });
+
+  test("the stage is remembered, and a missing or unknown one is the garden", () => {
+    const storage = memoryStorage();
+    const store = createMatchStore(storage);
+    expect(store.get().stage).toBe("garden");
+    store.set({ stage: "bridges" });
+    expect(store.get().stage).toBe("bridges");
+    expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!).stage).toBe("bridges");
+    // Another visit, and changing something else, keep it.
+    const again = createMatchStore(storage);
+    expect(again.get().stage).toBe("bridges");
+    again.set({ stocks: 2 });
+    expect(again.get()).toMatchObject({ stage: "bridges", stocks: 2 });
+    // Options saved before stages existed, or with a stage that is not one.
+    const legacy = JSON.stringify({ controls: { 0: "pad1" }, stocks: 4, difficulty: "easy" });
+    expect(loadMatchOptions(memoryStorage(legacy))).toEqual({
+      controls: { 0: "pad1" },
+      stocks: 4,
+      difficulty: "easy",
+      overrides: {},
+      time: "standard",
+      gimmicks: ALL,
+      loadouts,
+      stage: "garden",
+    });
+    for (const stage of ["volcano", "", 2, null, ["ruins"]])
+      expect(loadMatchOptions(memoryStorage(JSON.stringify({ stage }))).stage).toBe("garden");
+    again.set({ stage: "nowhere" as never });
+    expect(again.get().stage).toBe("garden");
+    // What a match is started with carries the stage through the pad substitution.
+    again.set({ stage: "factory" });
+    expect(playableOptions(again.get(), 2, () => false).options.stage).toBe("factory");
   });
 
   test("overrides for ids outside 1-3 are dropped", () => {

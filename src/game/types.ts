@@ -1,6 +1,7 @@
 import type { AccessoryId, PaletteId, Species } from "./characters";
 import type { AiLevel, MatchOptions } from "./match";
 import type { EffectiveRules } from "./rules";
+import type { StageId } from "./stages";
 
 export type { Species } from "./characters";
 
@@ -123,6 +124,9 @@ export interface BufferedInput {
 }
 
 export interface ArenaState {
+  /** The stage being fought on; with `halfSize` it decides where there is floor (stages.ts). */
+  stageId: StageId;
+  /** Half the side of the square that has not collapsed yet. */
   halfSize: number;
   initialHalfSize: number;
   tileSize: number;

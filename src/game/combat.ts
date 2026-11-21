@@ -1,3 +1,4 @@
+import { canStandAtStage } from "./stages";
 import { ATTACKS, RULES } from "./tuning";
 import type { Fighter, GameState, Vec2 } from "./types";
 
@@ -26,8 +27,9 @@ export function directionInfluence(velocity: { x: number; y: number; z: number }
   };
 }
 
+/** Floor under (x, z) right now: the stage's tiles that the collapse has not taken (stages.ts). */
 export function canStandAt(state: GameState, x: number, z: number): boolean {
-  return Math.abs(x) <= state.arena.halfSize && Math.abs(z) <= state.arena.halfSize;
+  return canStandAtStage(state.arena.stageId, x, z, state.arena.halfSize);
 }
 
 export function isInvulnerable(f: Fighter): boolean {

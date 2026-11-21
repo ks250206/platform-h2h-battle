@@ -497,3 +497,124 @@ test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", asyn
   await page.screenshot({ path: "test-results/duel-respawn.png" });
   expect(errors).toEqual([]);
 });
+
+test("the stage selector swaps the 3D stage on the title, persists, and the match is fought there", async ({
+  page,
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
+  const errors = await load(page);
+  const canvas = page.locator("#arena canvas");
+  const pick = (stage: string) => page.locator(`button[data-stage="${stage}"]`);
+  const shown = () => page.evaluate(() => window.__BRAMBLE__!.snapshot().arena.stageId);
+  // The garden by default: selected, named beside the preview, and the one on show.
+  await expect(pick("garden")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".caption-title")).toHaveText("THE FLOATING GARDEN");
+  await expect(canvas).toHaveAttribute("data-stage", "garden");
+  expect(await shown()).toBe("garden");
+
+  // Each stage: the title's state, the 3D floor and the card's words follow the click at once.
+  const stages = [
+    ["ruins", "SUNKEN RUINS", "中央穴の遺跡"],
+    ["bridges", "SKY BRIDGES", "細い橋の回廊"],
+    ["factory", "CONVEYOR WORKS", "コンベア工場"],
+  ] as const;
+  for (const [id, title, name] of stages) {
+    await pick(id).click();
+    await expect(pick(id)).toHaveAttribute("aria-pressed", "true");
+    await expect(pick("garden")).toHaveAttribute("aria-pressed", "false");
+    await expect(canvas).toHaveAttribute("data-stage", id);
+    expect(await shown()).toBe(id);
+    expect(await page.evaluate(() => window.__BRAMBLE__!.snapshot().phase)).toBe("menu");
+    const card = page.locator(".arena-caption");
+    await expect(card.locator(".caption-title")).toHaveText(title);
+    await expect(card.locator(".caption-name")).toContainText(name);
+    // What fighting there is about, and what each gimmick does there, before the match starts.
+    await expect(card.locator(".stage-summary")).not.toBeEmpty();
+    await expect(card.locator(".stage-rules")).not.toBeEmpty();
+    await expect(card.locator(".gimmick-chip")).toHaveCount(5);
+    await page.screenshot({ path: `test-results/title-stage-${id}.png` });
+  }
+  await expect(page.locator('.arena-caption .gimmick-chip[data-state="on"]')).toContainText([
+    "コンベア",
+  ]);
+
+  // With the keyboard: focus a stage button and press Enter.
+  await pick("bridges").focus();
+  await page.keyboard.press("Enter");
+  await expect(pick("bridges")).toHaveAttribute("aria-pressed", "true");
+  expect(await shown()).toBe("bridges");
+  await expect(page.locator('.arena-caption .gimmick-chip[data-state="off"]')).toContainText([
+    "崩落",
+    "風",
+    "コンベア",
+  ]);
+
+  // Remembered across a reload, and shown again straight away.
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await expect(pick("bridges")).toHaveAttribute("aria-pressed", "true");
+  await expect(canvas).toHaveAttribute("data-stage", "bridges");
+  expect(
+    await page.evaluate(() => JSON.parse(localStorage.getItem("bramble.match.v1") ?? "{}").stage),
+  ).toBe("bridges");
+
+  // The match is fought on it: fighters start on the two far islands, over floor.
+  await start(page, "duel");
+  const state = await page.evaluate(() => window.__BRAMBLE__!.snapshot());
+  expect(state.arena.stageId).toBe("bridges");
+  expect(state.options.stage).toBe("bridges");
+  await expect(page.locator(".arena-status")).toHaveText("SKY BRIDGES");
+  await page.screenshot({ path: "test-results/duel-bridges.png" });
+
+  // A rematch and the way back to the title keep the stage.
+  await page.keyboard.press("Escape");
+  await page.locator('.pause-screen [data-action="restart"]').click();
+  await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "countdown");
+  expect(await shown()).toBe("bridges");
+  await page.keyboard.press("Escape");
+  await page.locator('.pause-screen [data-action="menu"]').click();
+  await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "menu");
+  expect(await shown()).toBe("bridges");
+  await expect(pick("bridges")).toHaveAttribute("aria-pressed", "true");
+
+  // The help dialog describes all four stages.
+  await page.getByRole("button", { name: "操作方法を表示" }).click();
+  await expect(page.locator(".help-dialog .stage-help-item")).toHaveCount(4);
+  await expect(page.locator('.help-dialog [data-stage-help="factory"]')).toContainText(
+    "コンベア工場",
+  );
+  await page.keyboard.press("Escape");
+  expect(errors).toEqual([]);
+});
+
+test("on a phone the stage is picked by touch and described under its buttons", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+  const errors = await load(page);
+  await page.locator('button[data-stage="factory"]').tap();
+  await expect(page.locator('button[data-stage="factory"]')).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(await page.evaluate(() => window.__BRAMBLE__!.snapshot().arena.stageId)).toBe("factory");
+  // No room for the card beside the preview: the same words sit in the match options.
+  await expect(page.locator(".arena-caption")).toBeHidden();
+  const detail = page.locator(".stage-detail");
+  await expect(detail).toBeVisible();
+  await expect(detail.locator(".stage-detail-name strong")).toHaveText("コンベア工場");
+  await expect(detail.locator(".stage-summary")).toContainText("コンベア");
+  await expect(detail.locator(".stage-rules")).toContainText("崩落");
+  await expect(page.locator('[data-action="start"]')).toBeInViewport();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  expect(overflow).toBe(false);
+  await page.screenshot({ path: "test-results/title-mobile-stage.png" });
+  expect(errors).toEqual([]);
+  await context.close();
+});

@@ -7,7 +7,8 @@ import { createSettingsStore, defaultSettings, detectTouch } from "./game/settin
 import { createMatchStore, playableOptions } from "./game/matchStore";
 import type { MatchOptions } from "./game/match";
 import { PadHub } from "./game/pads";
-import { FLOATING_GARDEN, type StageInfo } from "./game/rules";
+import type { StageInfo } from "./game/rules";
+import { stageInfoFor } from "./game/stages";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
 import { PadMenu } from "./ui/padMenu";
@@ -30,7 +31,7 @@ const match = createMatchStore();
 let matchOptions: MatchOptions = match.get();
 const pads = new PadHub();
 /** The stage matches run on; the title explains its gimmick constraints before the start. */
-const currentStage = (): StageInfo => FLOATING_GARDEN;
+const currentStage = (): StageInfo => stageInfoFor(match.get().stage);
 /** Starts (or restarts) a match with what can play right now. */
 const startMatch = (mode: MatchMode, options: MatchOptions) => {
   selectedMode = mode;

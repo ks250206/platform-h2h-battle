@@ -15,6 +15,7 @@ import {
   type Gimmicks,
   type TimeRule,
 } from "./rules";
+import { DEFAULT_STAGE, isStageId, type StageId } from "./stages";
 
 /** How well a CPU fighter plays. */
 export type AiLevel = "easy" | "normal" | "hard";
@@ -57,6 +58,8 @@ export interface MatchOptions {
    * may share one, and none of it changes how a fighter plays.
    */
   loadouts: Loadout[];
+  /** Where the match is fought (see stages.ts). Every mode, training included, uses it. */
+  stage: StageId;
 }
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
@@ -65,6 +68,7 @@ export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
   overrides: {},
   ...presetRules(DEFAULT_PRESET),
   loadouts: DEFAULT_LOADOUTS.map((loadout) => ({ ...loadout })),
+  stage: DEFAULT_STAGE,
 };
 
 /** A deep copy: changing it never changes `options`. */
@@ -152,5 +156,7 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
     time: isTimeRule(source.time) ? source.time : DEFAULT_MATCH_OPTIONS.time,
     gimmicks: sanitizeGimmicks(source.gimmicks),
     loadouts: sanitizeLoadouts(source.loadouts),
+    // Options saved before stages existed have no stage: they play on the garden, as they did.
+    stage: isStageId(source.stage) ? source.stage : DEFAULT_MATCH_OPTIONS.stage,
   };
 }

@@ -237,6 +237,7 @@ describe("saved looks", () => {
       overrides: { 1: "easy" },
     });
     expect(loadMatchOptions(memoryStorage(legacy))).toEqual({
+      ...DEFAULT_MATCH_OPTIONS,
       controls: { 0: "pad1", 1: "keyboard" },
       stocks: 5,
       difficulty: "hard",
@@ -352,6 +353,9 @@ describe("looks are independent of who plays and how strong the CPUs are", () =>
     stocks: 4,
     difficulty: "hard" as const,
     overrides: { 2: "easy" as const },
+    time: DEFAULT_MATCH_OPTIONS.time,
+    gimmicks: DEFAULT_MATCH_OPTIONS.gimmicks,
+    stage: DEFAULT_MATCH_OPTIONS.stage,
   };
 
   test("changing a look changes nothing else", () => {
@@ -367,12 +371,7 @@ describe("looks are independent of who plays and how strong the CPUs are", () =>
           expect(loadouts[slot]).toEqual(look(species, "berry", accessory));
         }
     const { loadouts: _saved, ...saved } = JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!);
-    expect(saved).toEqual({
-      controls: { 0: "pad2", 1: "keyboard", 3: "pad1" },
-      stocks: 4,
-      difficulty: "hard",
-      overrides: { 2: "easy" },
-    });
+    expect(saved).toEqual(settled);
   });
 
   test("a look that is already chosen, or a slot that does not exist, changes nothing at all", () => {
