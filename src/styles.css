@@ -3268,14 +3268,14 @@ kbd {
   }
   .fighter-card {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    column-gap: 10px;
-    row-gap: 5px;
+    column-gap: 6px;
+    row-gap: 4px;
     flex: 1 1 0;
     width: auto;
     min-width: 0;
-    padding: 7px 9px 7px 12px;
+    padding: 7px 9px 7px 11px;
     border-radius: 10px;
   }
   .fighter-card:first-child {
@@ -3290,14 +3290,14 @@ kbd {
   .fighter-tags {
     grid-column: 1;
     grid-row: 1;
-    padding-left: 3px;
+    padding-left: 2px;
   }
   .fighter-tag {
     font-size: 8px;
     letter-spacing: 0.08em;
   }
   .fighter-name {
-    grid-column: 2 / 4;
+    grid-column: 2;
     grid-row: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3308,14 +3308,14 @@ kbd {
     grid-column: 1;
     grid-row: 2;
     margin: 0;
-    padding-left: 1px;
+    padding-left: 2px;
   }
   .fighter-damage,
   [data-mode="rumble"] .fighter-damage {
-    grid-column: 4;
+    grid-column: 3;
     grid-row: 1 / span 2;
     margin-left: 2px;
-    font-size: 22px;
+    font-size: 21px;
     font-weight: 750;
   }
   .fighter-damage small {
@@ -3323,12 +3323,15 @@ kbd {
     margin-left: 1px;
   }
   .stamina-track {
-    grid-column: 2;
-    grid-row: 2;
+    grid-column: 1 / -1;
+    grid-row: 3;
+    height: 4px;
+    margin-top: 1px;
   }
   .air-tokens {
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 2;
+    justify-self: end;
     gap: 2px;
   }
   .air-tokens > span {
@@ -3351,7 +3354,7 @@ kbd {
   .fighter-status:is(.ukemi, .knockdown),
   [data-mode="rumble"] .fighter-card:is(.eliminated, .respawning) .fighter-status {
     display: block;
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 2;
     justify-self: end;
     font-size: 7px;
@@ -3363,7 +3366,7 @@ kbd {
   }
   .zone-compass {
     grid-column: 1 / -1;
-    grid-row: 3;
+    grid-row: 4;
   }
   /* Rumble: two by two. */
   [data-mode="rumble"] .fighter-cards {
