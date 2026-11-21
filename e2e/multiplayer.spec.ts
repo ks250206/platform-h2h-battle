@@ -28,8 +28,12 @@ interface FakePad {
 
 const A = 0;
 const B = 1;
+const Y = 3;
+const LB = 4;
 const RB = 5;
 const START = 9;
+const DOWN = 13;
+const RIGHT = 15;
 
 async function installPads(page: Page) {
   await page.addInitScript(() => {
@@ -240,5 +244,101 @@ test("pads join on the title and a keyboard player and a pad player share a duel
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
   await button(page, 1, B, false);
   await page.screenshot({ path: "test-results/multiplayer-duel.png" });
+  expect(errors).toEqual([]);
+});
+
+test("a pad alone picks a look: Y opens, the d-pad and A choose, B cancels, Start confirms", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await installPads(page);
+  await page.goto("./");
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await page.evaluate(() => window.__padConnect(0));
+  await frames(page, 5);
+  /** One full press: the menu reads the pads once a frame. */
+  const press = async (which: number) => {
+    await button(page, 0, which, true);
+    await frames(page, 4);
+    await button(page, 0, which, false);
+    await frames(page, 4);
+  };
+  const saved = () =>
+    page.evaluate(() => JSON.parse(localStorage.getItem("bramble.match.v1") ?? "{}"));
+  const focused = () =>
+    page.evaluate(() => ({ ...(document.activeElement as HTMLElement | null)?.dataset }));
+  const dialog = page.locator(".character-dialog");
+  const original = { species: "rabbit", palette: "sky", accessory: "none" };
+
+  // The pad joins slot 1; Y opens the picker on the fighter it plays.
+  await press(A);
+  await expect(device(page, 1)).toHaveValue("pad1");
+  await expect(page.locator(".join-hint")).toContainText("見た目");
+  await press(Y);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('[data-customize-slot="1"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.locator(".character-pad-hint")).toBeVisible();
+  await expect(dialog.locator('[data-species="rabbit"]')).toBeFocused();
+
+  // Right and A: the next animal. Down reaches the colours, then the accessories; A takes the
+  // focused one each time, and the fighter in the arena follows.
+  await press(RIGHT);
+  await press(A);
+  await expect(dialog.locator('[data-species="bear"]')).toHaveAttribute("aria-pressed", "true");
+  await press(DOWN);
+  await press(RIGHT);
+  const palette = (await focused()).palette;
+  expect(palette).toBeTruthy();
+  await press(A);
+  let accessory: string | undefined;
+  for (let step = 0; step < 5 && !accessory; step++) {
+    await press(DOWN);
+    accessory = (await focused()).accessory;
+  }
+  expect(accessory).toBeTruthy();
+  await press(RIGHT);
+  accessory = (await focused()).accessory;
+  await press(A);
+  const chosen = { species: "bear", palette, accessory };
+  expect((await saved()).loadouts[1]).toEqual(chosen);
+  await page.waitForFunction(
+    (look) => {
+      const f = window.__BRAMBLE__!.snapshot().fighters[1]!;
+      return (
+        f.species === look.species && f.palette === look.palette && f.accessory === look.accessory
+      );
+    },
+    chosen as { species: string; palette: string; accessory: string },
+  );
+
+  // B is "back": the look from before the picker opened returns, and the pad still plays slot 1.
+  await press(B);
+  await expect(dialog).toBeHidden();
+  expect((await saved()).loadouts[1]).toEqual(original);
+  expect((await saved()).controls).toEqual({ 0: "keyboard", 1: "pad1" });
+  expect(await phase(page)).toBe("menu");
+
+  // Again, and this time Start keeps it. LB moves to the other slot's tab on the way.
+  await press(Y);
+  await expect(dialog).toBeVisible();
+  await press(RIGHT);
+  await press(A);
+  await press(LB);
+  await expect(dialog.locator('[data-customize-slot="0"]')).toHaveAttribute("aria-pressed", "true");
+  await press(START);
+  await expect(dialog).toBeHidden();
+  expect(await phase(page)).toBe("menu");
+  expect((await saved()).loadouts[1]).toEqual({ ...original, species: "bear" });
+  expect((await saved()).controls).toEqual({ 0: "keyboard", 1: "pad1" });
+
+  // Start on the title starts the duel: the pad plays the bear it chose, as P2.
+  await press(START);
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const fighters = await page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters);
+  expect(fighters[1]).toMatchObject({ name: "モカ", species: "bear", human: true, player: 2 });
+  expect(fighters[0]).toMatchObject({ name: "コハク", species: "fox", human: true, player: 1 });
+  await expect(page.locator(".fighter-card .fighter-tag")).toHaveText(["P1", "P2"]);
   expect(errors).toEqual([]);
 });

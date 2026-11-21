@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vite-plus/test";
+import { DEFAULT_LOADOUTS } from "../src/game/characters";
 import { DEFAULT_MATCH_OPTIONS } from "../src/game/match";
 import {
   assignDevice,
@@ -11,6 +12,9 @@ import {
   saveMatchOptions,
   type MatchStorage,
 } from "../src/game/matchStore";
+
+/** The original cast, which every slot wears until a look is chosen. */
+const loadouts = DEFAULT_LOADOUTS.map((loadout) => ({ ...loadout }));
 
 function memoryStorage(initial?: string): MatchStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -30,6 +34,7 @@ describe("match options store", () => {
       stocks: 3,
       difficulty: "normal",
       overrides: {},
+      loadouts,
     });
   });
 
@@ -45,18 +50,21 @@ describe("match options store", () => {
     const storage = memoryStorage();
     const store = createMatchStore(storage);
     store.set({ stocks: 1, difficulty: "hard", overrides: { 2: "easy" } });
-    expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!)).toEqual({
+    store.setLoadout(1, { species: "bear", palette: "mint", accessory: "crown" });
+    const saved = {
       controls: { 0: "keyboard" },
       stocks: 1,
       difficulty: "hard",
       overrides: { 2: "easy" },
-    });
-    expect(createMatchStore(storage).get()).toEqual({
-      controls: { 0: "keyboard" },
-      stocks: 1,
-      difficulty: "hard",
-      overrides: { 2: "easy" },
-    });
+      loadouts: [
+        loadouts[0],
+        { species: "bear", palette: "mint", accessory: "crown" },
+        loadouts[2],
+        loadouts[3],
+      ],
+    };
+    expect(JSON.parse(storage.data.get(MATCH_STORAGE_KEY)!)).toEqual(saved);
+    expect(createMatchStore(storage).get()).toEqual(saved);
   });
 
   test("corrupt JSON falls back to the defaults", () => {
@@ -72,6 +80,7 @@ describe("match options store", () => {
       stocks: 3,
       difficulty: "hard",
       overrides: {},
+      loadouts,
     });
     const other = JSON.stringify({ stocks: 2, difficulty: "insane", overrides: { 1: "mega" } });
     expect(loadMatchOptions(memoryStorage(other))).toEqual({
@@ -79,6 +88,7 @@ describe("match options store", () => {
       stocks: 2,
       difficulty: "normal",
       overrides: {},
+      loadouts,
     });
     const store = createMatchStore(memoryStorage());
     store.set({ stocks: 0 });

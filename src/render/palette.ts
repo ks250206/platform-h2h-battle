@@ -95,5 +95,9 @@ export const PALETTE = {
     shadow: 0x3d2f8f,
     chargeHalo: 0xffb300,
     pointer: 0xff5a4d,
+    /** The dark rim that keeps a slot's shape readable on the pale floor and against the sky. */
+    markerInk: 0x2a2550,
+    /** Fixed tones of the accessories; their cloth takes the fighter's team colour. */
+    accessory: { ruby: 0xff3d68, lens: 0xa8ecff, leaf: 0x3fc47f },
   },
 } as const;

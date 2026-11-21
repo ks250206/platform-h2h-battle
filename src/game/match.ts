@@ -1,5 +1,13 @@
 // Match options the player chooses before a fight. Importable in node (tests): no DOM access.
 
+import {
+  DEFAULT_LOADOUTS,
+  LOADOUT_SLOTS,
+  defaultLoadout,
+  sanitizeLoadouts,
+  type Loadout,
+} from "./characters";
+
 /** How well a CPU fighter plays. */
 export type AiLevel = "easy" | "normal" | "hard";
 export const AI_LEVEL_IDS: readonly AiLevel[] = ["easy", "normal", "hard"];
@@ -17,7 +25,7 @@ export const CONTROL_DEVICES: readonly ControlDevice[] = [
   "pad4",
 ];
 /** Fighter slots a match can have: 2 in a duel, 4 in a rumble. */
-export const MAX_FIGHTERS = 4;
+export const MAX_FIGHTERS = LOADOUT_SLOTS;
 
 export interface MatchOptions {
   /**
@@ -31,6 +39,12 @@ export interface MatchOptions {
   difficulty: AiLevel;
   /** Per-CPU strength keyed by fighter id (1-3). A missing id follows `difficulty`. */
   overrides: Partial<Record<number, AiLevel>>;
+  /**
+   * What each slot (0-3) looks like: animal, colours and accessory. Always four entries. It is
+   * independent of everything above: a look belongs to its slot whoever plays it, any two slots
+   * may share one, and none of it changes how a fighter plays.
+   */
+  loadouts: Loadout[];
 }
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
@@ -38,7 +52,13 @@ export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
   stocks: 3,
   difficulty: "normal",
   overrides: {},
+  loadouts: DEFAULT_LOADOUTS.map((loadout) => ({ ...loadout })),
 };
+
+/** The look of slot `fighterId`; a slot the options somehow lack wears its default. */
+export function loadoutFor(options: Pick<MatchOptions, "loadouts">, fighterId: number): Loadout {
+  return options.loadouts[fighterId] ?? defaultLoadout(fighterId);
+}
 
 /** The strength a given CPU fighter plays at. */
 export function levelFor(options: MatchOptions, fighterId: number): AiLevel {
@@ -106,5 +126,6 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
       : DEFAULT_MATCH_OPTIONS.stocks,
     difficulty: isLevel(source.difficulty) ? source.difficulty : DEFAULT_MATCH_OPTIONS.difficulty,
     overrides,
+    loadouts: sanitizeLoadouts(source.loadouts),
   };
 }

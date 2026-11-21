@@ -14,6 +14,13 @@ import { FxaaEffect, SsaoEffect } from "@pixi/3d/extras";
 import { Application, Container, Graphics, RendererType, Sprite, Text, Texture } from "pixi.js";
 import type { WebGLRenderer } from "pixi.js";
 import { CAMERA_FORWARD, CAMERA_OFFSET, CAMERA_RIGHT } from "../game/coordinates";
+import {
+  countHumans,
+  fighterTag,
+  sharesName,
+  SLOT_SHAPE_POINTS,
+  slotShape,
+} from "../game/identity";
 import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
@@ -22,7 +29,7 @@ import { norm, qLook } from "./math3";
 import { FighterMotion } from "./motion";
 import { PALETTE } from "./palette";
 import type { MotionEvent } from "./motion";
-import { applyFrame, createFighterRig, destroyFighterRig, RigAssets } from "./rig";
+import { applyFrame, createFighterRig, destroyFighterRig, rigIdentity, RigAssets } from "./rig";
 import type { FighterRig } from "./rig";
 import { SwordTrail } from "./trail";
 
@@ -80,6 +87,32 @@ const FOLLOW_MARGIN_Y = 2.2;
 const FOLLOW_USABLE_WIDTH = 0.84;
 /** Fighter facing (0 is +Z) that looks straight back at the camera. */
 const FACING_CAMERA = Math.atan2(-CAMERA_FORWARD.x, -CAMERA_FORWARD.z);
+/** Where the camera is, for the slot markers that always face it. */
+const MARKER_CAMERA = { yaw: FACING_CAMERA, pitch: Math.asin(CAMERA_SIN) };
+/**
+ * Title screen close-up of the fighter whose look is being chosen: the share of the view's height
+ * its body takes on a wide screen, and the floor width a narrow one must still show around it.
+ */
+const SPOTLIGHT_HEIGHT_SHARE = 0.3;
+const SPOTLIGHT_MIN_WIDTH = 4.2;
+/**
+ * A standing fighter, ear tips included, and the height the close-up centres on: above the
+ * middle, which leaves room over the head for the label and keeps it clear of the top bar.
+ */
+const FIGHTER_HEIGHT = 2.1;
+const SPOTLIGHT_AIM = 1.4;
+/** The close-up's pan where the look picker docks along the bottom of a narrow screen. */
+const SPOTLIGHT_PAN_UP = -0.23;
+/**
+ * Height of the label over a fighter. A human's sits above the slot marker floating over its head
+ * (`rig.ts`), with a few pixels between the two for the stamina bar.
+ */
+const LABEL_HEIGHT = 2.65;
+const LABEL_HEIGHT_MARKED = 2.9;
+const LABEL_MARKER_GAP = 10;
+/** Half the size, in pixels, of the slot shape drawn in the label over a fighter. */
+const LABEL_GLYPH = 5;
+const LABEL_GLYPH_GAP = 5;
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
 type Vec3Like = { x: number; y: number; z: number };
 
@@ -122,6 +155,9 @@ interface FighterView {
   label: Text;
   stamina: Graphics;
   identity: string;
+  /** Title screen: when a new look replaced the old one (a little pop), and the close-up's share. */
+  changedAt: number;
+  featured: number;
 }
 interface BombView {
   root: Container3D;
@@ -223,6 +259,9 @@ export class ArenaRenderer {
   private lastElapsed = 0;
   /** Humans in the match being drawn: decides between "YOU" and player numbers. */
   private humanCount = 1;
+  /** Title screen: the slot shown in close-up while its look is chosen, or null for the line-up. */
+  private spotlight: number | null = null;
+  private spotlightSince = 0;
   private destroyed = false;
   private readonly software: boolean;
   private readonly sun: DirectionalLight;
@@ -612,12 +651,21 @@ export class ArenaRenderer {
   }
 
   /**
+   * Title screen only: frames `slot` in close-up (and turns it slowly) while its look is being
+   * chosen, so the finished fighter can be judged before the match. Null returns to the line-up.
+   */
+  setSpotlight(slot: number | null): void {
+    if (slot === this.spotlight) return;
+    this.spotlight = slot;
+    this.spotlightSince = this.time;
+  }
+
+  /**
    * What floats over a human: "YOU" for a lone player, the player number when several share the
    * screen. Empty for a CPU.
    */
   private playerTag(f: Fighter): string {
-    if (!f.human) return "";
-    return this.humanCount > 1 ? `P${f.player ?? 1}` : "YOU";
+    return f.human ? fighterTag(f, this.humanCount) : "";
   }
 
   /** A lone player is the sunny one; several each wear their fighter's colour. */
@@ -625,12 +673,26 @@ export class ArenaRenderer {
     return this.humanCount > 1 ? f.color : PALETTE.label.you;
   }
 
+  /**
+   * The words over a fighter. A human is its tag (YOU, P1...). A CPU is its name and damage, or
+   * its tag (CPU 02) when another fighter has the same name. The title screen shows both, so each
+   * row of the menu can be matched to its fighter.
+   */
+  private labelText(f: Fighter, state: GameState): string {
+    const tag = fighterTag(f, this.humanCount);
+    if (state.phase === "menu") return `${tag}  ${f.name}`;
+    if (f.human) return tag;
+    return `${sharesName(f, state.fighters) ? tag : f.name}  ${Math.round(f.damage)}%`;
+  }
+
   private fighterView(f: Fighter): FighterView {
     const tag = this.playerTag(f);
-    const identity = `${f.species}/${f.color}/${tag}`;
+    // The look (animal, colours, accessory, slot shape) and whose it is.
+    const identity = `${rigIdentity(f)}/${tag}`;
     let view = this.fighters.get(f.id);
-    if (view && view.identity !== identity) {
-      this.destroyFighter(view);
+    const previous = view && view.identity !== identity ? view : undefined;
+    if (previous) {
+      this.destroyFighter(previous);
       this.fighters.delete(f.id);
       view = undefined;
     }
@@ -641,8 +703,10 @@ export class ArenaRenderer {
       this.scene,
       f,
       this.humanCount > 1 ? f.color : undefined,
+      MARKER_CAMERA,
     );
-    const motion = new FighterMotion();
+    // A new look on the same fighter keeps its pose: only the meshes are swapped.
+    const motion = previous?.motion ?? new FighterMotion();
     // On the pale floor a white smear would vanish: each blade trails its owner's colour.
     const trail = new SwordTrail(this.scene, f.color);
     const label = new Text({
@@ -659,7 +723,17 @@ export class ArenaRenderer {
     label.anchor.set(0.5, 1);
     const stamina = new Graphics();
     this.labels.addChild(stamina, label);
-    view = { rig, motion, trail, protected: false, label, stamina, identity };
+    view = {
+      rig,
+      motion,
+      trail,
+      protected: false,
+      label,
+      stamina,
+      identity,
+      changedAt: previous ? this.time : -Infinity,
+      featured: previous?.featured ?? 0,
+    };
     this.fighters.set(f.id, view);
     return view;
   }
@@ -682,9 +756,18 @@ export class ArenaRenderer {
     applyFrame(view.rig, frame, shown, this.time);
     view.trail.update(frame.bladeBase, frame.bladeTip, f.mode === "dead" ? 0 : frame.trail, dt);
     for (const event of frame.events) this.spawnImpact(event);
-    // Showcase pose: face the camera, each turned a little toward the other (slot 0 is on the left).
-    if (state.phase === "menu")
-      view.rig.root.rotation.y = FACING_CAMERA + (f.id === 0 ? 0.42 : -0.36);
+    if (state.phase === "menu") {
+      // Showcase pose: face the camera, each turned a little toward the middle of the line-up.
+      const across = f.x * CAMERA_RIGHT.x + f.z * CAMERA_RIGHT.z;
+      const turn = Math.max(-1, Math.min(1, -across / 2.8)) * 0.4;
+      // The fighter in close-up turns slowly from side to side, so its back can be seen too.
+      view.featured += ((this.spotlight === f.id ? 1 : 0) - view.featured) * Math.min(1, dt * 5);
+      const sway = Math.sin((this.time - this.spotlightSince) * 0.85) * 0.85;
+      view.rig.root.rotation.y = FACING_CAMERA + turn * (1 - view.featured) + sway * view.featured;
+      // A freshly chosen look arrives with a small pop.
+      const age = (this.time - view.changedAt) / 0.26;
+      view.rig.root.scale.set(age < 1 ? 1 + Math.sin(age * Math.PI) * 0.07 : 1);
+    } else if (view.rig.root.scale.x !== 1) view.rig.root.scale.set(1);
     // The blob is a stand-in for a shadow; with real shadow maps it would double up.
     // Back from a knock-out: the body blinks for as long as nothing can touch it.
     if (f.invulnerable > 1) view.protected = true;
@@ -692,30 +775,50 @@ export class ArenaRenderer {
     view.rig.squash.visible = !view.protected || Math.floor(this.time * 11) % 2 === 0;
     view.rig.shadow.visible &&= onPlatform && !this.shadowsActive;
     view.rig.footRing.visible &&= onPlatform;
+    view.rig.badge.visible &&= onPlatform;
     view.rig.heading.visible &&= onPlatform && state.phase !== "menu";
-    const point = this.view.worldToScreen({ x: f.x, y: Math.max(f.y, -1) + 2.65, z: f.z });
+    const point = this.view.worldToScreen({
+      x: f.x,
+      y: Math.max(f.y, -1) + (f.human ? LABEL_HEIGHT_MARKED : LABEL_HEIGHT),
+      z: f.z,
+    });
+    // The stamina bar hangs under the label: it goes between the label and a human's marker.
+    if (point && f.human) point.y -= state.phase === "menu" ? 3 : LABEL_MARKER_GAP;
     const labelVisible = f.mode !== "dead" && point !== null;
     view.label.visible = labelVisible;
     view.stamina.visible = labelVisible;
     if (point) {
-      view.label.position.set(point.x, point.y);
-      view.label.text = this.playerTag(f) || `${f.name}  ${Math.round(f.damage)}%`;
-      view.label.style.fill =
+      view.label.text = this.labelText(f, state);
+      const fill =
         f.outsideTime > 0.5
           ? PALETTE.label.outside
           : f.human
             ? this.tagColor(f)
             : PALETTE.label.text;
+      view.label.style.fill = fill;
+      // The slot's shape leads the words, drawn in 2D so it stays sharp at any 3D resolution:
+      // with the same animal in the same colours, shape and tag still say who is who.
+      const lead = LABEL_GLYPH * 2 + LABEL_GLYPH_GAP;
+      const left = point.x - (lead + view.label.width) / 2;
+      const middle = point.y - view.label.height / 2;
+      view.label.position.set(left + lead + view.label.width / 2, point.y);
       view.stamina
         .clear()
         .roundRect(
-          point.x - view.label.width / 2 - 6,
+          left - 6,
           point.y - view.label.height - 4,
-          view.label.width + 12,
+          lead + view.label.width + 12,
           view.label.height + 8,
           4,
         )
-        .fill({ color: PALETTE.label.ink, alpha: 0.9 });
+        .fill({ color: PALETTE.label.ink, alpha: 0.9 })
+        .poly(
+          SLOT_SHAPE_POINTS[slotShape(f.id)].flatMap(([x, y]) => [
+            left + LABEL_GLYPH + x * LABEL_GLYPH,
+            middle - y * LABEL_GLYPH,
+          ]),
+        )
+        .fill({ color: fill });
       if (state.phase !== "menu")
         view.stamina
           .roundRect(point.x - 19, point.y + 5, 38, 3, 1.5)
@@ -879,7 +982,15 @@ export class ArenaRenderer {
     const menu = state.phase === "menu";
     const sidePanel = this.width >= 900 || (this.height <= 570 && this.width > this.height);
     const panRight = menu && sidePanel ? MENU_PAN_RIGHT : 0;
-    const panUp = !menu ? this.hudPanUp : this.width < 650 ? MENU_PAN_UP : 0;
+    // A close-up with no room beside the menu sits above it (the look picker docks below).
+    const closeUp = menu && this.spotlight !== null && !sidePanel;
+    const panUp = !menu
+      ? this.hudPanUp
+      : closeUp
+        ? SPOTLIGHT_PAN_UP
+        : this.width < 650
+          ? MENU_PAN_UP
+          : 0;
     this.panRight += (panRight - this.panRight) * Math.min(1, dt * 4);
     this.panUp += (panUp - this.panUp) * Math.min(1, dt * 4);
     this.pullBack += ((menu ? MENU_PULL_BACK : 0) - this.pullBack) * Math.min(1, dt * 4);
@@ -903,7 +1014,7 @@ export class ArenaRenderer {
         this.fighters.delete(id);
       }
     }
-    this.humanCount = state.fighters.reduce((count, f) => count + (f.human ? 1 : 0), 0);
+    this.humanCount = countHumans(state.fighters);
     for (const fighter of state.fighters) this.updateFighter(fighter, visualDelta, state);
     const bombIds = new Set(state.bombs.map((b) => b.id));
     for (const [id, view] of this.bombs) {
@@ -980,7 +1091,25 @@ export class ArenaRenderer {
       this.settings.cameraFollow && state.phase !== "menu"
         ? state.fighters.filter((f) => f.mode !== "dead")
         : [];
-    if (subjects.length) {
+    const featured =
+      state.phase === "menu" && this.spotlight !== null
+        ? state.fighters.find((f) => f.id === this.spotlight)
+        : undefined;
+    if (featured) {
+      // The close-up of the fighter whose look is being chosen, whatever the camera setting.
+      const aspect = this.width / this.height;
+      right = featured.x * CAMERA_RIGHT.x + featured.z * CAMERA_RIGHT.z;
+      up =
+        (featured.x * CAMERA_FORWARD.x + featured.z * CAMERA_FORWARD.z) * CAMERA_SIN +
+        SPOTLIGHT_AIM * CAMERA_COS;
+      scale = Math.min(
+        this.cameraScale,
+        Math.max(
+          (FIGHTER_HEIGHT * CAMERA_COS) / (VIEW_HEIGHT * SPOTLIGHT_HEIGHT_SHARE),
+          SPOTLIGHT_MIN_WIDTH / (VIEW_HEIGHT * aspect),
+        ),
+      );
+    } else if (subjects.length) {
       let minRight = Infinity,
         maxRight = -Infinity,
         minUp = Infinity,
@@ -1017,7 +1146,7 @@ export class ArenaRenderer {
     this.focusRight += (right - this.focusRight) * drift;
     this.focusUp += (up - this.focusUp) * drift;
     // Back off quickly so nobody leaves the frame; close in gently so the view does not pump.
-    const zoom = 1 - Math.exp(-dt * (scale > this.viewScale ? 6 : 1.7));
+    const zoom = 1 - Math.exp(-dt * (scale > this.viewScale ? 6 : featured ? 5 : 1.7));
     this.viewScale += (scale - this.viewScale) * zoom;
   }
 
