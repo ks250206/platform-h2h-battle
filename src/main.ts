@@ -6,7 +6,8 @@ import { BattleAudio } from "./game/audio";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
-import type { GameState, MatchMode } from "./game/types";
+import { emptyInput } from "./game/types";
+import type { GameState, MatchMode, PlayerInput } from "./game/types";
 
 const root = document.getElementById("app")!;
 root.innerHTML =
@@ -33,6 +34,8 @@ settings.subscribe((next) => {
   renderer?.applySettings(next);
   nextFrameDue = 0;
 });
+/** Development only: freezes the real-time loop so tooling can advance frames by hand. */
+let manualStepping = false;
 
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
@@ -102,8 +105,10 @@ async function boot() {
         fps = fps ? fps + (1000 / elapsed - fps) * Math.min(1, elapsed / 500) : 1000 / elapsed;
       input.updateVisibility(engine.state);
       const control = input.sample(engine.state);
-      engine.update(dt, control);
-      renderer.render(engine.state, dt);
+      if (!manualStepping) {
+        engine.update(dt, control);
+        renderer.render(engine.state, dt);
+      }
       sound.update(engine.state);
       if (now - lastUI > 33) {
         ui.update(engine.state);
@@ -128,6 +133,14 @@ async function boot() {
               engine.state.phase = "playing";
             },
             engine,
+            renderer,
+            manual: (on: boolean) => {
+              manualStepping = on;
+            },
+            step: (dt: number, control: Partial<PlayerInput> = {}) => {
+              engine.update(dt, { ...emptyInput(), ...control });
+              renderer!.render(engine.state, dt);
+            },
           }
         : inspect,
     });
@@ -177,6 +190,9 @@ declare global {
       screen: (x: number, y: number, z: number) => { x: number; y: number } | null | undefined;
       start?: (mode: MatchMode) => void;
       engine?: BattleEngine;
+      renderer?: ArenaRenderer | null;
+      manual?: (on: boolean) => void;
+      step?: (dt: number, control?: Partial<PlayerInput>) => void;
     };
   }
 }

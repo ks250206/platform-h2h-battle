@@ -17,8 +17,12 @@ import { CAMERA_FORWARD, CAMERA_OFFSET, CAMERA_RIGHT } from "../game/coordinates
 import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
-import { createFighterMesh, MeshLibrary, poseFighter } from "./meshes";
-import type { FighterMesh } from "./meshes";
+import { MeshLibrary } from "./meshes";
+import { FighterMotion } from "./motion";
+import type { MotionEvent } from "./motion";
+import { applyFrame, createFighterRig, destroyFighterRig, RigAssets } from "./rig";
+import type { FighterRig } from "./rig";
+import { SwordTrail } from "./trail";
 
 const TAU = Math.PI * 2;
 /** Oblique look-down perspective camera; its direction is CAMERA_OFFSET (shared with input). */
@@ -26,18 +30,20 @@ const CAMERA_FOV = 37;
 const CAMERA_NEAR = 0.3;
 const CAMERA_FAR = 180;
 /**
- * Camera distance multiplier = max(height fit, width fit). The height fit keeps the arena plus
- * knock-out margin inside the band the HUD leaves free (match heading on top; fighter cards,
- * key legend or touch controls at the bottom); the width fit keeps it across a portrait screen.
+ * Camera distance multiplier = max(height fit, width fit). The height fit puts the arena's four
+ * corners just inside the band the HUD leaves free (match heading on top; fighter cards, key
+ * legend or touch controls at the bottom); the width fit keeps it across a portrait screen.
+ * Both are tight on purpose: the fighters need to be large enough for their motion to read, and
+ * anyone knocked far past the edge is on the way out anyway.
  */
-const CAMERA_FIT_HEIGHT = 0.76;
-const CAMERA_FIT_WIDTH = 1.25;
+const CAMERA_FIT_HEIGHT = 0.645;
+const CAMERA_FIT_WIDTH = 1.16;
 /** Pixel rows the HUD covers above and below the arena, following styles.css / touch.css. */
 function hudBand(height: number, touch: boolean): { top: number; bottom: number } {
   // Short touch screens move the fighter cards to the top; the touch controls hug the corners.
   if (touch && height <= 570) return { top: 150, bottom: 70 };
   // Otherwise cards sit at the bottom, above the touch controls on touch screens.
-  const bottom = touch ? Math.min(330, height * 0.4) : Math.min(220, height * 0.3);
+  const bottom = touch ? Math.min(330, height * 0.4) : Math.min(250, height * 0.3);
   return { top: Math.min(120, height * 0.2), bottom };
 }
 const CAMERA_DISTANCE = Math.hypot(CAMERA_OFFSET.x, CAMERA_OFFSET.y, CAMERA_OFFSET.z);
@@ -55,9 +61,12 @@ const CAMERA_UP = {
 /** Menu pans as fractions of the view; negative moves the arena right / up on screen. */
 const MENU_PAN_RIGHT = -0.17;
 const MENU_PAN_UP = -0.2;
+/** The title screen stands a little further back so the arena clears the caption beside it. */
+const MENU_PULL_BACK = 0.13;
 /** Fighter facing (0 is +Z) that looks straight back at the camera. */
 const FACING_CAMERA = Math.atan2(-CAMERA_FORWARD.x, -CAMERA_FORWARD.z);
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
+type Vec3Like = { x: number; y: number; z: number };
 
 const SHADOW_QUALITY: Record<Exclude<ShadowLevel, "off">, ShadowQuality> = {
   low: "low",
@@ -90,7 +99,9 @@ interface TileView {
   fallenAt: number | null;
 }
 interface FighterView {
-  mesh: FighterMesh;
+  rig: FighterRig;
+  motion: FighterMotion;
+  trail: SwordTrail;
   label: Text;
   stamina: Graphics;
   identity: string;
@@ -106,6 +117,15 @@ interface EffectView {
   root: Container3D;
   particles: Mesh3D[];
   ring: Mesh3D;
+}
+/** Render-only debris raised by the animation: dust, sparks and cracked flagstones. */
+interface Impact {
+  root: Container3D;
+  parts: { mesh: Mesh3D; vx: number; vy: number; vz: number; spin: number; size: number }[];
+  cracks: Mesh3D[];
+  age: number;
+  life: number;
+  gravity: number;
 }
 
 /** One renderer, one external game loop. No simulation or input is owned here. */
@@ -138,6 +158,12 @@ export class ArenaRenderer {
   private readonly resizeObserver: ResizeObserver;
   private readonly ground = new Plane(new Vector3(0, 1, 0), 0);
   private readonly windLines: Mesh3D[] = [];
+  private readonly rigAssets = new RigAssets();
+  private readonly impacts: Impact[] = [];
+  /** Camera shake energy; decays every frame. */
+  private shake = 0;
+  /** Development aid: a fixed close-up camera for inspecting animation. */
+  debugCamera: { position: Vec3Like; target: Vec3Like; fov?: number } | null = null;
   private width = 1280;
   private height = 720;
   private time = 0;
@@ -145,6 +171,7 @@ export class ArenaRenderer {
   /** Eased view pan along the camera's screen-right / screen-up axes, in fractions of the view. */
   private panRight = 0;
   private panUp = 0;
+  private pullBack = 0;
   /** In play: the pan that centres the arena in the band between the top and bottom HUD. */
   private hudPanUp = 0;
   private lastElapsed = 0;
@@ -497,7 +524,9 @@ export class ArenaRenderer {
       view = undefined;
     }
     if (view) return view;
-    const mesh = createFighterMesh(this.assets, this.scene, f);
+    const rig = createFighterRig(this.assets, this.rigAssets, this.scene, f);
+    const motion = new FighterMotion();
+    const trail = new SwordTrail(this.scene, 0xf2fbe6);
     const label = new Text({
       text: f.human ? "YOU" : f.name,
       style: {
@@ -512,22 +541,35 @@ export class ArenaRenderer {
     label.anchor.set(0.5, 1);
     const stamina = new Graphics();
     this.labels.addChild(stamina, label);
-    view = { mesh, label, stamina, identity };
+    view = { rig, motion, trail, label, stamina, identity };
     this.fighters.set(f.id, view);
     return view;
   }
 
   private updateFighter(f: Fighter, dt: number, state: GameState): void {
     const view = this.fighterView(f);
-    poseFighter(view.mesh, f, dt);
-    // Showcase pose: face the camera, each turned a little toward the other (human is on the left).
-    if (state.phase === "menu")
-      view.mesh.root.rotation.y = FACING_CAMERA + (f.human ? 0.42 : -0.36);
     const onPlatform =
       Math.abs(f.x) <= state.arena.halfSize && Math.abs(f.z) <= state.arena.halfSize;
+    // Off duty on the title screen, until just before "FIGHT", and for whoever is left standing.
+    const atEase =
+      state.phase === "menu" ||
+      (state.phase === "countdown" && state.countdown > 0.9) ||
+      state.phase === "ended";
+    // The simulation stops mid-action when the match ends; let the survivors stand down.
+    const shown: Fighter =
+      state.phase === "ended" && f.mode !== "dead"
+        ? { ...f, mode: "idle", attack: null, hitstop: 0 }
+        : f;
+    const frame = view.motion.update(shown, dt, { floor: onPlatform, atEase });
+    applyFrame(view.rig, frame, shown, this.time);
+    view.trail.update(frame.bladeBase, frame.bladeTip, f.mode === "dead" ? 0 : frame.trail, dt);
+    for (const event of frame.events) this.spawnImpact(event);
+    // Showcase pose: face the camera, each turned a little toward the other (human is on the left).
+    if (state.phase === "menu") view.rig.root.rotation.y = FACING_CAMERA + (f.human ? 0.42 : -0.36);
     // The blob is a stand-in for a shadow; with real shadow maps it would double up.
-    view.mesh.shadow.visible &&= onPlatform && !this.shadowsActive;
-    view.mesh.footRing.visible &&= onPlatform;
+    view.rig.shadow.visible &&= onPlatform && !this.shadowsActive;
+    view.rig.footRing.visible &&= onPlatform;
+    view.rig.heading.visible &&= onPlatform && state.phase !== "menu";
     const point = this.view.worldToScreen({ x: f.x, y: Math.max(f.y, -1) + 2.65, z: f.z });
     const labelVisible = f.mode !== "dead" && point !== null;
     view.label.visible = labelVisible;
@@ -638,6 +680,12 @@ export class ArenaRenderer {
     const ring = a.mesh(root, a.ring, a.material(color, 0.65, 0.4));
     view = { root, particles, ring };
     this.effects.set(effect.id, view);
+    // The first frame an impact exists is the frame the screen feels it.
+    if (effect.kind === "hit") this.addShake(0.3 + effect.size * 0.32);
+    else if (effect.kind === "clash") this.addShake(0.6);
+    else if (effect.kind === "bomb") this.addShake(0.85);
+    else if (effect.kind === "ko") this.addShake(0.7);
+    else if (effect.kind === "throw") this.addShake(0.28);
     return view;
   }
 
@@ -682,6 +730,9 @@ export class ArenaRenderer {
     const panUp = !menu ? this.hudPanUp : this.width < 650 ? MENU_PAN_UP : 0;
     this.panRight += (panRight - this.panRight) * Math.min(1, dt * 4);
     this.panUp += (panUp - this.panUp) * Math.min(1, dt * 4);
+    this.pullBack += ((menu ? MENU_PULL_BACK : 0) - this.pullBack) * Math.min(1, dt * 4);
+    this.shake *= Math.exp(-visualDelta * 9);
+    if (this.shake < 0.004 || state.phase === "menu") this.shake = 0;
     this.placeCamera();
     for (const floater of this.floaters) {
       floater.root.position.set(
@@ -717,6 +768,7 @@ export class ArenaRenderer {
       }
     }
     for (const effect of state.effects) this.updateEffect(effect);
+    this.updateImpacts(visualDelta);
     this.app.render();
   }
 
@@ -760,7 +812,7 @@ export class ArenaRenderer {
 
   /** The only place the camera is positioned: pan the look-at target, then the fixed offset. */
   private placeCamera(): void {
-    const s = this.cameraScale;
+    const s = this.cameraScale * (1 + this.pullBack);
     const up = this.panUp * VIEW_HEIGHT * s;
     const right = ((this.panRight * VIEW_HEIGHT * s) / this.height) * this.width;
     const target = {
@@ -768,12 +820,147 @@ export class ArenaRenderer {
       y: CAMERA_UP.y * up,
       z: CAMERA_RIGHT.z * right + CAMERA_UP.z * up,
     };
+    if (this.debugCamera) {
+      const { position, target: aim, fov } = this.debugCamera;
+      this.view.camera.fov = fov ?? CAMERA_FOV;
+      this.view.camera.position.set(position.x, position.y, position.z);
+      this.view.camera.lookAt(aim);
+      return;
+    }
+    this.view.camera.fov = CAMERA_FOV;
+    // Impact shake: a decaying jolt along the screen axes, so the horizon never rolls.
+    if (this.shake > 0 && this.settings.cameraShake) {
+      const amount = Math.min(0.5, this.shake) * 0.55 * s;
+      const jx = Math.sin(this.time * 83.1) * amount;
+      const jy = Math.cos(this.time * 97.3) * amount;
+      target.x += CAMERA_RIGHT.x * jx + CAMERA_UP.x * jy;
+      target.y += CAMERA_UP.y * jy;
+      target.z += CAMERA_RIGHT.z * jx + CAMERA_UP.z * jy;
+    }
     this.view.camera.position.set(
       target.x + CAMERA_OFFSET.x * s,
       target.y + CAMERA_OFFSET.y * s,
       target.z + CAMERA_OFFSET.z * s,
     );
     this.view.camera.lookAt(target);
+  }
+
+  private addShake(amount: number): void {
+    this.shake = Math.min(1, Math.max(this.shake, amount));
+  }
+
+  /** Dust, sparks and cracks the animation raises. Never read by the simulation. */
+  private spawnImpact(event: MotionEvent): void {
+    if (this.impacts.length > 40) return;
+    const a = this.assets;
+    const root = new Container3D();
+    root.position.set(event.x, Math.max(0, event.y), event.z);
+    this.scene.addChild(root);
+    const impact: Impact = { root, parts: [], cracks: [], age: 0, life: 0.5, gravity: 9 };
+    const seed = (event.x * 12.9898 + event.z * 78.233 + this.time * 37.7) % 1;
+    const random = (i: number) => {
+      const v = Math.sin((seed + i * 0.6180339) * 43758.5453) * 0.5 + 0.5;
+      return v - Math.floor(v);
+    };
+    const burst = (
+      count: number,
+      color: number,
+      speed: number,
+      rise: number,
+      size: number,
+      glow = 0,
+    ) => {
+      const material = a.material(color, glow > 0 ? 1 : 0.85, glow);
+      for (let i = 0; i < count; i++) {
+        const angle = ((i + random(i)) / count) * TAU;
+        const push = speed * (0.6 + random(i + 9) * 0.6);
+        const mesh = a.mesh(root, i % 2 ? a.pebble : a.cube, material, 0, 0.05, 0, size);
+        impact.parts.push({
+          mesh,
+          vx: Math.cos(angle) * push,
+          vy: rise * (0.5 + random(i + 3) * 0.8),
+          vz: Math.sin(angle) * push,
+          spin: (random(i + 5) - 0.5) * 14,
+          size: size * (0.7 + random(i + 7) * 0.7),
+        });
+      }
+    };
+    switch (event.kind) {
+      case "slam": {
+        impact.life = 1.5;
+        burst(10, 0xcfd8c4, 2.6 + event.power * 2.2, 3.2, 0.09);
+        burst(5, 0x6f8f86, 1.6, 4.4, 0.06);
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * TAU + random(i + 20) * 0.8;
+          const length = (0.45 + random(i + 30) * 0.7) * (0.7 + event.power * 0.6);
+          const crack = a.box(
+            root,
+            0x33494c,
+            Math.sin(angle) * length * 0.5,
+            0.012,
+            Math.cos(angle) * length * 0.5,
+            0.055,
+            0.012,
+            length,
+          );
+          crack.rotation.y = angle;
+          impact.cracks.push(crack);
+        }
+        this.addShake(0.4 + event.power * 0.45);
+        break;
+      }
+      case "land":
+        impact.life = 0.45;
+        burst(Math.round(4 + event.power * 6), 0xcfd8c4, 1.3 + event.power * 2, 0.9, 0.065);
+        if (event.power > 0.5) this.addShake(event.power * 0.3);
+        break;
+      case "stomp":
+        impact.life = 0.35;
+        burst(5, 0xcfd8c4, 1.5, 0.8, 0.055);
+        this.addShake(0.1 + event.power * 0.12);
+        break;
+      case "scrape":
+        impact.life = 0.3;
+        impact.gravity = 14;
+        burst(2, 0xffe6a8, 1.8, 3.4, 0.035, 0.8);
+        break;
+      case "skid":
+        impact.life = 0.3;
+        burst(2, 0xcfd8c4, 0.7, 0.7, 0.045);
+        break;
+    }
+    this.impacts.push(impact);
+  }
+
+  private updateImpacts(dt: number): void {
+    for (let i = this.impacts.length - 1; i >= 0; i--) {
+      const impact = this.impacts[i]!;
+      impact.age += dt;
+      const t = impact.age / impact.life;
+      if (t >= 1) {
+        impact.root.destroy({ children: true });
+        this.impacts.splice(i, 1);
+        continue;
+      }
+      // Debris is gone in the first third; the cracks linger and close.
+      const flight = Math.min(1, impact.age / Math.min(impact.life, 0.5));
+      for (const part of impact.parts) {
+        part.vy -= impact.gravity * dt;
+        const drag = Math.exp(-dt * 3.5);
+        part.vx *= drag;
+        part.vz *= drag;
+        const p = part.mesh.position;
+        const y = Math.max(0.03, p.y + part.vy * dt);
+        part.mesh.position.set(p.x + part.vx * dt, y, p.z + part.vz * dt);
+        part.mesh.rotation.y += part.spin * dt;
+        part.mesh.rotation.x += part.spin * 0.6 * dt;
+        part.mesh.scale.set(Math.max(0.001, part.size * (1 - flight)));
+      }
+      for (const crack of impact.cracks) {
+        const open = t < 0.06 ? t / 0.06 : 1 - Math.pow(t, 3);
+        crack.scale.x = Math.max(0.001, 0.055 * open);
+      }
+    }
   }
 
   private adjustResolution(state: GameState): void {
@@ -962,9 +1149,8 @@ export class ArenaRenderer {
   };
 
   private destroyFighter(view: FighterView): void {
-    view.mesh.root.destroy({ children: true });
-    view.mesh.shadow.destroy();
-    view.mesh.footRing.destroy();
+    destroyFighterRig(view.rig);
+    view.trail.destroy();
     view.label.destroy();
     view.stamina.destroy();
   }
@@ -978,6 +1164,9 @@ export class ArenaRenderer {
     this.view.destroy({ children: true });
     this.ssao?.destroy();
     this.fxaa?.destroy();
+    for (const impact of this.impacts) impact.root.destroy({ children: true });
+    this.impacts.length = 0;
+    this.rigAssets.destroy();
     this.assets.destroy();
     this.skyTexture.destroy(true);
     this.app.destroy({ removeView: true }, { children: true });
