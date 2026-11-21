@@ -242,3 +242,51 @@ test("pads join on the title and a keyboard player and a pad player share a duel
   await page.screenshot({ path: "test-results/multiplayer-duel.png" });
   expect(errors).toEqual([]);
 });
+
+test("a pad walks the title menu to the stage buttons and picks a stage", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await installPads(page);
+  await page.goto("./");
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await page.evaluate(() => window.__padConnect(0));
+  await frames(page, 5);
+  const UP = 12;
+  const RIGHT = 15;
+  const press = async (which: number) => {
+    await button(page, 0, which, true);
+    await frames(page, 3);
+    await button(page, 0, which, false);
+    await frames(page, 3);
+  };
+  const focusedStage = () =>
+    page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.stage ?? null);
+  // The pad joins first (its A is the join shortcut until it plays), then steers the menu.
+  await press(A);
+  await expect(device(page, 1)).toHaveValue("pad1");
+  // The first direction shows the focus on the start button; up from there climbs the options.
+  let first: string | null = null;
+  for (let presses = 0; presses < 16 && first === null; presses++) {
+    await press(UP);
+    first = await focusedStage();
+  }
+  expect(first).not.toBeNull();
+  // Left and right stay inside the stage buttons; A picks the focused one.
+  await press(RIGHT);
+  const picked = await focusedStage();
+  expect(picked).not.toBeNull();
+  expect(picked).not.toBe(first);
+  await expect(page.locator(`button[data-stage="${picked}"]`)).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await press(A);
+  await expect(page.locator(`button[data-stage="${picked}"]`)).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(await page.evaluate(() => window.__BRAMBLE__!.snapshot().arena.stageId)).toBe(picked);
+  await expect(page.locator("#arena canvas")).toHaveAttribute("data-stage", picked!);
+  expect(await phase(page)).toBe("menu");
+  expect(errors).toEqual([]);
+});

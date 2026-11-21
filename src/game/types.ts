@@ -1,4 +1,5 @@
 import type { AiLevel, MatchOptions } from "./match";
+import type { StageId } from "./stages";
 
 export type AttackId = "overhead" | "rising" | "sweep" | "thrust";
 export type FighterMode =
@@ -84,6 +85,9 @@ export interface Fighter {
 }
 
 export interface ArenaState {
+  /** The stage being fought on; with `halfSize` it decides where there is floor (stages.ts). */
+  stageId: StageId;
+  /** Half the side of the square that has not collapsed yet. */
   halfSize: number;
   initialHalfSize: number;
   tileSize: number;

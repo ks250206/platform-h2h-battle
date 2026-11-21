@@ -13,6 +13,7 @@ import type { Pass3D, ShadowQuality } from "@pixi/3d";
 import { FxaaEffect, SsaoEffect } from "@pixi/3d/extras";
 import { Application, Container, Graphics, RendererType, Sprite, Text, Texture } from "pixi.js";
 import type { WebGLRenderer } from "pixi.js";
+import { canStandAt } from "../game/combat";
 import { CAMERA_FORWARD, CAMERA_OFFSET, CAMERA_RIGHT } from "../game/coordinates";
 import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
@@ -24,6 +25,7 @@ import { PALETTE } from "./palette";
 import type { MotionEvent } from "./motion";
 import { applyFrame, createFighterRig, destroyFighterRig, RigAssets } from "./rig";
 import type { FighterRig } from "./rig";
+import { StageShapes, StageView } from "./stageMesh";
 import { SwordTrail } from "./trail";
 
 const TAU = Math.PI * 2;
@@ -104,15 +106,6 @@ export function hasSoftwareRenderer(): boolean {
   return /swiftshader|llvmpipe|softpipe|software/i.test(name);
 }
 
-interface TileView {
-  root: Container3D;
-  top: Mesh3D;
-  outline: Mesh3D;
-  x: number;
-  z: number;
-  tint: number;
-  fallenAt: number | null;
-}
 interface FighterView {
   rig: FighterRig;
   motion: FighterMotion;
@@ -178,7 +171,11 @@ export class ArenaRenderer {
   private readonly scenery = new Container3D();
   private readonly labels = new Container();
   private readonly assets = new MeshLibrary();
-  private readonly tiles: TileView[] = [];
+  private readonly stageShapes = new StageShapes();
+  /** The floor being shown; rebuilt whenever the state's stage is another one. */
+  private stage: StageView | null = null;
+  /** Runs only while belts do (not while paused or after the match), so their arrows stop too. */
+  private beltTime = 0;
   private readonly fighters = new Map<number, FighterView>();
   private readonly bombs = new Map<number, BombView>();
   private readonly effects = new Map<number, EffectView>();
@@ -318,7 +315,6 @@ export class ArenaRenderer {
     rim.lookAt({ x: 0, y: 1, z: 0 });
     // A strong, slightly blue fill keeps the shaded side of everything colourful.
     this.view.root.addChild(new AmbientLight({ color: PALETTE.light.ambient, intensity: 1.35 }));
-    this.buildArena();
     this.buildScenery();
     this.scene.addChild(this.zone);
     this.zoneRing = this.assets.mesh(
@@ -397,75 +393,19 @@ export class ArenaRenderer {
     }
   }
 
-  private buildArena(): void {
-    const a = this.assets;
-    for (let row = -4; row <= 4; row++) {
-      for (let col = -4; col <= 4; col++) {
-        const root = new Container3D();
-        const x = col * 2,
-          z = row * 2;
-        root.position.set(x, 0, z);
-        this.scene.addChild(root);
-        const border = Math.abs(row) === 4 || Math.abs(col) === 4;
-        const tint = border
-          ? (row + col) % 2
-            ? PALETTE.floor.edgeDark
-            : PALETTE.floor.edgeLight
-          : (row + col) % 2
-            ? PALETTE.floor.dark
-            : PALETTE.floor.light;
-        const top = a.mesh(root, a.tile, a.flatMaterial(tint));
-        // Only takes effect while the shadow-receiving tile material is in use.
-        top.receiveShadow = true;
-        const outline = a.mesh(
-          root,
-          a.ring,
-          a.material(PALETTE.floor.warnRing, 0.9, 0.2),
-          0,
-          0.025,
-          0,
-          0.75,
-        );
-        outline.visible = false;
-        this.tiles.push({ root, top, outline, x, z, tint, fallenAt: null });
-        if (border && (col + row) % 3 === 0) {
-          const shard = a.mesh(
-            root,
-            a.cone,
-            a.material(PALETTE.floor.shard),
-            0,
-            -1.09,
-            0,
-            1.03,
-            1.1 + ((col * row + 17) % 3) * 0.4,
-            0.94,
-          );
-          shard.rotation.z = Math.PI;
-          shard.rotation.y = 0.4;
-        }
-        // Quiet decorative inlay: it never denotes a collider or hazard.
-        if (!border && (row + col + 12) % 5 === 0) {
-          a.box(root, PALETTE.floor.inlay, -0.57, 0.006, -0.5, 0.34, 0.012, 0.045).rotation.y = 0.5;
-          a.box(root, PALETTE.floor.inlay, -0.45, 0.007, -0.43, 0.18, 0.012, 0.045).rotation.y =
-            -0.45;
-        }
-      }
-    }
-    // A pale compass is a useful reference for depth and directional inputs.
-    a.mesh(this.scene, a.ring, a.material(PALETTE.floor.compass, 0.5), 0, 0.012, 0, 2.6);
-    for (let i = 0; i < 4; i++) {
-      const mark = a.box(
-        this.scene,
-        PALETTE.floor.compass,
-        Math.sin((i * Math.PI) / 2) * 2.6,
-        0.016,
-        Math.cos((i * Math.PI) / 2) * 2.6,
-        0.09,
-        0.013,
-        0.44,
-      );
-      mark.rotation.y = (i * Math.PI) / 2;
-    }
+  /**
+   * Shows the stage the match is on. The floor is built from the stage's tiles (stageMesh.ts),
+   * so picking another stage on the title screen swaps the whole island under the fighters.
+   */
+  private showStage(state: GameState): StageView {
+    const { stageId } = state.arena;
+    if (this.stage?.stageId === stageId) return this.stage;
+    this.stage?.destroy();
+    this.stage = new StageView(this.assets, this.stageShapes, stageId);
+    // Under everything else in the scene: zone, bombs and fighters draw over the floor.
+    this.scene.addChildAt(this.stage.root, 0);
+    this.canvas.dataset.stage = stageId;
+    return this.stage;
   }
 
   private buildScenery(): void {
@@ -555,40 +495,9 @@ export class ArenaRenderer {
   }
 
   private updateArena(state: GameState): void {
-    const a = this.assets;
     const reset = state.elapsed < this.lastElapsed;
     const safe = state.arena.safeZone;
-    for (const tile of this.tiles) {
-      const supported =
-        Math.abs(tile.x) < state.arena.halfSize && Math.abs(tile.z) < state.arena.halfSize;
-      if (reset || supported) tile.fallenAt = null;
-      if (!supported && tile.fallenAt === null) tile.fallenAt = this.time;
-      const falling = tile.fallenAt === null ? 0 : this.time - tile.fallenAt;
-      tile.root.visible = supported || falling < 1.1;
-      tile.root.position.y = supported ? 0 : -falling * falling * 16;
-      tile.root.rotation.set(
-        supported ? 0 : falling * 0.35,
-        0,
-        supported ? 0 : falling * 0.2 * Math.sign(tile.x || 1),
-      );
-      const warning =
-        supported &&
-        state.arena.warningRing &&
-        Math.max(Math.abs(tile.x), Math.abs(tile.z)) >= state.arena.halfSize - 2;
-      const unsafe = safe.active && Math.hypot(tile.x - safe.x, tile.z - safe.z) > safe.radius;
-      tile.top.material = a.tileMaterial(
-        warning
-          ? Math.sin(this.time * 7) > 0
-            ? PALETTE.floor.warnA
-            : PALETTE.floor.warnB
-          : unsafe
-            ? PALETTE.floor.unsafe
-            : tile.tint,
-        this.shadowsActive,
-      );
-      tile.outline.visible = warning;
-      if (warning) tile.outline.scale.set(0.5 + (Math.sin(this.time * 5) + 1) * 0.12);
-    }
+    this.showStage(state).update(state, this.time, this.beltTime, this.shadowsActive, reset);
     this.zone.visible = safe.active;
     this.zoneMarker.visible = safe.active;
     this.zone.position.set(safe.x, 0.045, safe.z);
@@ -666,8 +575,8 @@ export class ArenaRenderer {
 
   private updateFighter(f: Fighter, dt: number, state: GameState): void {
     const view = this.fighterView(f);
-    const onPlatform =
-      Math.abs(f.x) <= state.arena.halfSize && Math.abs(f.z) <= state.arena.halfSize;
+    // Over floor that is really there: no blob shadow or foot ring above a pit or a gap.
+    const onPlatform = canStandAt(state, f.x, f.z);
     // Off duty on the title screen, until just before "FIGHT", and for whoever is left standing.
     const atEase =
       state.phase === "menu" ||
@@ -875,6 +784,8 @@ export class ArenaRenderer {
     this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
+    // Belts carry nobody once the match is over, so their arrows rest then as well.
+    if (state.phase !== "ended") this.beltTime += visualDelta;
     // On the menu the arena slides right of the title panel (desktop) or above the menu copy (phone).
     const menu = state.phase === "menu";
     const sidePanel = this.width >= 900 || (this.height <= 570 && this.width > this.height);
@@ -1521,6 +1432,7 @@ export class ArenaRenderer {
     for (const impact of this.impacts) impact.root.destroy({ children: true });
     this.impacts.length = 0;
     this.rigAssets.destroy();
+    this.stageShapes.destroy();
     this.assets.destroy();
     this.skyTexture.destroy(true);
     this.app.destroy({ removeView: true }, { children: true });
