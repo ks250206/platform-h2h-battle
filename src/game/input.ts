@@ -13,9 +13,9 @@ import { humanSlots, padIndex, type ControlDevice } from "./match";
 import {
   anyPressed,
   isDown,
-  readStick,
   freshPadMemory,
   readPad,
+  readStick,
   rumbleFor,
   type PadCommands,
   type PadMemory,
@@ -175,7 +175,9 @@ export class BattleInput {
    * Lock-on per fighter id: on until that player turns it off, and remembered for the page
    * session. While on, the aim always points at the target; mouse, arrows and stick do not aim.
    */
-  private locks = new Map<number, { on: boolean; targetId: number | null }>();
+  private readonly sessionLocks = new Map<number, { on: boolean; targetId: number | null }>();
+  private locks = this.sessionLocks;
+  private heldMenuSticks = new Map<number, { move: boolean; aim: boolean }>();
   private devices = new Map<number, ControlDevice>();
   private previousPhase = "";
   private active = false;
@@ -409,6 +411,17 @@ export class BattleInput {
 
   /** Held buttons at a takeover count as already pressed: nothing fires until they come up. */
   private takeOverPads(): void {
+    this.heldMenuSticks.clear();
+    if (this.locks !== this.sessionLocks) {
+      this.pads.current.forEach((pad, index) => {
+        if (!pad) return;
+        const held = (axis: number) => {
+          const stick = readStick(pad.axes, axis);
+          return Boolean(stick.x || stick.y);
+        };
+        this.heldMenuSticks.set(index, { move: held(0), aim: held(2) });
+      });
+    }
     this.padPrevious = this.pads.current.slice();
     this.padMemory = this.pads.current.map(() => freshPadMemory());
   }
@@ -459,8 +472,9 @@ export class BattleInput {
    * One input per human fighter of `state`, each from that fighter's device. Also handles the
    * pads' Start (pause) and View (camera), the pad-lost check and the rumble.
    */
-  sample(state: GameState): PlayerInputs {
+  sample(state: GameState, touchAutoLock = false): PlayerInputs {
     const inputs: PlayerInputs = {};
+    if (touchAutoLock) this.lockFor(0).on = true;
     this.watchPads(state);
     const active =
       (state.phase === "playing" || state.phase === "countdown") &&
@@ -493,6 +507,16 @@ export class BattleInput {
       if (anyPressed(current, previous)) this.hooks.onGesture();
       this.padPrevious[index] = current;
       this.padMemory[index] = result.memory;
+      const held = this.heldMenuSticks.get(index);
+      if (held?.move) {
+        held.move = Boolean(result.commands.move.x || result.commands.move.y);
+        result.commands.move = { x: 0, y: 0 };
+      }
+      if (held?.aim) {
+        held.aim = result.commands.aim !== null;
+        result.commands.aim = null;
+        result.commands.cycle = 0;
+      }
       commands.set(index, result.commands);
     });
     let pause = false;
@@ -548,7 +572,10 @@ export class BattleInput {
   }
 
   /** A new match or a restart: every lock that is on picks the nearest opponent afresh. */
-  newMatch(): void {
+  newMatch(isolatedLocks = false): void {
+    this.heldMenuSticks.clear();
+    if (!isolatedLocks) this.locks = this.sessionLocks;
+    else if (this.locks === this.sessionLocks) this.locks = new Map();
     for (const lock of this.locks.values()) lock.targetId = null;
     this.padsSeen.clear();
     this.rumbleSamples.clear();
