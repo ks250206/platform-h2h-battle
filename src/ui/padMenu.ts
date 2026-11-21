@@ -276,6 +276,17 @@ export class PadMenu {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  /** Nudges a slider (the music / effects volume) one step and reports the change. */
+  private stepRange(range: HTMLInputElement, delta: 1 | -1): void {
+    if (range.disabled) return;
+    const before = range.value;
+    if (delta > 0) range.stepUp();
+    else range.stepDown();
+    if (range.value === before) return;
+    range.dispatchEvent(new Event("input", { bubbles: true }));
+    range.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   private move(layer: Layer, direction: MenuDirection): void {
     const from = this.focused(layer);
     if (!from) {
@@ -286,6 +297,10 @@ export class PadMenu {
     const delta = direction === "right" ? 1 : -1;
     if (sideways && from instanceof HTMLSelectElement) {
       this.stepSelect(from, delta);
+      return;
+    }
+    if (sideways && from instanceof HTMLInputElement && from.type === "range") {
+      this.stepRange(from, delta);
       return;
     }
     // Left / right stay inside a segmented control (or the mode picker) until its end.

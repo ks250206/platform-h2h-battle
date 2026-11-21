@@ -504,13 +504,22 @@ test("title, lesson navigation, disconnect, retries, summary and normal-mode han
     ArenaRenderer: {
       create: async (host: HTMLElement) => {
         host.append(canvas);
-        return { canvas, render() {}, screenToWorld: () => null, setSpotlight() {}, destroy() {} };
+        return {
+          canvas,
+          render() {},
+          present() {},
+          applySettings() {},
+          screenToWorld: () => null,
+          setSpotlight() {},
+          destroy() {},
+        };
       },
     },
   }));
   vi.doMock("../src/game/audio", () => ({
     BattleAudio: class {
       unlock() {}
+      setMix() {}
       update() {}
       setEnabled() {}
       destroy() {}

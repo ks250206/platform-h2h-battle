@@ -15,9 +15,11 @@ import {
   SPECIES_IDS,
 } from "../game/characters";
 import type { AccessoryId, Loadout, PaletteId, Species } from "../game/characters";
+import { isClimax, type PresentationEvent } from "../game/presentation";
 import {
   countHumans,
   fighterTag,
+  fighterTitle,
   SLOT_SHAPE_LABELS,
   SLOT_SHAPE_POINTS,
   slotShape,
@@ -119,9 +121,11 @@ const shadowOptions: { value: ShadowLevel; label: string }[] = [
 function settingsDialogMarkup(): string {
   const toggle = (key: keyof GraphicsSettings, label: string, hint = "") =>
     `<div class="setting-row"><label class="setting-toggle"><span>${label}</span><input type="checkbox" data-setting="${key}"${hint ? ` aria-describedby="hint-${key}"` : ""}></label>${hint ? `<p class="setting-hint" id="hint-${key}">${hint}</p>` : ""}</div>`;
+  const volume = (key: "bgmVolume" | "seVolume", label: string, hint: string) =>
+    `<div class="setting-row"><div class="setting-label"><label for="setting-${key}">${label}</label><output class="setting-value" for="setting-${key}" data-output="${key}"></output></div><input id="setting-${key}" class="setting-range" type="range" min="0" max="100" step="5" data-setting="${key}" aria-describedby="hint-${key}"><p class="setting-hint" id="hint-${key}">${hint}</p></div>`;
   return `
       <dialog class="settings-dialog" aria-labelledby="settings-title">
-        <div class="help-head flex items-center justify-between"><div><div class="eyebrow">GRAPHICS</div><h2 id="settings-title">グラフィック設定</h2></div><button class="icon-button" data-action="close-settings" aria-label="グラフィック設定を閉じる">×</button></div>
+        <div class="help-head flex items-center justify-between"><div><div class="eyebrow">GRAPHICS · SOUND</div><h2 id="settings-title">設定</h2></div><button class="icon-button" data-action="close-settings" aria-label="グラフィック設定を閉じる">×</button></div>
         <div class="settings-body">
           <section class="settings-section" aria-labelledby="settings-display">
             <h3 id="settings-display">DISPLAY / 表示</h3>
@@ -158,6 +162,13 @@ function settingsDialogMarkup(): string {
             ${toggle("cameraShake", "画面の揺れ")}
             ${toggle("cameraFollow", "視点の自動追随", "オフにすると足場全体を固定で映します。<kbd>V</kbd> キーかパッドの View でも切り替え。")}
             ${toggle("padRumble", "パッドの振動", "パッドで遊ぶ人が攻撃を受けた・当てた・相殺したときに震えます。")}
+            ${toggle("reducedFlash", "強い光・決着演出を控えめに", "KO と決着の白いフラッシュや光の柱の芯をやめ、色の縁取りと文字だけで伝えます。")}
+          </section>
+          <section class="settings-section" aria-labelledby="settings-sound">
+            <h3 id="settings-sound">SOUND / サウンド</h3>
+            ${volume("bgmVolume", "BGM の音量", "0 にしても効果音は鳴ります。")}
+            ${volume("seVolume", "効果音の音量", "0 にしても BGM は鳴ります。ため・爆撃・崩落・エリアの警告音は混んだ場面でも埋もれにくく調整しています。")}
+            ${toggle("muted", "ミュート (すべての音を消す)", "上部バーの音ボタンと同じ設定です。")}
           </section>
         </div>
         <div class="settings-foot"><button class="text-button" data-action="reset-settings">初期設定に戻す</button><button class="primary-button" data-action="close-settings">閉じる ${icons.arrow}</button></div>
@@ -454,6 +465,15 @@ function playerResults(fighters: readonly Fighter[], stats: readonly PlayerMatch
     .join("");
 }
 
+const cssHex = (color: number): string => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
+
+/** Replays an element's CSS animation from the start. */
+function restartAnimation(element: HTMLElement): void {
+  element.classList.remove("play");
+  void element.offsetWidth;
+  element.classList.add("play");
+}
+
 function setText(element: HTMLElement, value: string): void {
   if (element.textContent !== value) element.textContent = value;
 }
@@ -520,7 +540,8 @@ export class GameUI {
   private readonly cards = new Map<number, FighterCard>();
   private currentPhase: Phase = "menu";
   private selectedMode: TitleMode = "duel";
-  private sound = true;
+  /** Real time (ms) until which a just-finished game shows its finish before the result. */
+  private finishHoldUntil = 0;
   private resumeAfterHelp = false;
   private resumeAfterSettings = false;
   private previousFocus: HTMLElement | null = null;
@@ -541,7 +562,7 @@ export class GameUI {
         </a>
         <div class="top-actions flex items-center gap-2">
           <span class="prototype-chip"><span></span> PLAYABLE PROTOTYPE</span>
-          <button class="icon-button" data-action="sound" aria-label="音をオフにする" aria-pressed="true" title="効果音">${icons.sound}</button>
+          <button class="icon-button" data-action="sound" aria-label="音をオフにする" aria-pressed="true" title="サウンド (BGM・効果音)">${icons.sound}</button>
           <button class="icon-button camera-button" data-action="camera" aria-label="視点の自動追随をオフにする" aria-pressed="true" title="視点の自動追随 · V">${icons.camera}</button>
           <button class="icon-button settings-button" data-action="settings" aria-label="グラフィック設定を開く" title="グラフィック設定">${icons.gear}</button>
           <button class="icon-button help-button" data-action="help" aria-label="操作方法を表示" title="操作方法">?</button>
@@ -590,6 +611,8 @@ export class GameUI {
           <span class="pad-legend-title">PAD</span><span><kbd>RB</kbd> 横振り</span><span><kbd>RT</kbd> 振り下ろし</span><span><kbd>LB</kbd> 突き</span><span><kbd>LT</kbd> 振り上げ</span><span><kbd>A</kbd> 跳ぶ</span><span><kbd>B</kbd> ステップ</span><span><kbd>X</kbd> つかむ</span><span><kbd>Y</kbd> キャンセル</span><span><kbd>R3</kbd> ロックオン</span>
         </div>
       </section>
+
+      <div class="finish-layer" aria-hidden="true"><div class="screen-flash"></div><div class="finish-stamp" hidden><strong></strong><span></span></div></div>
 
       <section class="pause-screen modal-scrim" role="dialog" aria-modal="true" aria-label="一時停止" hidden>
         <div class="modal-panel pause-panel">
@@ -746,6 +769,14 @@ export class GameUI {
     this.settingsDialog.addEventListener("change", this.handleSettingChange, {
       signal: this.abort.signal,
     });
+    // Volume sliders apply while they are dragged, not only when released.
+    this.settingsDialog.addEventListener(
+      "input",
+      (event) => {
+        if ((event.target as HTMLInputElement).type === "range") this.handleSettingChange(event);
+      },
+      { signal: this.abort.signal },
+    );
     const unsubscribe = this.graphics.store.subscribe(() => this.syncSettings());
     this.abort.signal.addEventListener("abort", unsubscribe);
     window.addEventListener("resize", () => this.refreshRenderSize(), {
@@ -1124,9 +1155,11 @@ export class GameUI {
     const value =
       control instanceof HTMLInputElement && control.type === "checkbox"
         ? control.checked
-        : key === "msaaSamples" || key === "fpsLimit"
-          ? Number(control.value)
-          : control.value;
+        : control instanceof HTMLInputElement && control.type === "range"
+          ? Number(control.value) / 100
+          : key === "msaaSamples" || key === "fpsLimit"
+            ? Number(control.value)
+            : control.value;
     this.graphics.store.set({ [key]: value } as Partial<GraphicsSettings>);
   };
 
@@ -1163,6 +1196,21 @@ export class GameUI {
     }
     const ao = dialog.querySelector<HTMLInputElement>('input[data-setting="ambientOcclusion"]')!;
     ao.disabled = this.graphics.supportsAmbientOcclusion() === false;
+    for (const key of ["bgmVolume", "seVolume"] as const) {
+      const percent = Math.round(s[key] * 100);
+      const range = dialog.querySelector<HTMLInputElement>(`input[data-setting="${key}"]`)!;
+      if (document.activeElement !== range) range.value = String(percent);
+      range.disabled = s.muted;
+      setText(dialog.querySelector<HTMLElement>(`[data-output="${key}"]`)!, `${percent}%`);
+    }
+    if (s.reducedFlash) this.host.dataset.reducedFlash = "";
+    else delete this.host.dataset.reducedFlash;
+    const sound = this.query('[data-action="sound"]');
+    if (sound.getAttribute("aria-pressed") !== String(!s.muted)) {
+      sound.innerHTML = s.muted ? icons.mute : icons.sound;
+      sound.setAttribute("aria-pressed", String(!s.muted));
+      sound.setAttribute("aria-label", s.muted ? "音をオンにする" : "音をオフにする");
+    }
     this.fpsCounter.hidden = !s.showFps;
     const camera = this.query('[data-action="camera"]');
     if (camera.getAttribute("aria-pressed") !== String(s.cameraFollow)) {
@@ -1383,11 +1431,10 @@ export class GameUI {
         if (look) this.match.set({ loadouts: look.before });
         break;
       case "sound": {
-        this.sound = !this.sound;
-        target.innerHTML = this.sound ? icons.sound : icons.mute;
-        target.setAttribute("aria-pressed", String(this.sound));
-        target.setAttribute("aria-label", this.sound ? "音をオフにする" : "音をオンにする");
-        this.callbacks.onSound(this.sound);
+        // The same stored switch as "ミュート" in the settings; syncSettings redraws the button.
+        const enabled = this.graphics.store.get().muted;
+        this.callbacks.onSound(enabled);
+        this.graphics.store.set({ muted: !enabled });
         break;
       }
     }
@@ -1542,6 +1589,53 @@ export class GameUI {
     this.query(".result-panel").scrollTop = 0;
   }
 
+  /**
+   * This frame's KO and finish moments: an edge flash in the fighter's colour for a lost life, a
+   * stamp (GAME / DRAW / SET / CLEAR!) and a short hold before the result for the finish. The
+   * flash turns into a soft coloured frame with "reduced flash"; the stamp always shows, so the
+   * moment reads with effects, shake and sound all off.
+   */
+  present(events: readonly PresentationEvent[], state: GameState): void {
+    for (const event of events) {
+      if (event.kind === "stockKo" || event.kind === "elimination") {
+        this.flash(event.kind === "elimination" ? "out" : "ko", event.color);
+      } else if (event.kind === "finish") {
+        this.flash("finish", event.color);
+        const winner = state.fighters.find((f) => f.id === event.winnerId);
+        const name = winner ? fighterTitle(winner, state.fighters) : "";
+        const [title, line, hold] =
+          event.finish === "ladderClear"
+            ? ["CLEAR!", "CPUラダー制覇", 1800]
+            : event.finish === "setWin"
+              ? ["SET", `${name} セット勝利`, 1500]
+              : event.finish === "draw"
+                ? ["DRAW", event.byKo ? "相打ち" : "タイムアップ", 1100]
+                : [event.byKo ? "GAME" : "TIME", `${name} WINS`, 1100];
+        const stamp = this.query(".finish-stamp");
+        stamp.dataset.finish = event.finish;
+        stamp.style.setProperty("--finish-color", cssHex(event.color));
+        setText(stamp.querySelector("strong")!, title);
+        setText(stamp.querySelector("span")!, line);
+        stamp.hidden = false;
+        restartAnimation(stamp);
+        this.finishHoldUntil = performance.now() + hold;
+      }
+    }
+  }
+
+  private flash(kind: "ko" | "out" | "finish", color: number): void {
+    const flash = this.query(".screen-flash");
+    flash.dataset.flash = kind;
+    flash.style.setProperty("--flash-color", cssHex(color));
+    restartAnimation(flash);
+  }
+
+  private clearFinish(): void {
+    this.finishHoldUntil = 0;
+    this.query(".finish-stamp").hidden = true;
+    delete this.query(".screen-flash").dataset.flash;
+  }
+
   update(state: GameState, ladder?: LadderProgress): void {
     const changedPhase = this.currentPhase !== state.phase;
     this.currentPhase = state.phase;
@@ -1553,7 +1647,13 @@ export class GameUI {
     this.menu.hidden = inMatch;
     this.hud.hidden = !inMatch;
     this.pausePanel.hidden = state.phase !== "paused";
-    this.result.hidden = state.phase !== "ended";
+    if (changedPhase && state.phase !== "ended") this.clearFinish();
+    // A finish keeps the arena in view for a moment (the stamp, the highlight) before the result.
+    const showResult = state.phase === "ended" && performance.now() >= this.finishHoldUntil;
+    const revealed = showResult && this.result.hidden;
+    this.result.hidden = !showResult;
+    if (isClimax(state)) this.host.dataset.climax = "";
+    else delete this.host.dataset.climax;
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
     const ladderLabel = ladder
       ? `${ladderRound(ladder.round)} · ${ladderOpponentName(ladder.opponent)} · ${ladderOpponentDetails(ladder.opponent)}`
@@ -1586,11 +1686,10 @@ export class GameUI {
       if (ladder) this.syncLadderResult(ladder, ladderLabel, state.message);
       else this.drawResult(state);
     }
-    if (changedPhase && !this.dialog.open && !this.settingsDialog.open) {
-      if (state.phase === "paused")
+    if (!this.dialog.open && !this.settingsDialog.open) {
+      if (changedPhase && state.phase === "paused")
         this.pausePanel.querySelector<HTMLButtonElement>('[data-action="resume"]')?.focus();
-      if (state.phase === "ended")
-        this.query(".result-screen [data-pad-primary]").focus({ preventScroll: true });
+      if (revealed) this.query(".result-screen [data-pad-primary]").focus({ preventScroll: true });
     }
 
     const clock = (seconds: number) =>

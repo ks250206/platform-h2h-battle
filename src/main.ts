@@ -3,6 +3,7 @@ import "./touch.css";
 import { BattleEngine } from "./game/engine";
 import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
+import { PresentationTracker } from "./game/presentation";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
 import { createMatchStore, playableOptions } from "./game/matchStore";
 import { humanSlots, padIndex, type MatchOptions } from "./game/match";
@@ -25,6 +26,8 @@ const overlay = document.getElementById("interface")!;
 const matchEngine = new BattleEngine();
 let engine = matchEngine;
 const sound = new BattleAudio();
+/** Turns states into one-shot KO / finish / warning events for the sound, the scene and the HUD. */
+const presentation = new PresentationTracker();
 let input: BattleInput | null = null;
 let renderer: ArenaRenderer | null = null;
 let selectedMode: MatchMode = "duel";
@@ -69,10 +72,18 @@ let fps = 0;
 // The device profile picks the defaults; saved choices override them field by field.
 const software = hasSoftwareRenderer();
 const settings = createSettingsStore(defaultSettings({ software, touch: detectTouch() }));
+sound.setMix(settings.get());
 settings.subscribe((next) => {
   renderer?.applySettings(next);
   nextFrameDue = 0;
+  // Every change comes from a click or a key in the settings (or the sound button): a gesture.
+  if (!next.muted) sound.unlock();
+  sound.setMix(next);
 });
+// Any first press anywhere may start the audio (the title music included). A context the browser
+// keeps suspended only means silence: nothing waits for it.
+for (const type of ["pointerdown", "keydown"] as const)
+  window.addEventListener(type, () => sound.unlock(), { capture: true, passive: true });
 /** Development only: freezes the real-time loop so tooling can advance frames by hand. */
 let manualStepping = false;
 /** The pad (1-based) whose loss paused the match, until it is back or the match goes on. */
@@ -137,13 +148,17 @@ const toggleCameraFollow = () => {
   if (document.querySelector("dialog[open]")) return;
   settings.set({ cameraFollow: !settings.get().cameraFollow });
 };
-const updateUI = () => {
+/** Records a finished ladder duel once, as soon as the engine has ended it. */
+const settleLadder = () => {
   const state = engine.state;
   if (ladder && ladderAttempt !== null && state.phase === "ended") {
     ladder.finish(ladderAttempt, state.winnerId, state.elapsed);
     ladderAttempt = null;
   }
-  ui.update(state, ladder?.progress);
+};
+const updateUI = () => {
+  settleLadder();
+  ui.update(engine.state, ladder?.progress);
   trainingUI.update();
   tutorialUi.update();
 };
@@ -212,8 +227,7 @@ const ui = new GameUI(overlay, {
   },
   onSpotlight: (slot) => renderer?.setSpotlight(slot),
   onSound: (enabled) => {
-    sound.unlock();
-    sound.setEnabled(enabled);
+    if (enabled) sound.unlock();
   },
   match,
   graphics: {
@@ -324,15 +338,20 @@ async function boot() {
         tutorialUi.observePads(pads.current);
       padMenu.update(now / 1000);
       input.updateVisibility(engine.state);
-      const control = input.sample(
-        engine.state,
-        engine instanceof TutorialBattle && tutorialUi.promptDevice === "touch",
-      );
-      if (!manualStepping) {
-        engine.update(dt, control);
-        renderer.render(engine.state, dt, engine.training?.settings.hitboxes);
+      const tutorial = engine instanceof TutorialBattle;
+      const control = input.sample(engine.state, tutorial && tutorialUi.promptDevice === "touch");
+      if (!manualStepping) engine.update(dt, control);
+      settleLadder();
+      const events = presentation.update(engine.state, {
+        ladderClear: ladder?.progress.phase === "clear",
+        tutorial,
+      });
+      if (events.length) {
+        renderer.present(events);
+        ui.present(events, engine.state);
       }
-      sound.update(engine.state);
+      if (!manualStepping) renderer.render(engine.state, dt, engine.training?.settings.hitboxes);
+      sound.update(engine.state, events, tutorial);
       if (now - lastUI > 33) {
         updateUI();
         ui.setFps(fps);

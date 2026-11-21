@@ -1599,6 +1599,13 @@ kbd {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.result-paw {
+  margin: 0 auto 14px;
+  width: 43px;
+  height: 43px;
+  color: var(--coral);
+  transform: rotate(-8deg);
+}
 .result-panel h2 {
   margin-top: 0;
   font-size: clamp(20px, 5vw, 29px);
@@ -3092,6 +3099,9 @@ kbd {
   .modal-panel h2 {
     margin-top: 12px;
   }
+  .result-paw {
+    display: none;
+  }
   :is(.settings-dialog, .training-dialog) {
     max-height: calc(100dvh - 24px);
     padding-top: 16px;
@@ -3140,12 +3150,150 @@ kbd {
     margin: auto auto auto max(8px, env(safe-area-inset-left));
   }
 }
+/* Issue #16: KO and finish moments. Short, pointer-transparent, and kept off the middle of the
+   arena: the edge flash only tints the screen border, the stamp sits above the fighters. */
+.finish-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.screen-flash {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  --flash-color: #fff;
+}
+.screen-flash.play[data-flash="ko"],
+.screen-flash.play[data-flash="out"] {
+  box-shadow: inset 0 0 60px 8px color-mix(in srgb, var(--flash-color) 70%, transparent);
+  animation: edge-flash 0.45s ease-out both;
+}
+.screen-flash.play[data-flash="out"] {
+  box-shadow: inset 0 0 90px 14px color-mix(in srgb, var(--flash-color) 80%, transparent);
+  animation-duration: 0.7s;
+}
+.screen-flash.play[data-flash="finish"] {
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgb(255 255 255 / 0.85),
+    color-mix(in srgb, var(--flash-color) 35%, transparent) 60%,
+    transparent 80%
+  );
+  animation: finish-flash 0.5s ease-out both;
+}
+[data-reduced-flash] .screen-flash.play[data-flash] {
+  background: none;
+  box-shadow: inset 0 0 0 5px color-mix(in srgb, var(--flash-color) 75%, transparent);
+  animation: soft-frame 0.9s ease-out both;
+}
+@keyframes edge-flash {
+  0% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes finish-flash {
+  0% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes soft-frame {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.finish-stamp {
+  position: absolute;
+  top: 17%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 26px 10px;
+  color: var(--ink);
+  background: var(--paper);
+  border-top: 3px solid var(--finish-color, var(--coral));
+  border-bottom: 3px solid var(--finish-color, var(--coral));
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+  --finish-color: var(--coral);
+}
+.finish-stamp strong {
+  font-size: clamp(30px, 7vw, 54px);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  line-height: 1;
+}
+.finish-stamp span {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+.finish-stamp.play {
+  animation: finish-stamp 1.8s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.finish-stamp[data-finish="ladderClear"] strong,
+.finish-stamp[data-finish="setWin"] strong {
+  color: var(--finish-color);
+}
+@keyframes finish-stamp {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1.6);
+  }
+  12% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  85% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.96);
+  }
+}
+/* The decisive stretch: the clock turns to the danger colour and beats gently. */
+[data-climax] .match-time {
+  color: var(--danger-text);
+  animation: climax-beat 1s ease-in-out infinite;
+}
+@keyframes climax-beat {
+  50% {
+    opacity: 0.55;
+  }
+}
+.setting-range {
+  width: 100%;
+  accent-color: var(--violet);
+}
+.setting-range:disabled {
+  opacity: 0.45;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+  .finish-stamp.play {
+    animation-name: finish-stamp-still;
+  }
+  [data-climax] .match-time {
+    animation: none;
   }
   .fighter-card.respawning {
     animation: none;
@@ -3246,4 +3394,15 @@ kbd {
   max-height: calc(100dvh - 24px);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+@keyframes finish-stamp-still {
+  0%,
+  85% {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%);
+  }
 }
