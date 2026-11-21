@@ -67,7 +67,7 @@ test("title, real 3D canvas, help and keyboard navigation load without errors", 
 
 test("training accepts movement, jump, charged feint, all attacks and pause", async ({ page }) => {
   // This full input sequence includes four long recovery animations and image readback.
-  test.setTimeout(120_000);
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
   const errors = await load(page);
   await start(page, "training");
   const before = await page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters[0].x);
@@ -275,7 +275,7 @@ test("touch controls fit a portrait viewport and trigger an attack", async ({ br
 test("graphics settings apply, persist across a reload and reflect in the dialog", async ({
   page,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
   const errors = await load(page);
   const dialog = page.locator(".settings-dialog");
   await page.getByRole("button", { name: "グラフィック設定を開く" }).click();
@@ -333,6 +333,7 @@ test("graphics settings apply, persist across a reload and reflect in the dialog
 });
 
 test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", async ({ page }) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
   // Angle (degrees, 0-180) between a fighter's facing and the bearing to a ground point.
   await page.addInitScript(() => {
     (window as unknown as AimProbe).__aimGap = (self, to) => {

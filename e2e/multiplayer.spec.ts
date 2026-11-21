@@ -98,7 +98,7 @@ const device = (page: Page, slot: number) =>
 test("pads join on the title and a keyboard player and a pad player share a duel", async ({
   page,
 }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await installPads(page);
