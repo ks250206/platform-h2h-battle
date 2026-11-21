@@ -1,10 +1,13 @@
-import { Container3D, CylinderGeometry, Geometry3D } from "@pixi/3d";
+import { Container3D, CylinderGeometry, FlatMaterial, Geometry3D, PhongMaterial } from "@pixi/3d";
 import type { Mesh3D } from "@pixi/3d";
 import { PALETTES, shade } from "../game/characters";
 import { SLOT_SHAPE_POINTS, SLOT_SHAPES, slotShape } from "../game/identity";
 import type { SlotShape } from "../game/identity";
-import type { Fighter, Species } from "../game/types";
+import { ATTACKS } from "../game/tuning";
+import type { AttackId, Fighter, Species } from "../game/types";
 import { addAccessory, SKULL } from "./accessories";
+import { CANCELLABLE_BREATH_HZ, combatCue } from "./combatCues";
+import type { CombatCue } from "./combatCues";
 import type { MeshLibrary } from "./meshes";
 import type { MotionFrame } from "./motion";
 import { PALETTE } from "./palette";
@@ -23,6 +26,8 @@ export class RigAssets {
   readonly blade = makeBlade();
   /** A chevron lying on the floor, pointing along +Z. */
   readonly chevron = makeChevron();
+  /** The foot ring broken into dashes: a fighter locked out and open to a punish. */
+  readonly brokenRing = makeBrokenRing();
   /** The slot shapes as flat unit polygons facing +Z: the markers over and under a fighter. */
   readonly shapes = Object.fromEntries(
     SLOT_SHAPES.map((shape) => [shape, makeShape(shape)]),
@@ -32,6 +37,7 @@ export class RigAssets {
     this.limb.destroy(true);
     this.blade.destroy(true);
     this.chevron.destroy(true);
+    this.brokenRing.destroy(true);
     for (const shape of SLOT_SHAPES) this.shapes[shape].destroy(true);
   }
 }
@@ -128,6 +134,40 @@ function makeChevron(): Geometry3D {
   });
 }
 
+/**
+ * A flat ring of radius 1 on the floor, cut into thick dashes. Thicker than the solid foot ring
+ * so the break reads from the zoomed-out camera and at low resolution.
+ */
+function makeBrokenRing(): Geometry3D {
+  const dashes = 8;
+  const fill = 0.55;
+  const steps = 4;
+  const half = 0.075;
+  const positions: number[] = [],
+    normals: number[] = [],
+    indices: number[] = [];
+  for (let d = 0; d < dashes; d++) {
+    const start = (d / dashes) * Math.PI * 2;
+    const first = positions.length / 3;
+    for (let i = 0; i <= steps; i++) {
+      const angle = start + ((fill * i) / steps / dashes) * Math.PI * 2;
+      for (const radius of [1 - half, 1 + half]) {
+        positions.push(Math.sin(angle) * radius, 0, Math.cos(angle) * radius);
+        normals.push(0, 1, 0);
+      }
+      if (i < steps) {
+        const v = first + i * 2;
+        indices.push(v, v + 1, v + 3, v, v + 3, v + 2);
+      }
+    }
+  }
+  return new Geometry3D({
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    indices: new Uint16Array(indices),
+  });
+}
+
 interface LimbNodes {
   upper: Container3D;
   lower: Container3D;
@@ -147,6 +187,11 @@ export interface FighterRig {
   chest: Container3D;
   head: Container3D;
   sword: Container3D;
+  /** The blade's own surface (one per fighter): it darkens when spent and burns white when live. */
+  bladeCore: PhongMaterial;
+  /** A see-through shell round the blade, breathing while cancellable and steady while live. */
+  bladeGlow: Mesh3D;
+  bladeGlowMaterial: FlatMaterial;
   arms: [LimbNodes, LimbNodes];
   legs: [LimbNodes, LimbNodes];
   tail: Container3D[];
@@ -163,6 +208,8 @@ export interface FighterRig {
   /** Floor markers live in the scene, not under the fighter, so jumps leave them behind. */
   shadow: Mesh3D;
   footRing: Mesh3D;
+  /** Replaces the foot ring while the fighter is locked out and open to a punish. */
+  brokenRing: Mesh3D;
   heading: Mesh3D;
   /** The slot's shape on the floor ring, on the side nearest the camera. Every fighter has one. */
   badge: Container3D;
@@ -190,6 +237,34 @@ const { cream: CREAM, dark: DARK, leather: LEATHER, gold: GOLD, steel: STEEL } =
 const { fuller: FULLER, iron: IRON } = PALETTE.fighter;
 
 const MARKER_INK = PALETTE.fighter.markerInk;
+const { bladeSpent: BLADE_SPENT, bladeWarm: BLADE_WARM, bladeHot: BLADE_HOT } = PALETTE.fighter;
+
+/** Straight-line mix of two 0xRRGGBB colours. */
+function mixColor(a: number, b: number, t: number): number {
+  const k = Math.max(0, Math.min(1, t));
+  const channel = (shift: number) => {
+    const from = (a >> shift) & 0xff,
+      to = (b >> shift) & 0xff;
+    return Math.round(from + (to - from) * k) << shift;
+  };
+  return channel(16) | channel(8) | channel(0);
+}
+
+/**
+ * The heading chevron thrown out along a live cut, its point near the attack's reach: long and
+ * narrow for the thrust, wide for the sweep. It appears the instant the blade can hit, which is
+ * also the instant the facing locks, and is gone the instant the cut ends.
+ */
+const LANCE: Record<AttackId, { width: number; length: number }> = {
+  overhead: { width: 1, length: 2.4 },
+  rising: { width: 1.3, length: 1.5 },
+  sweep: { width: 2.6, length: 1.2 },
+  thrust: { width: 0.7, length: 3 },
+};
+/** The chevron's point along +Z in its own geometry (see `makeChevron`). */
+const CHEVRON_TIP = 0.34;
+/** Where the heading chevron normally rests, just outside the foot ring. */
+const HEADING_OUT = 0.66;
 
 const TRAITS: Record<Species, { fur: number | null; bulk: number; head: number }> = {
   // The fox's coat follows its palette: the team colour a shade deeper so the scarf still reads.
@@ -382,7 +457,22 @@ export function createFighterRig(
   for (const side of [-1, 1])
     a.box(sword, GOLD, side * 0.3, 0.265, 0, 0.07, 0.13, 0.13).rotation.z = side * 0.3;
   a.ball(sword, team, 0, 0.29, 0, 0.075, 0.075, 0.085);
-  a.mesh(sword, g.blade, a.material(STEEL), 0, BODY.bladeBase, 0);
+  const bladeCore = new PhongMaterial({
+    baseColor: STEEL,
+    specularStrength: 0,
+    flatShading: true,
+    doubleSided: false,
+    emissive: { color: 0xffffff, strength: 0 },
+  });
+  a.mesh(sword, g.blade, bladeCore, 0, BODY.bladeBase, 0);
+  const bladeGlowMaterial = new FlatMaterial({
+    baseColor: BLADE_WARM,
+    doubleSided: true,
+    alpha: 0,
+    alphaMode: "blend",
+  });
+  const bladeGlow = a.mesh(sword, g.blade, bladeGlowMaterial, 0, BODY.bladeBase - 0.03, 0);
+  bladeGlow.visible = false;
   a.box(sword, FULLER, 0, BODY.bladeBase + 0.56, 0, 0.07, 1.02, 0.098);
   a.box(sword, team, 0, BODY.bladeBase + 0.045, 0, 0.36, 0.07, 0.115);
 
@@ -420,6 +510,16 @@ export function createFighterRig(
   // Pale rings vanish on the pale floor, so every ring is its fighter's own saturated colour.
   const ringColor = team;
   const footRing = a.mesh(parent, a.ring, a.material(ringColor, 0.9, 0.25), 0, 0.035, 0, 0.69);
+  const brokenRing = a.mesh(
+    parent,
+    g.brokenRing,
+    a.material(ringColor, 0.95, 0.3),
+    0,
+    0.036,
+    0,
+    0.69,
+  );
+  brokenRing.visible = false;
   const heading = a.mesh(parent, g.chevron, a.material(ringColor, 0.95, 0.3), 0, 0.04, 0);
   const badge = node(parent);
   badge.rotation.y = camera.yaw;
@@ -437,6 +537,9 @@ export function createFighterRig(
     chest,
     head,
     sword,
+    bladeCore,
+    bladeGlow,
+    bladeGlowMaterial,
     arms,
     legs,
     tail,
@@ -447,6 +550,7 @@ export function createFighterRig(
     pointer,
     shadow,
     footRing,
+    brokenRing,
     heading,
     badge,
     toCamera: { x: Math.sin(camera.yaw), z: Math.cos(camera.yaw) },
@@ -463,8 +567,65 @@ function placeLimb(nodes: LimbNodes, limb: Limb): void {
   place(nodes.end, limb.end);
 }
 
+/**
+ * The blade, floor halo, foot ring and heading chevron for the combat state (`combatCues.ts`).
+ * Everything here follows the state of this very frame, so nothing lags a phase change.
+ */
+function applyCue(rig: FighterRig, f: Fighter, cue: CombatCue, time: number): void {
+  const core =
+    cue.blade < 0 ? mixColor(STEEL, BLADE_SPENT, -cue.blade) : cue.blade > 0.9 ? 0xffffff : STEEL;
+  if (rig.bladeCore.baseColor !== core) rig.bladeCore.baseColor = core;
+  const burn = Math.max(0, cue.blade) * 0.75;
+  if (rig.bladeCore.emissive && rig.bladeCore.emissive.strength !== burn)
+    rig.bladeCore.emissive.strength = burn;
+  rig.bladeGlow.visible = cue.glow > 0.02;
+  if (rig.bladeGlow.visible) {
+    const color = cue.live ? BLADE_HOT : BLADE_WARM;
+    if (rig.bladeGlowMaterial.baseColor !== color) rig.bladeGlowMaterial.baseColor = color;
+    rig.bladeGlowMaterial.alpha = cue.glow * 0.55;
+    // A live blade's glow is fatter as well as brighter: a shape change, not only a colour one.
+    const width = 1.3 + 0.45 * cue.glow;
+    rig.bladeGlow.scale.set(width, 1.04, 2.2 + 1.2 * cue.glow);
+  }
+
+  rig.chargeHalo.visible = cue.halo > 0;
+  if (cue.halo > 0)
+    rig.chargeHalo.scale.set(cue.halo + (cue.phase === "charge" ? Math.sin(time * 11) * 0.03 : 0));
+
+  // A broken foot ring for as long as the fighter is open to a punish.
+  rig.brokenRing.visible = rig.footRing.visible && cue.exposed > 0;
+  rig.footRing.visible &&= cue.exposed <= 0;
+  rig.brokenRing.position.set(f.x, 0.041, f.z);
+
+  // The heading chevron shows where the next swing will go: turning with the aim (and breathing
+  // while the swing can still be called off), thrown out as a locked arrow while the cut is live,
+  // and gone while the fighter is open.
+  if (cue.exposed > 0) rig.heading.visible = false;
+  const sin = Math.sin(f.facing),
+    cos = Math.cos(f.facing);
+  if (cue.live && cue.attack) {
+    const lance = LANCE[cue.attack];
+    const out = ATTACKS[cue.attack].reach * 0.92 - CHEVRON_TIP * lance.length;
+    rig.heading.position.set(f.x + sin * out, 0.045, f.z + cos * out);
+    rig.heading.scale.set(lance.width, 1, lance.length);
+  } else {
+    rig.heading.position.set(f.x + sin * HEADING_OUT, 0.045, f.z + cos * HEADING_OUT);
+    const breath = cue.cancellable
+      ? 1 + 0.14 * Math.sin(time * Math.PI * 2 * CANCELLABLE_BREATH_HZ)
+      : 1;
+    rig.heading.scale.set(breath, 1, breath);
+  }
+  rig.heading.rotation.y = f.facing;
+}
+
 /** Writes one solved animation frame onto the scene nodes. */
-export function applyFrame(rig: FighterRig, frame: MotionFrame, f: Fighter, time: number): void {
+export function applyFrame(
+  rig: FighterRig,
+  frame: MotionFrame,
+  f: Fighter,
+  time: number,
+  cue: CombatCue = combatCue(f, time),
+): void {
   const { skeleton } = frame;
   rig.root.visible = f.mode !== "dead";
   rig.root.position.set(frame.origin.x, frame.origin.y, frame.origin.z);
@@ -498,8 +659,6 @@ export function applyFrame(rig: FighterRig, frame: MotionFrame, f: Fighter, time
   rig.scarf[0]!.rotation.set(-frame.scarf.pitch, frame.scarf.yaw, 0);
   rig.scarf[1]!.rotation.set(-frame.scarf.pitch * 0.6 - 0.15, frame.scarf.yaw * 0.8, 0);
 
-  rig.chargeHalo.visible = f.mode === "charge";
-  rig.chargeHalo.scale.set(0.75 + Math.min(1, f.charge) * 0.22 + Math.sin(time * 11) * 0.03);
   rig.pointer.visible = f.human && f.mode !== "dead";
   rig.pointer.position.set(
     frame.origin.x,
@@ -515,17 +674,20 @@ export function applyFrame(rig: FighterRig, frame: MotionFrame, f: Fighter, time
   rig.shadow.position.set(f.x, 0.026, f.z);
   rig.shadow.scale.set(0.65 * shrinking, 1, 0.47 * shrinking);
   rig.footRing.position.set(f.x, 0.04, f.z);
-  // The chevron sits just outside the ring and shows where the next swing will go.
-  rig.heading.position.set(f.x + Math.sin(f.facing) * 0.66, 0.045, f.z + Math.cos(f.facing) * 0.66);
-  rig.heading.rotation.y = f.facing;
   // The badge keeps its place on the ring whichever way the fighter faces.
   rig.badge.position.set(f.x + rig.toCamera.x * 0.71, 0, f.z + rig.toCamera.z * 0.71);
+  // Blade, halo, foot ring and heading chevron: what the combat state lets this fighter do.
+  applyCue(rig, f, cue, time);
 }
 
 export function destroyFighterRig(rig: FighterRig): void {
   rig.root.destroy({ children: true });
+  // The blade's materials belong to this rig alone (the shared ones live in the MeshLibrary).
+  rig.bladeCore.destroy();
+  rig.bladeGlowMaterial.destroy();
   rig.shadow.destroy();
   rig.footRing.destroy();
+  rig.brokenRing.destroy();
   rig.heading.destroy();
   rig.pointer.destroy({ children: true });
   rig.badge.destroy({ children: true });
