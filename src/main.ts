@@ -3,12 +3,17 @@ import "./touch.css";
 import { BattleEngine } from "./game/engine";
 import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
+import { PresentationTracker } from "./game/presentation";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
 import { createMatchStore, playableOptions } from "./game/matchStore";
-import type { MatchOptions } from "./game/match";
+import { humanSlots, padIndex, type MatchOptions } from "./game/match";
+import { LadderSession } from "./game/ladder";
 import { PadHub } from "./game/pads";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
+import { TrainingUI } from "./ui/trainingUi";
 import { GameUI } from "./ui/GameUI";
+import { TutorialBattle } from "./game/tutorial";
+import { TutorialUi } from "./ui/tutorialUi";
 import { PadMenu } from "./ui/padMenu";
 import { emptyInput } from "./game/types";
 import type { GameState, MatchMode, PlayerInput } from "./game/types";
@@ -18,8 +23,11 @@ root.innerHTML =
   '<div id="arena"></div><div id="interface"></div><div class="loading-screen"><span class="loading-paw">✦</span><strong>BRAMBLE</strong><p>浮島を準備しています…</p></div>';
 const host = document.getElementById("arena")!;
 const overlay = document.getElementById("interface")!;
-const engine = new BattleEngine();
+const matchEngine = new BattleEngine();
+let engine = matchEngine;
 const sound = new BattleAudio();
+/** Turns states into one-shot KO / finish / warning events for the sound, the scene and the HUD. */
+const presentation = new PresentationTracker();
 let input: BattleInput | null = null;
 let renderer: ArenaRenderer | null = null;
 let selectedMode: MatchMode = "duel";
@@ -28,17 +36,30 @@ let selectedMode: MatchMode = "duel";
 const match = createMatchStore();
 let matchOptions: MatchOptions = match.get();
 const pads = new PadHub();
+const connected = (index: number) => pads.isConnected(index);
+let ladder: LadderSession | null = null;
+let ladderAttempt: symbol | null = null;
 /** Starts (or restarts) a match with what can play right now. */
 const startMatch = (mode: MatchMode, options: MatchOptions) => {
+  leaveTutorial();
   selectedMode = mode;
   matchOptions = options;
   const count = mode === "rumble" ? 4 : 2;
-  const playable = playableOptions(options, count, (pad) => pads.isConnected(pad));
-  input?.reset();
-  input?.newMatch();
-  lostPad = null;
-  ui.setPadNotice(null);
+  const playable = playableOptions(options, count, connected);
   engine.start(mode, playable.options);
+  prepareGame();
+};
+/** The mode the title menu shows, for the line-up of fighters behind it. */
+let titleMode: MatchMode = "duel";
+let titleOptions = match.get();
+/**
+ * The title screen: the fighters of the selected mode in the looks the menu shows, with a CPU on
+ * every slot whose pad is away, exactly as a match would start.
+ */
+const showTitle = () => {
+  const count = titleMode === "rumble" ? 4 : 2;
+  const playable = playableOptions(titleOptions, count, connected);
+  engine.menu(titleMode, playable.options);
 };
 let animation = 0;
 let stopped = false;
@@ -51,56 +72,171 @@ let fps = 0;
 // The device profile picks the defaults; saved choices override them field by field.
 const software = hasSoftwareRenderer();
 const settings = createSettingsStore(defaultSettings({ software, touch: detectTouch() }));
+sound.setMix(settings.get());
 settings.subscribe((next) => {
   renderer?.applySettings(next);
   nextFrameDue = 0;
+  // Every change comes from a click or a key in the settings (or the sound button): a gesture.
+  if (!next.muted) sound.unlock();
+  sound.setMix(next);
 });
+// Any first press anywhere may start the audio (the title music included). A context the browser
+// keeps suspended only means silence: nothing waits for it.
+for (const type of ["pointerdown", "keydown"] as const)
+  window.addEventListener(type, () => sound.unlock(), { capture: true, passive: true });
 /** Development only: freezes the real-time loop so tooling can advance frames by hand. */
 let manualStepping = false;
 /** The pad (1-based) whose loss paused the match, until it is back or the match goes on. */
 let lostPad: number | null = null;
 
+/** A set, tutorial, or training session keeps its starting pad line-up across disconnects. */
+const missingRequiredPad = (): number | null => {
+  if (!engine.state.set && !(engine instanceof TutorialBattle) && !engine.training) return null;
+  for (const { device } of humanSlots(engine.state.options, 2)) {
+    const pad = padIndex(device);
+    if (pad !== null && !pads.isConnected(pad)) return pad + 1;
+  }
+  return null;
+};
+const prepareGame = () => {
+  input?.reset();
+  input?.newMatch(engine instanceof TutorialBattle);
+  lostPad = null;
+  ui.setPadNotice(null);
+  const missing = missingRequiredPad();
+  if (missing !== null) padLost(missing);
+  input?.updateVisibility(engine.state);
+  updateUI();
+};
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
   if (engine.state.phase === "paused") resume();
   else engine.pause();
 };
 const resume = () => {
+  const missing = missingRequiredPad();
+  if (missing !== null) {
+    padLost(missing);
+    return;
+  }
+  if (ladder && lostPad !== null) {
+    // Keep the current duel intact. A later attempt resolves the preferred pad again.
+    engine.state.options.controls = playableOptions(matchOptions, 2, connected).options.controls;
+  }
   lostPad = null;
   ui.setPadNotice(null);
+  if (engine instanceof TutorialBattle) {
+    input?.reset();
+    input?.newMatch(true);
+  }
   engine.resume();
+  input?.updateVisibility(engine.state);
 };
 /** A pad of the running match went away: pause and say which one. */
 const padLost = (padNumber: number) => {
   lostPad = padNumber;
+  trainingUI?.onPadLost();
   engine.pause();
-  ui.setPadNotice(`パッド${padNumber} の接続が切れました。つなぎ直してから再開してください。`);
+  const hint =
+    ladder || engine instanceof TutorialBattle
+      ? "つなぎ直すか、キーボード・マウス（タッチ）で再開できます。"
+      : "つなぎ直してから再開してください。";
+  ui.setPadNotice(
+    `パッド${padNumber} の接続が切れました。${hint}`,
+    engine.state.set !== null || engine instanceof TutorialBattle || engine.training !== null,
+  );
 };
 /** V / the top-bar camera button / the settings dialog all write the same stored setting. */
 const toggleCameraFollow = () => {
   if (document.querySelector("dialog[open]")) return;
   settings.set({ cameraFollow: !settings.get().cameraFollow });
 };
+/** Records a finished ladder duel once, as soon as the engine has ended it. */
+const settleLadder = () => {
+  const state = engine.state;
+  if (ladder && ladderAttempt !== null && state.phase === "ended") {
+    ladder.finish(ladderAttempt, state.winnerId, state.elapsed);
+    ladderAttempt = null;
+  }
+};
+const updateUI = () => {
+  settleLadder();
+  input?.updateVisibility(engine.state);
+  ui.update(engine.state, ladder?.progress);
+  trainingUI.update();
+  tutorialUi.update();
+};
+const playLadderAttempt = () => {
+  const attempt = ladder?.startAttempt();
+  if (!attempt) return;
+  sound.unlock();
+  ladderAttempt = attempt.id;
+  startMatch("duel", attempt.options);
+};
+const leaveLadder = () => {
+  ladder?.exit();
+  ladder = null;
+  ladderAttempt = null;
+};
+function returnToTitle() {
+  leaveTutorial();
+  leaveLadder();
+  input?.reset();
+  lostPad = null;
+  ui.setPadNotice(null);
+  renderer?.setSpotlight(null);
+  showTitle();
+  updateUI();
+}
 const ui = new GameUI(overlay, {
   onStart: (mode, options) => {
+    leaveLadder();
     sound.unlock();
     startMatch(mode, options);
-    ui.update(engine.state);
+  },
+  onStartLadder: (options) => {
+    if (engine.state.phase !== "menu") return;
+    ladder = new LadderSession(options);
+    playLadderAttempt();
+  },
+  onLadderContinue: () => {
+    if (!ladder || engine.state.phase !== "ended") return;
+    if (ladder.progress.phase === "clear") ladder = new LadderSession(match.get());
+    playLadderAttempt();
   },
   onPause: () => engine.pause(),
   onResume: resume,
   onRestart: () => {
+    if (engine instanceof TutorialBattle) return tutorialUi.retry();
+    if (ladder) return;
     sound.unlock();
-    startMatch(selectedMode, matchOptions);
-    ui.update(engine.state);
+    if (engine.training) {
+      const missing = missingRequiredPad();
+      if (missing !== null) {
+        padLost(missing);
+        return;
+      }
+      engine.resetTraining();
+      prepareGame();
+    } else if (engine.state.set) {
+      engine.start(engine.state.mode);
+      prepareGame();
+    } else startMatch(selectedMode, matchOptions);
   },
-  onMenu: () => {
-    input?.reset();
-    engine.menu();
+  onNextGame: () => {
+    if (!engine.nextSetGame()) return;
+    sound.unlock();
+    prepareGame();
   },
+  onMenu: returnToTitle,
+  onPreview: (mode, options) => {
+    titleMode = mode;
+    titleOptions = options;
+    if (engine.state.phase === "menu") showTitle();
+  },
+  onSpotlight: (slot) => renderer?.setSpotlight(slot),
   onSound: (enabled) => {
-    sound.unlock();
-    sound.setEnabled(enabled);
+    if (enabled) sound.unlock();
   },
   match,
   graphics: {
@@ -110,10 +246,71 @@ const ui = new GameUI(overlay, {
     supportsAmbientOcclusion: () => renderer?.supportsAmbientOcclusion ?? null,
   },
 });
-ui.update(engine.state);
+const trainingUI = new TrainingUI(
+  overlay,
+  engine,
+  () => input?.reset(),
+  updateUI,
+  () =>
+    lostPad === null &&
+    missingRequiredPad() === null &&
+    !humanSlots(engine.state.options, engine.state.fighters.length).some(({ device }) => {
+      const pad = padIndex(device);
+      return pad !== null && !pads.isConnected(pad);
+    }),
+  resume,
+);
+const leaveTutorial = () => {
+  tutorialUi.leave();
+  if (engine instanceof TutorialBattle) input?.newMatch();
+  engine = matchEngine;
+};
+const tutorialUi = new TutorialUi(
+  overlay,
+  {
+    resume,
+    play: (battle) => {
+      leaveLadder();
+      engine = battle;
+      sound.unlock();
+      prepareGame();
+    },
+    deviceChanged: (device) => {
+      if (!(engine instanceof TutorialBattle)) return;
+      engine.state.options.controls = { 0: device };
+      input?.switchDevice();
+      input?.updateVisibility(engine.state);
+      if (lostPad !== null && missingRequiredPad() === null) {
+        lostPad = null;
+        ui.setPadNotice(null);
+      }
+    },
+    exit: (mode) => {
+      const options = {
+        ...match.get(),
+        controls: { 0: tutorialUi.device },
+        setFormat: "single" as const,
+      };
+      if (mode) startMatch(mode, options);
+      else {
+        returnToTitle();
+        overlay.querySelector<HTMLButtonElement>(".tutorial-entry")?.focus();
+      }
+    },
+  },
+  detectTouch(),
+);
+updateUI();
 pads.subscribe((connected) => {
   ui.setPads(connected);
-  // The pad that went away during the match is back (another pad connecting changes nothing).
+  // Notice immediately if the set's roster is missing a pad. Results can still be browsed.
+  if (engine.state.phase !== "ended") {
+    const missing = missingRequiredPad();
+    if (missing !== null) {
+      padLost(missing);
+      return;
+    }
+  }
   if (lostPad !== null && connected.includes(lostPad - 1)) {
     lostPad = null;
     ui.setPadNotice(null);
@@ -121,6 +318,8 @@ pads.subscribe((connected) => {
 });
 const padMenu = new PadMenu(overlay, pads, {
   phase: () => engine.state.phase,
+  openTraining: () => trainingUI.open(),
+  resetTraining: () => trainingUI.quickReset(),
   titleButton: (index, button) => ui.padTitleButton(index, button),
 });
 
@@ -157,16 +356,26 @@ async function boot() {
       // Pads are read once a frame: the menus first (a press there may start or resume the
       // match), then the match input, which treats buttons still held as already pressed.
       pads.poll();
+      if (engine.state.phase === "menu" || engine instanceof TutorialBattle)
+        tutorialUi.observePads(pads.current);
       padMenu.update(now / 1000);
       input.updateVisibility(engine.state);
-      const control = input.sample(engine.state);
-      if (!manualStepping) {
-        engine.update(dt, control);
-        renderer.render(engine.state, dt);
+      const tutorial = engine instanceof TutorialBattle;
+      const control = input.sample(engine.state, tutorial && tutorialUi.promptDevice === "touch");
+      if (!manualStepping) engine.update(dt, control);
+      settleLadder();
+      const events = presentation.update(engine.state, {
+        ladderClear: ladder?.progress.phase === "clear",
+        tutorial,
+      });
+      if (events.length) {
+        renderer.present(events);
+        ui.present(events, engine.state);
       }
-      sound.update(engine.state);
+      if (!manualStepping) renderer.render(engine.state, dt, engine.training?.settings.hitboxes);
+      sound.update(engine.state, events, tutorial);
       if (now - lastUI > 33) {
-        ui.update(engine.state);
+        updateUI();
         ui.setFps(fps);
         ui.setLock(input.playerLocks);
         lastUI = now;
@@ -184,17 +393,20 @@ async function boot() {
         ? {
             ...inspect,
             start: (mode: MatchMode) => {
+              leaveLadder();
               startMatch(mode, match.get());
-              engine.state.phase = "playing";
+              if (engine.state.phase === "countdown") engine.state.phase = "playing";
             },
-            engine,
+            get engine() {
+              return engine;
+            },
             renderer,
             manual: (on: boolean) => {
               manualStepping = on;
             },
             step: (dt: number, control: Partial<PlayerInput> = {}) => {
               engine.update(dt, { ...emptyInput(), ...control });
-              renderer!.render(engine.state, dt);
+              renderer!.render(engine.state, dt, engine.training?.settings.hitboxes);
             },
           }
         : inspect,
@@ -227,7 +439,9 @@ window.addEventListener(
     stopped = true;
     cancelAnimationFrame(animation);
     input?.destroy();
+    tutorialUi.destroy();
     padMenu.destroy();
+    trainingUI.destroy();
     ui.destroy();
     sound.destroy();
     renderer?.destroy();

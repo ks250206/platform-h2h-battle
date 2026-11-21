@@ -27,6 +27,7 @@ describe("platform support and shrinking geometry", () => {
     expect(canStandAt(engine.state, 0, 0)).toBe(true);
     expect(canStandAt(engine.state, engine.state.arena.halfSize + 1, 0)).toBe(false);
     expect(canStandAt(engine.state, 0, -engine.state.arena.halfSize - 1)).toBe(false);
+    expect((RULES.minHalfSize * 2) / RULES.tileSize).toBe(5);
     engine.state.arena.halfSize = RULES.minHalfSize;
     expect(canStandAt(engine.state, RULES.minHalfSize + 1, 0)).toBe(false);
     expect(canStandAt(engine.state, 0, 0)).toBe(true);

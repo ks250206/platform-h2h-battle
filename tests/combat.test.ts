@@ -810,9 +810,13 @@ describe("positional grabs", () => {
   });
 
   test("eliminating a captor releases its victim instead of leaving a permanent grab", () => {
-    const { engine, player, target } = fixture();
+    const engine = new BattleEngine(12345);
+    engine.start("duel");
+    engine.state.phase = "playing";
+    engine.state.elapsed = RULES.safeZoneStart;
+    const [player, target] = engine.state.fighters;
     Object.assign(player, {
-      x: 4,
+      x: 6,
       z: 0,
       mode: "throw",
       modeTime: 0,
@@ -820,8 +824,7 @@ describe("positional grabs", () => {
       grabbedId: target.id,
       outsideTime: RULES.outsideLimit - DT / 2,
     });
-    Object.assign(target, { x: 4, z: 0.8, mode: "grabbed", grabbedBy: player.id });
-    engine.state.arena.safeZone = { x: 0, z: 0, radius: 2, active: true };
+    Object.assign(target, { x: 6, z: 0.8, mode: "grabbed", grabbedBy: player.id });
     engine.update(DT, emptyInput());
     expect(player.mode).toBe("dead");
     expect(player.grabbedId).toBeNull();

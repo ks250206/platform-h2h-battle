@@ -15,13 +15,16 @@ import {
 import type { PadHub } from "../game/pads";
 import type { Phase } from "../game/types";
 
-export type TitleButton = "a" | "start" | "b";
+export type TitleButton = "a" | "start" | "b" | "y";
 
 export interface PadMenuHooks {
   phase: () => Phase;
+  openTraining?: () => void;
+  resetTraining?: () => void;
   /**
-   * The title's join shortcut, asked before a press is used to navigate: true when the press
-   * joined or removed that pad and should do nothing else.
+   * The title's shortcuts, asked before a press is used to navigate: A or Start joins, B leaves,
+   * Y opens the look picker of that pad's fighter. True when the press did that and should do
+   * nothing else.
    */
   titleButton: (padIndex: number, button: TitleButton) => boolean;
 }
@@ -34,6 +37,8 @@ interface Layer {
   primary: string;
   back?: () => void;
   start?: () => void;
+  /** LB / RB: steps through the layer's tabs (the slots of the look picker). */
+  cycle?: (delta: 1 | -1) => void;
 }
 
 const FOCUSABLE = "button, select, input, summary, a[href], [tabindex]:not([tabindex='-1'])";
@@ -91,16 +96,32 @@ export class PadMenu {
   private layer(): Layer | null {
     const dialog = this.root.querySelector<HTMLDialogElement>("dialog[open]");
     if (dialog) {
-      const close = dialog.querySelector<HTMLElement>("[data-action^='close-']");
+      // A dialog names its own back and start buttons, first control and tabs where it has them
+      // (the look picker: B cancels, Start confirms, LB / RB change the slot).
+      const close = dialog.querySelector<HTMLElement>("[data-pad-back], [data-action^='close-']");
+      const start = dialog.querySelector<HTMLElement>("[data-pad-start]");
+      const tabs = dialog.querySelector<HTMLElement>("[data-pad-tabs]");
       return {
         key: "dialog:" + dialog.className,
         scopes: [dialog],
-        primary: ".help-done, select, input",
+        primary: "[data-pad-primary], .help-done, select, input",
         back: () => close?.click(),
+        ...(start ? { start: () => start.click() } : {}),
+        ...(tabs
+          ? {
+              cycle: (delta: 1 | -1) => {
+                const buttons = [...tabs.querySelectorAll<HTMLElement>("button")].filter(visible);
+                const current = buttons.findIndex((b) => b.getAttribute("aria-pressed") === "true");
+                buttons[(current + delta + buttons.length) % buttons.length]?.click();
+              },
+            }
+          : {}),
       };
     }
-    const click = (selector: string) => () =>
-      this.root.querySelector<HTMLElement>(selector)?.click();
+    const click = (selector: string) => () => {
+      const control = this.root.querySelector<HTMLElement>(selector);
+      if (control && visible(control)) control.click();
+    };
     switch (this.hooks.phase()) {
       case "menu":
         return {
@@ -128,8 +149,8 @@ export class PadMenu {
         return {
           key: "ended",
           scopes: [panel],
-          primary: "[data-action='restart']",
-          start: click(".result-screen [data-action='restart']"),
+          primary: "[data-pad-primary]",
+          start: click(".result-screen [data-pad-primary]"),
         };
       }
       default:
@@ -149,6 +170,10 @@ export class PadMenu {
       this.repeat = current.map((pad) => heldNav(menuDirection(pad)));
     }
     if (!layer) {
+      if (current.some((pad, i) => justPressed(pad, this.previous[i], BUTTON.UP)))
+        this.hooks.openTraining?.();
+      else if (current.some((pad, i) => justPressed(pad, this.previous[i], BUTTON.DOWN)))
+        this.hooks.resetTraining?.();
       this.previous = current.slice();
       return;
     }
@@ -160,10 +185,16 @@ export class PadMenu {
       }
       const previous = this.previous[index] ?? null;
       this.previous[index] = pad;
+      const title = layer.key === "menu";
+      // Reconnecting with a button or direction held must not resume pause, confirm results, or
+      // press dialog actions. Title keeps press-to-join for newly connected pads.
+      if (!previous && !title) {
+        this.repeat[index] = heldNav(menuDirection(pad));
+        return;
+      }
       const nav = stepNav(this.repeat[index] ?? heldNav(null), menuDirection(pad), now);
       this.repeat[index] = nav.repeat;
       const pressed = (button: number) => justPressed(pad, previous, button);
-      const title = layer.key === "menu";
       if (pressed(BUTTON.START)) {
         if (!(title && this.hooks.titleButton(index, "start"))) layer.start?.();
         return;
@@ -175,6 +206,14 @@ export class PadMenu {
       if (pressed(BUTTON.B)) {
         if (title) this.hooks.titleButton(index, "b");
         else layer.back?.();
+        return;
+      }
+      if (title && pressed(BUTTON.Y)) {
+        this.hooks.titleButton(index, "y");
+        return;
+      }
+      if (layer.cycle && (pressed(BUTTON.LB) || pressed(BUTTON.RB))) {
+        layer.cycle(pressed(BUTTON.RB) ? 1 : -1);
         return;
       }
       if (nav.step) this.move(layer, nav.step);
@@ -238,6 +277,17 @@ export class PadMenu {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  /** Nudges a slider (the music / effects volume) one step and reports the change. */
+  private stepRange(range: HTMLInputElement, delta: 1 | -1): void {
+    if (range.disabled) return;
+    const before = range.value;
+    if (delta > 0) range.stepUp();
+    else range.stepDown();
+    if (range.value === before) return;
+    range.dispatchEvent(new Event("input", { bubbles: true }));
+    range.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
   private move(layer: Layer, direction: MenuDirection): void {
     const from = this.focused(layer);
     if (!from) {
@@ -248,6 +298,10 @@ export class PadMenu {
     const delta = direction === "right" ? 1 : -1;
     if (sideways && from instanceof HTMLSelectElement) {
       this.stepSelect(from, delta);
+      return;
+    }
+    if (sideways && from instanceof HTMLInputElement && from.type === "range") {
+      this.stepRange(from, delta);
       return;
     }
     // Left / right stay inside a segmented control (or the mode picker) until its end.

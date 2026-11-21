@@ -54,6 +54,7 @@ describe("losing a life and coming back", () => {
   test("a fall with lives left downs the fighter, credits the kill and starts the respawn timer", () => {
     const { engine, player, cpu } = fixture(3);
     player.lastAttacker = cpu.id;
+    player.lastHitAt = engine.state.elapsed;
     drop(engine, player);
     expect(player.mode).toBe("dead");
     expect(player.stocks).toBe(2);
@@ -76,6 +77,7 @@ describe("losing a life and coming back", () => {
       airStepUsed: true,
       kills: 2,
       lastAttacker: cpu.id,
+      lastHitAt: engine.state.elapsed,
     });
     drop(engine, player);
     const frames = waitForRespawn(engine, player);
@@ -88,6 +90,7 @@ describe("losing a life and coming back", () => {
     expect(player.stamina).toBe(RULES.maxStamina);
     expect(player.airRisingUsed || player.airThrustUsed || player.airStepUsed).toBe(false);
     expect(player.lastAttacker).toBeNull();
+    expect(player.lastHitAt).toBe(-Infinity);
     expect(player.eliminatedAt).toBeNull();
     expect(player.respawnTimer).toBe(0);
     expect(player.grounded).toBe(false);

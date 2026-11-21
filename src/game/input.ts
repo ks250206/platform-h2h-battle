@@ -12,8 +12,10 @@ import { cycleTarget, resolveTarget } from "./lockOn";
 import { humanSlots, padIndex, type ControlDevice } from "./match";
 import {
   anyPressed,
+  isDown,
   freshPadMemory,
   readPad,
+  readStick,
   rumbleFor,
   type PadCommands,
   type PadMemory,
@@ -107,6 +109,41 @@ function devicesOf(state: GameState): Map<number, ControlDevice> {
   );
 }
 
+/** Controls down at a training/menu handoff stay released until the physical button
+ * or stick returns to neutral. Other controls remain available immediately. */
+export class TrainingPadRelease {
+  private readonly buttons: Set<number>;
+  private readonly sticks: Set<number>;
+
+  constructor(pad: PadSnapshot) {
+    this.buttons = new Set(pad.buttons.flatMap((_, i) => (isDown(pad, i) ? [i] : [])));
+    this.sticks = new Set(
+      [0, 2].filter((i) => {
+        const stick = readStick(pad.axes, i);
+        return stick.x !== 0 || stick.y !== 0;
+      }),
+    );
+  }
+
+  filter(pad: PadSnapshot): PadSnapshot {
+    const buttons = pad.buttons.map((button, i) => {
+      if (!isDown(pad, i)) this.buttons.delete(i);
+      return this.buttons.has(i) ? { pressed: false, value: 0 } : button;
+    });
+    const axes = [...pad.axes];
+    for (const i of this.sticks) {
+      const stick = readStick(axes, i);
+      if (!stick.x && !stick.y) this.sticks.delete(i);
+      else axes[i] = axes[i + 1] = 0;
+    }
+    return { axes, buttons };
+  }
+
+  get ready() {
+    return !this.buttons.size && !this.sticks.size;
+  }
+}
+
 /**
  * Every human's input for a frame: the keyboard with the mouse (or the touch controls) for at
  * most one player, and one gamepad each for the others. Each player keeps their own lock-on.
@@ -128,6 +165,7 @@ export class BattleInput {
   private readonly abort = new AbortController();
   // ---- the pads
   private padPrevious: (PadSnapshot | null)[] = [];
+  private trainingPadRelease = new Map<number, TrainingPadRelease>();
   private padMemory: PadMemory[] = [];
   /** Pads seen connected during the running match, so a disconnect is reported once. */
   private padsSeen = new Set<number>();
@@ -137,7 +175,9 @@ export class BattleInput {
    * Lock-on per fighter id: on until that player turns it off, and remembered for the page
    * session. While on, the aim always points at the target; mouse, arrows and stick do not aim.
    */
-  private locks = new Map<number, { on: boolean; targetId: number | null }>();
+  private readonly sessionLocks = new Map<number, { on: boolean; targetId: number | null }>();
+  private locks = this.sessionLocks;
+  private heldMenuSticks = new Map<number, { move: boolean; aim: boolean }>();
   private devices = new Map<number, ControlDevice>();
   private previousPhase = "";
   private active = false;
@@ -371,6 +411,17 @@ export class BattleInput {
 
   /** Held buttons at a takeover count as already pressed: nothing fires until they come up. */
   private takeOverPads(): void {
+    this.heldMenuSticks.clear();
+    if (this.locks !== this.sessionLocks) {
+      this.pads.current.forEach((pad, index) => {
+        if (!pad) return;
+        const held = (axis: number) => {
+          const stick = readStick(pad.axes, axis);
+          return Boolean(stick.x || stick.y);
+        };
+        this.heldMenuSticks.set(index, { move: held(0), aim: held(2) });
+      });
+    }
     this.padPrevious = this.pads.current.slice();
     this.padMemory = this.pads.current.map(() => freshPadMemory());
   }
@@ -421,13 +472,21 @@ export class BattleInput {
    * One input per human fighter of `state`, each from that fighter's device. Also handles the
    * pads' Start (pause) and View (camera), the pad-lost check and the rumble.
    */
-  sample(state: GameState): PlayerInputs {
+  sample(state: GameState, touchAutoLock = false): PlayerInputs {
     const inputs: PlayerInputs = {};
+    if (touchAutoLock) this.lockFor(0).on = true;
     this.watchPads(state);
     const active =
       (state.phase === "playing" || state.phase === "countdown") &&
       !document.querySelector("dialog[open]");
-    if (active && !this.active) this.takeOverPads();
+    if (active && !this.active) {
+      this.takeOverPads();
+      this.trainingPadRelease.clear();
+      if (state.mode === "training")
+        this.pads.current.forEach((pad, index) => {
+          if (pad) this.trainingPadRelease.set(index, new TrainingPadRelease(pad));
+        });
+    }
     this.active = active;
     if (!active) {
       this.clearKeyboardPresses();
@@ -435,13 +494,29 @@ export class BattleInput {
     }
     // Every connected pad is read once a frame, whether it plays or not.
     const commands = new Map<number, PadCommands>();
-    this.pads.current.forEach((current, index) => {
-      if (!current) return;
+    this.pads.current.forEach((raw, index) => {
+      if (!raw) {
+        this.trainingPadRelease.delete(index);
+        return;
+      }
+      const release = this.trainingPadRelease.get(index);
+      const current = release ? release.filter(raw) : raw;
+      if (release?.ready) this.trainingPadRelease.delete(index);
       const previous = this.padPrevious[index] ?? null;
       const result = readPad(current, previous, this.padMemory[index] ?? freshPadMemory());
       if (anyPressed(current, previous)) this.hooks.onGesture();
       this.padPrevious[index] = current;
       this.padMemory[index] = result.memory;
+      const held = this.heldMenuSticks.get(index);
+      if (held?.move) {
+        held.move = Boolean(result.commands.move.x || result.commands.move.y);
+        result.commands.move = { x: 0, y: 0 };
+      }
+      if (held?.aim) {
+        held.aim = result.commands.aim !== null;
+        result.commands.aim = null;
+        result.commands.cycle = 0;
+      }
       commands.set(index, result.commands);
     });
     let pause = false;
@@ -497,7 +572,10 @@ export class BattleInput {
   }
 
   /** A new match or a restart: every lock that is on picks the nearest opponent afresh. */
-  newMatch(): void {
+  newMatch(isolatedLocks = false): void {
+    this.heldMenuSticks.clear();
+    if (!isolatedLocks) this.locks = this.sessionLocks;
+    else if (this.locks === this.sessionLocks) this.locks = new Map();
     for (const lock of this.locks.values()) lock.targetId = null;
     this.padsSeen.clear();
     this.rumbleSamples.clear();
@@ -519,7 +597,26 @@ export class BattleInput {
       this.reset();
     this.previousPhase = state.phase;
   }
+  /**
+   * In-play device switch (e.g. a tutorial switching from keyboard to a pad mid-lesson): clears
+   * stale keyboard/touch state without re-arming menu-takeover pad suppression, so the stick
+   * movement that selected the pad moves the fighter on the same frame.
+   */
+  switchDevice(): void {
+    this.held.clear();
+    this.clearKeyboardPresses();
+    this.mouse = null;
+    this.mouseAttack = null;
+    this.touchAttack = null;
+    this.touchMove = { x: 0, y: 0 };
+    this.joystickId = null;
+    this.touch.querySelector<HTMLElement>(".stick-knob")!.style.transform = "";
+    this.touch.querySelectorAll(".pressed").forEach((button) => button.classList.remove("pressed"));
+    this.padsSeen.clear();
+    this.rumbleSamples.clear();
+  }
   reset(): void {
+    this.active = false;
     this.held.clear();
     this.clearKeyboardPresses();
     this.mouse = null;

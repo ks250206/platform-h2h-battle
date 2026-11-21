@@ -89,6 +89,18 @@ summary:focus-visible {
 [hidden] {
   display: none !important;
 }
+/* Read out, not shown: the words behind a symbol. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 ::selection {
   background: var(--sun);
   color: var(--ink);
@@ -121,6 +133,8 @@ svg {
 #interface button,
 #interface a,
 #interface summary,
+#interface select,
+#interface input,
 #interface dialog {
   pointer-events: auto;
 }
@@ -231,6 +245,15 @@ svg {
   width: 360px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  pointer-events: auto;
+  padding-right: 4px;
+  padding-bottom: 12px;
+}
+.menu-content > * {
+  flex-shrink: 0;
 }
 .menu-content::before,
 .menu-content::after {
@@ -275,7 +298,7 @@ h1 > span {
 }
 .mode-picker {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: 100%;
   gap: 3px;
   border-bottom: 1px solid var(--line);
@@ -283,9 +306,9 @@ h1 > span {
 .mode-option {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 5px;
   position: relative;
-  padding: 13px 6px 16px;
+  padding: 13px 4px 16px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -319,7 +342,8 @@ h1 > span {
 .mode-label {
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
 }
 .mode-label small {
   display: block;
@@ -400,7 +424,112 @@ h1 > span {
 .match-options .segmented button[aria-pressed="true"] {
   background: var(--sun);
 }
-/* One row per fighter: who plays it (keyboard, a pad or the CPU), then a P badge or CPU strength. */
+.match-set-format .segmented {
+  grid-template-columns: 0.65fr 1fr 1fr;
+}
+.match-set-format .segmented button {
+  white-space: normal;
+}
+/* A slot's shape (triangle, circle, square, star): the non-colour half of who a fighter is. The
+   title rows, the HUD tags, the lock chips and the results all draw the same glyph. */
+.slot-glyph {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  overflow: visible;
+  fill: var(--slot-color, currentColor);
+  stroke: var(--ink);
+  stroke-width: 0.26;
+  stroke-linejoin: round;
+}
+/* ステージ: four short names to pick from. What the pick means (the stage's name, what fighting
+   there is about, what each gimmick does there) is on the card beside the 3D preview; where that
+   card has no room (phones), the same words sit right under the buttons instead. */
+.stage-detail {
+  display: none;
+  gap: 3px;
+  margin: 0 0 2px;
+  padding: 6px 9px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--violet) 8%, transparent);
+}
+.stage-info p {
+  margin: 0;
+}
+.stage-detail-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.stage-detail-name strong {
+  font-size: 11.5px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+}
+.stage-detail-name span {
+  font-size: 7.5px;
+  font-weight: 650;
+  letter-spacing: 0.18em;
+  color: var(--violet);
+}
+.stage-summary,
+.stage-rules {
+  font-size: 9.5px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.stage-summary {
+  color: var(--ink);
+}
+.gimmick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 1px 0;
+  padding: 0;
+  list-style: none;
+}
+.gimmick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.gimmick-chip b {
+  font-weight: 800;
+  color: var(--violet);
+}
+/* Held back on this stage: the one to read before picking it. */
+.gimmick-chip[data-state="limited"] {
+  border-color: color-mix(in srgb, var(--sun) 65%, var(--ink));
+  background: color-mix(in srgb, var(--sun) 38%, var(--paper));
+}
+.gimmick-chip[data-state="limited"] b {
+  color: var(--ink);
+}
+.gimmick-chip[data-state="off"] {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-soft);
+}
+.gimmick-chip[data-state="off"] b {
+  color: var(--ink-soft);
+}
+/* Training runs no timed gimmick, so the chips would promise what does not happen. */
+.stage-info.practice .gimmick-chips {
+  display: none;
+}
+/* One row per fighter: its character (opens the look picker), who plays it (keyboard, a pad or
+   the CPU), then a P badge or CPU strength. --slot-color is the slot's chosen colour. */
 .player-rows {
   display: grid;
   gap: 4px;
@@ -416,32 +545,43 @@ h1 > span {
   gap: 6px;
   border-radius: 999px;
 }
-.player-row[data-slot="1"] {
-  --slot-color: var(--sky);
-}
-.player-row[data-slot="2"] {
-  --slot-color: color-mix(in srgb, var(--violet) 62%, var(--pink));
-}
-.player-row[data-slot="3"] {
-  --slot-color: var(--sun);
-}
-.player-name {
+.player-character {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 5px 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--slot-color) 18%, var(--paper));
+  color: var(--ink);
   font-size: 10px;
   font-weight: 650;
+  line-height: 1.3;
   letter-spacing: 0.04em;
-  color: var(--ink);
   white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
-.player-name i {
-  width: 8px;
-  height: 8px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--slot-color);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+.player-character:hover {
+  border-color: var(--violet);
+  background: color-mix(in srgb, var(--slot-color) 34%, var(--paper));
+}
+.player-character:focus-visible {
+  outline-offset: 2px;
+}
+.player-character-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-character-edit {
+  margin-left: auto;
+  color: var(--ink-soft);
+}
+.player-character-edit svg {
+  width: 9px;
+  height: 9px;
 }
 .match-options select {
   width: 100%;
@@ -538,6 +678,13 @@ h1 > span {
   font-size: 8px;
   font-weight: 750;
 }
+/* A key and its word that must not be split across two lines. */
+.hint-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
 .hint-dot {
   width: 3px;
   height: 3px;
@@ -554,11 +701,105 @@ h1 > span {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+/* The preset the rules match (or カスタム), and the rules a match will actually run with. */
+.match-options-head .rule-preset-badge {
+  margin-left: auto;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--sun);
+  color: var(--ink);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+.match-options-head .rule-preset-badge.custom {
+  background: var(--pink);
+}
+.gimmick-toggles button[aria-pressed="false"] {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+/* A gimmick the stage fixes: dashed, greyed and not clickable; the note below says why. */
+.match-options .gimmick-toggles button:disabled,
+.match-options .gimmick-toggles button.locked {
+  cursor: not-allowed;
+  opacity: 0.45;
+  border-style: dashed;
+  box-shadow: none;
+  transform: none;
+}
+.rules-preset-detail {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  opacity: 0.85;
+}
+.rules-preset-detail strong {
+  font-weight: 700;
+}
+.rules-summary {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.rules-notes {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--danger-text);
+}
 .match-options-note {
   margin: 0;
   font-size: 10px;
   line-height: 1.6;
   color: var(--ink-soft);
+}
+.ladder-overview {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--paper);
+}
+.ladder-overview h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+}
+.ladder-overview p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.ladder-overview .ladder-curve,
+.ladder-overview .ladder-player {
+  color: var(--ink);
+  font-weight: 650;
+}
+.ladder-opponent-card {
+  display: grid;
+  gap: 3px;
+  padding: 9px 12px;
+  border-left: 2px solid var(--coral);
+  border-radius: 3px;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: left;
+}
+.ladder-opponent-card strong {
+  color: var(--ink);
+  font-size: 13px;
 }
 .start-button {
   width: 100%;
@@ -583,6 +824,10 @@ h1 > span {
   font-size: 16px;
   letter-spacing: 0.1em;
   font-weight: 750;
+}
+.start-label,
+.result-primary-label {
+  font-weight: inherit;
 }
 .start-button > span span {
   display: block;
@@ -636,25 +881,37 @@ h1 > span {
   border-radius: 50%;
   background: var(--pink);
 }
+/* The stage card: beside the 3D preview, naming the stage it shows and what to expect there. */
 .arena-caption {
   position: absolute;
-  right: 6.5%;
-  bottom: 18%;
+  right: 4.5%;
+  bottom: 62px;
+  display: grid;
+  gap: 5px;
+  width: 318px;
+  color: var(--ink);
+  padding: 11px 16px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.caption-head {
   display: flex;
   align-items: center;
   gap: 13px;
-  color: var(--ink);
   font-size: 9px;
   letter-spacing: 0.17em;
-  padding: 9px 18px 10px 16px;
-  border-radius: 16px;
-  background: var(--paper);
-  box-shadow: var(--shadow-sm);
+}
+.caption-text {
+  flex: 1;
 }
 .caption-cross {
   color: var(--coral);
   font-size: 19px;
   font-weight: 300;
+}
+.caption-title {
+  display: block;
 }
 .arena-caption small {
   display: block;
@@ -701,10 +958,16 @@ h1 > span {
   white-space: nowrap;
 }
 .match-mode,
-.match-alive {
+.match-alive,
+.match-set-score {
   font-size: 9px;
   letter-spacing: 0.14em;
   color: var(--ink-soft);
+}
+.match-set-score {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  font-weight: 700;
 }
 .match-time {
   font-size: 19px;
@@ -732,8 +995,18 @@ h1 > span {
   box-shadow: var(--shadow-sm);
   white-space: nowrap;
 }
-.arena-status:empty {
+.arena-status:not(:has(.ladder-hud:not([hidden]), .arena-status-message:not(:empty))),
+.arena-status-message:empty {
   display: none;
+}
+.arena-status:has(.ladder-hud:not([hidden])) {
+  max-width: calc(100% - 32px);
+  white-space: normal;
+  text-align: center;
+}
+.ladder-hud {
+  color: var(--ink);
+  font-weight: 650;
 }
 .arena-status.warning {
   color: var(--danger-text);
@@ -854,8 +1127,12 @@ h1 > span {
   color: var(--ink-faint);
 }
 .fighter-tag {
-  /* A chip in the fighter's colour; ink text reads on all four of them (yellow included).
+  /* A chip in the fighter's colour; ink text reads on every palette (yellow included). The slot's
+     shape leads the tag, so two fighters in the same colour still have different chips.
      The chip is drawn with shadows so it takes no extra room in the narrow rumble cards. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--ink);
   background: var(--fighter-color);
   border-radius: 999px;
@@ -872,6 +1149,21 @@ h1 > span {
   font-size: 8px;
   letter-spacing: 0.13em;
   white-space: nowrap;
+}
+.fighter-status.ukemi,
+.fighter-status.knockdown {
+  font-weight: 700;
+  border-radius: 2px;
+  background: var(--status-bg);
+  box-shadow: 0 0 0 2px var(--status-bg);
+}
+.fighter-status.ukemi {
+  color: #00534f;
+  --status-bg: #a8ede0;
+}
+.fighter-status.knockdown {
+  color: #643800;
+  --status-bg: #ffcf75;
 }
 .fighter-avatar {
   display: grid;
@@ -1043,7 +1335,20 @@ h1 > span {
 .fighter-locks[hidden] {
   display: none;
 }
+.fighter-tag .slot-glyph,
+.fighter-lock .slot-glyph,
+.winner-tag .slot-glyph,
+.help-shape .slot-glyph {
+  width: 8px;
+  height: 8px;
+  fill: currentColor;
+  stroke: none;
+}
 .fighter-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
   padding: 2px 7px;
   border-radius: 999px;
   background: var(--ink);
@@ -1083,6 +1388,12 @@ h1 > span {
       0 0 0 3px color-mix(in srgb, var(--fighter-color) 35%, transparent),
       var(--shadow);
   }
+}
+.zone-compass {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--violet);
 }
 .outside-warning {
   position: absolute;
@@ -1254,6 +1565,11 @@ kbd {
 .primary-button:hover {
   background: var(--coral-hover);
 }
+.primary-button[aria-disabled="true"] {
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  cursor: default;
+}
 .secondary-button {
   margin-top: 10px;
   background: transparent;
@@ -1288,29 +1604,93 @@ kbd {
 }
 .result-panel {
   text-align: center;
-  width: 390px;
+  width: 590px;
+  max-height: calc(100dvh - 24px);
+  padding: clamp(14px, 4vw, 26px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .result-paw {
-  margin: 0 auto 22px;
+  margin: 0 auto 14px;
   width: 43px;
   height: 43px;
   color: var(--coral);
   transform: rotate(-8deg);
 }
-.result-panel .eyebrow {
-  justify-content: center;
-  font-size: 8px;
-}
 .result-panel h2 {
-  font-size: 29px;
+  margin-top: 0;
+  font-size: clamp(20px, 5vw, 29px);
+}
+.result-eyebrow {
+  justify-content: center;
+  margin-bottom: 4px;
+}
+.modal-panel > .result-score {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 700;
+}
+.modal-panel > .result-subtitle {
+  margin: 0 0 8px;
+}
+.modal-panel > .result-exit-note {
+  margin: -6px 0 9px;
+}
+.modal-panel > .pause-exit-note {
+  margin: 8px 0 0;
+  text-align: center;
+}
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: 6px;
+  margin: 12px 0;
+}
+.result-actions button {
+  width: auto;
+  margin: 0;
+  padding: 9px 12px;
+}
+.result-actions .text-button {
+  font-size: 11px;
+}
+/* Who won, as the match showed them: slot shape and tag on a chip of their colour, then the name. */
+.modal-panel > .result-winner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: -2px 0 10px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.winner-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--fighter-color, var(--coral));
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+.winner-name {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
 }
 .result-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  margin-bottom: 27px;
+  margin-bottom: 12px;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 17px 0;
+  padding: 7px 0;
 }
 .result-stats > div {
   display: flex;
@@ -1326,6 +1706,112 @@ kbd {
   font-size: 7px;
   color: var(--ink-soft);
   letter-spacing: 0.13em;
+}
+.ladder-next,
+.ladder-totals {
+  margin: 0 0 18px;
+}
+.ladder-totals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  padding: 12px 0;
+  border-block: 1px solid var(--line);
+}
+.ladder-totals dt {
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+.ladder-totals dd {
+  margin: 0;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.ladder-clear .result-panel {
+  background: linear-gradient(color-mix(in srgb, var(--sun) 22%, var(--paper)), var(--paper) 62%);
+  border-color: color-mix(in srgb, var(--sun) 65%, var(--line));
+}
+.ladder-clear .result-paw {
+  color: var(--coral-text);
+  filter: drop-shadow(0 0 9px var(--sun));
+}
+.result-panel:has([data-action="ladder-continue"]),
+.pause-panel:has([data-action="restart"][hidden]) {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+:is(
+    .result-panel:has([data-action="ladder-continue"]),
+    .pause-panel:has([data-action="restart"][hidden])
+  )
+  .text-button {
+  min-height: 40px;
+  padding-inline: 12px;
+  margin-top: 6px;
+}
+.result-stat-picker {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 10px;
+}
+.result-player-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 360px) {
+  .result-player-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.result-player {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-align: left;
+  background: var(--paper-2);
+}
+.result-player h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 7px;
+}
+.result-player dl {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.result-player dl div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.result-player dt {
+  color: var(--ink-soft);
+}
+.result-player dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.result-stat-note {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-align: left;
+}
+.result-stat-note summary {
+  cursor: pointer;
+}
+.result-stat-note p {
+  margin-top: 5px;
+  line-height: 1.6;
 }
 .help-dialog {
   width: 720px;
@@ -1447,7 +1933,7 @@ kbd {
   margin-top: 23px;
 }
 /* Graphics settings: the help dialog's language, docked to the side so the arena stays in view. */
-.settings-dialog {
+:is(.settings-dialog, .training-dialog) {
   width: 400px;
   max-width: calc(100vw - 32px);
   max-height: calc(100dvh - 48px);
@@ -1462,7 +1948,7 @@ kbd {
   overscroll-behavior: contain;
   scrollbar-color: var(--line-strong) transparent;
 }
-.settings-dialog::backdrop {
+:is(.settings-dialog, .training-dialog)::backdrop {
   background: color-mix(in srgb, var(--ink) 12%, transparent);
 }
 [data-settings-open] .pause-screen {
@@ -1657,12 +2143,287 @@ kbd {
   color: var(--ink-soft);
   margin-top: 19px;
 }
+/* キャラクターと見た目: how to pick a look, and that it changes nothing about how a fighter plays. */
+.character-help {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.character-help h3 {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  margin-bottom: 8px;
+  color: var(--violet);
+  font-weight: 600;
+}
+.character-help p {
+  margin: 0 0 8px;
+  font-size: 10px;
+  line-height: 1.9;
+  color: var(--ink-soft);
+}
+.character-help p:last-child {
+  margin-bottom: 0;
+}
+.character-help strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+.help-shape {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0 5px 0 2px;
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* The look picker. Docked on the menu's side (or along the bottom of a narrow screen) with no
+   scrim, so the fighter in the arena, shown in close-up, is the preview. */
+.character-dialog {
+  --slot-color: var(--coral);
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 48px);
+  margin: auto auto auto max(16px, 4.5vw);
+  padding: 20px 26px 0;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--slot-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.character-dialog::backdrop {
+  background: transparent;
+}
+/* The menu steps aside while a look is chosen: nothing but the picker and the fighter. */
+[data-character-open] .menu-content,
+[data-character-open] .arena-caption,
+[data-character-open] .menu-bottom {
+  visibility: hidden;
+}
+[data-character-open] .menu-screen {
+  background: none;
+}
+.character-dialog .help-head {
+  margin-bottom: 12px;
+}
+.character-dialog .help-head h2 {
+  font-size: 22px;
+  margin-top: 6px;
+}
+.character-slots {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 5px;
+}
+.character-slots button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  text-align: left;
+  line-height: 1.25;
+}
+.character-slots button .slot-glyph {
+  grid-row: span 2;
+  width: 11px;
+  height: 11px;
+}
+.character-slots button span {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+}
+.character-slots button small {
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.character-slots button:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+/* The slot being dressed: ink frame and a bar of its colour, not the colour alone. */
+.character-slots button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--slot-color) 22%, var(--paper));
+  border-color: var(--ink);
+  color: var(--ink);
+  box-shadow: inset 0 -3px 0 var(--slot-color);
+}
+.character-summary {
+  margin: 10px 0 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+}
+.character-section {
+  margin-top: 12px;
+}
+.character-section h3 {
+  margin: 0 0 6px;
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  color: var(--violet);
+  font-weight: 600;
+}
+.character-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+.character-species {
+  grid-template-columns: repeat(4, 1fr);
+}
+.character-options button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  transition: background 0.15s;
+}
+.character-options button:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+/* The chosen option is framed in ink as well as filled, so it never depends on colour alone. */
+.character-options button[aria-pressed="true"] {
+  background: var(--sun);
+  border-color: var(--ink);
+  color: var(--ink);
+  box-shadow:
+    inset 0 0 0 1px var(--ink),
+    var(--shadow-sm);
+}
+.character-options button:focus-visible,
+.character-slots button:focus-visible,
+.character-foot button:focus-visible {
+  outline-offset: 2px;
+}
+.character-options button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.character-species button {
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+.character-species strong {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.character-species small {
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+}
+.character-palettes button {
+  gap: 5px;
+  padding: 6px 7px;
+  font-size: 9.5px;
+  letter-spacing: 0;
+}
+.character-palettes button i {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ink) 32%, transparent);
+}
+.character-accessories button svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+.character-note {
+  margin: 12px 0 0;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--sun) 70%, var(--paper));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--sun) 16%, var(--paper));
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.character-note strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+.character-pad-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 9px 0 0;
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+}
+/* Decide and cancel stay in reach while the choices scroll behind them. */
+.character-foot {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: auto 1fr 1.25fr;
+  align-items: center;
+  gap: 8px;
+  margin: 12px -26px 0;
+  padding: 10px 26px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+.character-foot .text-button {
+  margin: 0;
+  padding: 6px 4px;
+  white-space: nowrap;
+}
+.character-foot .text-button:disabled {
+  opacity: 0.4;
+}
+.character-foot .secondary-button {
+  margin-top: 0;
+  padding: 11px 10px;
+}
+.character-foot .primary-button {
+  padding: 11px 14px;
+}
 /* The pad bindings: a two-column table, read in pairs (RB / RT, LB / LT, …). */
+.rules-help,
 .pad-help {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+.rules-help h3,
 .pad-help h3 {
   font-size: 9px;
   letter-spacing: 0.13em;
@@ -1670,6 +2431,7 @@ kbd {
   color: var(--violet);
   font-weight: 600;
 }
+.rules-help p,
 .pad-help-lead,
 .pad-help-foot {
   margin: 0;
@@ -1679,6 +2441,9 @@ kbd {
 }
 .pad-help-foot {
   margin-top: 10px;
+}
+.rules-help .key-list {
+  margin: 8px 0;
 }
 .pad-table {
   display: grid;
@@ -1701,6 +2466,56 @@ kbd {
 .pad-table dd {
   margin: 0;
   font-size: 10px;
+  color: var(--ink-soft);
+}
+/* The stages: what each one plays like and which gimmicks it keeps. */
+.stage-help {
+  margin: 4px 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.stage-help h3 {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  margin-bottom: 8px;
+  color: var(--violet);
+  font-weight: 600;
+}
+.stage-help-lead {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+}
+.stage-help-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+  margin: 10px 0 0;
+}
+.stage-help-item dt {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.stage-help-item dt small {
+  margin-left: 8px;
+  font-size: 7.5px;
+  font-weight: 650;
+  letter-spacing: 0.17em;
+  color: var(--violet);
+}
+.stage-help-item dd {
+  margin: 4px 0 0;
+}
+.stage-help-item p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+.stage-help-item .stage-help-rules {
+  margin-top: 3px;
   color: var(--ink-soft);
 }
 
@@ -1733,11 +2548,15 @@ kbd {
     width: 310px;
     left: 5%;
   }
+  .mode-number {
+    display: none;
+  }
   h1 {
     font-size: 37px;
   }
   .arena-caption {
-    right: 5%;
+    right: 3.5%;
+    width: 290px;
   }
   .keyboard-legend,
   .pad-legend {
@@ -1815,6 +2634,25 @@ kbd {
     top: 81px;
   }
 }
+/* The stage row took the taglines' line on a short desktop screen. */
+@media (max-height: 760px) and (min-width: 701px) {
+  .menu-features {
+    display: none;
+  }
+}
+@media (max-height: 700px) and (min-width: 701px) {
+  .ladder-menu .menu-content {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    pointer-events: auto;
+  }
+  .ladder-menu .menu-content > .eyebrow,
+  .ladder-menu h1,
+  .ladder-menu .menu-description {
+    display: none;
+  }
+}
 @media (max-width: 700px) {
   .topbar {
     top: max(19px, env(safe-area-inset-top));
@@ -1847,13 +2685,14 @@ kbd {
   }
   /* Portrait: the column sits on the bottom of the band, under the arena, and grows upwards. */
   .menu-content {
-    top: max(70px, calc(env(safe-area-inset-top) + 56px));
+    top: max(62px, calc(env(safe-area-inset-top) + 48px));
     left: 26px;
     right: 26px;
-    bottom: max(62px, calc(env(safe-area-inset-bottom) + 40px));
+    bottom: max(42px, calc(env(safe-area-inset-bottom) + 26px));
     width: auto;
     max-width: 420px;
     margin: 0 auto;
+    padding-bottom: 4px;
   }
   .menu-content::after {
     flex: 0 0 0;
@@ -1863,34 +2702,55 @@ kbd {
   }
   /* The headline drops to one line to make room for the match options. */
   h1 {
-    font-size: 26px;
-    line-height: 1.4;
-    margin: 13px 0 9px;
+    font-size: 22px;
+    line-height: 1.3;
+    margin: 6px 0 6px;
   }
   h1 br {
     display: none;
   }
+  /* The stage's own words (under its buttons, below) take the tagline's place on a phone. */
   .menu-description {
-    font-size: 11px;
-    line-height: 1.8;
-    margin-bottom: 14px;
+    display: none;
   }
+  /* Four player rows: the headline makes way too, so the stage stays in view above them. */
   .menu-content:has(.match-options.four-players:not(.practice)) > .eyebrow,
-  .menu-content:has(.match-options.four-players:not(.practice)) .menu-description {
+  .menu-content:has(.match-options.four-players:not(.practice)) h1 {
     display: none;
   }
   .mode-option {
-    padding-top: 9px;
-    padding-bottom: 11px;
+    padding-top: 6px;
+    padding-bottom: 7px;
   }
   .mode-description {
-    margin-bottom: 12px;
+    margin: 5px 0 7px;
+    font-size: 10px;
   }
   .match-options {
-    margin-bottom: 14px;
+    margin-bottom: 8px;
+    padding: 7px 10px;
+  }
+  .match-options-head {
+    margin-bottom: 4px;
+  }
+  .match-options-body {
+    gap: 4px;
+  }
+  .match-set-format .segmented button {
+    font-size: 9px;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  .stage-detail {
+    display: grid;
+    padding: 5px 8px;
+    gap: 2px;
+  }
+  .stage-detail p {
+    line-height: 1.45;
   }
   .start-button {
-    padding: 16px 20px;
+    padding: 12px 18px;
   }
   .menu-features {
     display: none;
@@ -1898,10 +2758,13 @@ kbd {
   .arena-caption {
     display: none;
   }
+  .stage-detail .gimmick-chips {
+    display: none;
+  }
   .menu-bottom {
     left: 24px;
     right: 24px;
-    bottom: max(20px, env(safe-area-inset-bottom));
+    bottom: max(12px, env(safe-area-inset-bottom));
     font-size: 7px;
   }
   .menu-bottom span:nth-child(2) {
@@ -2014,7 +2877,8 @@ kbd {
   [data-mode="rumble"] .fighter-invulnerable {
     right: 3px;
   }
-  /* The narrow rumble cards drop the status line, except to say a fighter is coming back. */
+  /* Keep landing outcomes, readiness and respawns readable on compact cards. */
+  [data-mode="rumble"] .fighter-status.landing-status,
   [data-mode="rumble"] .respawning .fighter-status {
     display: block;
     font-size: 7px;
@@ -2028,9 +2892,13 @@ kbd {
     max-height: calc(100dvh - 30px);
   }
   .help-columns,
-  .help-tips {
+  .help-tips,
+  .stage-help-list {
     grid-template-columns: 1fr;
     gap: 22px;
+  }
+  .stage-help-list {
+    gap: 12px;
   }
   .help-head h2 {
     font-size: 25px;
@@ -2051,7 +2919,7 @@ kbd {
   .help-callout strong {
     font-size: 11px;
   }
-  .settings-dialog {
+  :is(.settings-dialog, .training-dialog) {
     margin: auto;
     padding: 20px 20px 18px;
     max-height: calc(100dvh - 30px);
@@ -2059,6 +2927,14 @@ kbd {
   .fps-counter {
     top: 62px;
     right: 22px;
+  }
+}
+@media (max-width: 380px) {
+  .mode-label {
+    font-size: 11px;
+  }
+  .mode-label small {
+    font-size: 7px;
   }
 }
 /* Short portrait phones: the last resort is scrolling inside the menu column. */
@@ -2104,7 +2980,30 @@ kbd {
     left: 5%;
     right: auto;
     width: 300px;
+    overflow: visible;
+    pointer-events: none;
+    padding-right: 0;
+    padding-bottom: 0;
     transform: translateY(-43%);
+  }
+  .ladder-menu .menu-content {
+    top: 56px;
+    bottom: 27px;
+    width: min(340px, 90%);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: auto;
+    transform: none;
+  }
+  .ladder-menu .menu-content > .eyebrow,
+  .ladder-menu h1,
+  .ladder-menu .menu-description {
+    display: none;
+  }
+  .ladder-overview {
+    gap: 5px;
+    padding: 9px 12px;
+    margin-bottom: 9px;
   }
   /* Short landscape: the match options become a second column beside the menu. */
   .match-options {
@@ -2112,7 +3011,12 @@ kbd {
     top: 50%;
     left: calc(100% + 20px);
     width: 300px;
+    max-height: calc(100dvh - 60px);
     margin: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    pointer-events: auto;
     background: var(--paper);
     transform: translateY(-50%);
   }
@@ -2124,8 +3028,17 @@ kbd {
     grid-template-columns: 58px 1fr 1fr;
     gap: 5px;
   }
-  .arena-caption,
-  .match-options.practice {
+  .player-character-edit {
+    display: none;
+  }
+  /* Practice keeps its rows too: that is where a slot's character and look are chosen. */
+  .arena-caption {
+    display: none;
+  }
+  .stage-detail {
+    display: grid;
+  }
+  .stage-detail .gimmick-chips {
     display: none;
   }
   .menu-content > .eyebrow {
@@ -2221,11 +3134,7 @@ kbd {
   .result-paw {
     display: none;
   }
-  .result-stats {
-    padding: 13px 0;
-    margin-bottom: 18px;
-  }
-  .settings-dialog {
+  :is(.settings-dialog, .training-dialog) {
     max-height: calc(100dvh - 24px);
     padding-top: 16px;
   }
@@ -2234,6 +3143,177 @@ kbd {
     right: 25px;
   }
 }
+/* The look picker follows the arena: where the renderer shows the fighter above the menu (narrow
+   windows) it docks along the bottom; in a short landscape window it stays on the side. */
+@media (max-width: 899px) {
+  .character-dialog {
+    width: min(440px, calc(100vw - 20px));
+    max-width: none;
+    max-height: 55dvh;
+    margin: auto auto max(10px, env(safe-area-inset-bottom)) auto;
+    padding: 12px 16px 0;
+  }
+  .character-dialog .help-head {
+    margin-bottom: 8px;
+  }
+  .character-dialog .help-head .eyebrow {
+    display: none;
+  }
+  .character-dialog .help-head h2 {
+    margin-top: 0;
+    font-size: 17px;
+  }
+  .character-dialog .icon-button {
+    width: 30px;
+    height: 30px;
+  }
+  .character-section {
+    margin-top: 9px;
+  }
+  .character-foot {
+    margin: 10px -16px 0;
+    padding: 8px 16px 12px;
+  }
+}
+@media (max-width: 899px) and (max-height: 570px) and (orientation: landscape) {
+  .character-dialog {
+    width: 330px;
+    max-height: calc(100dvh - 16px);
+    margin: auto auto auto max(8px, env(safe-area-inset-left));
+  }
+}
+/* Issue #16: KO and finish moments. Short, pointer-transparent, and kept off the middle of the
+   arena: the edge flash only tints the screen border, the stamp sits above the fighters. */
+.finish-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.screen-flash {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  --flash-color: #fff;
+}
+.screen-flash.play[data-flash="ko"],
+.screen-flash.play[data-flash="out"] {
+  box-shadow: inset 0 0 60px 8px color-mix(in srgb, var(--flash-color) 70%, transparent);
+  animation: edge-flash 0.45s ease-out both;
+}
+.screen-flash.play[data-flash="out"] {
+  box-shadow: inset 0 0 90px 14px color-mix(in srgb, var(--flash-color) 80%, transparent);
+  animation-duration: 0.7s;
+}
+.screen-flash.play[data-flash="finish"] {
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgb(255 255 255 / 0.85),
+    color-mix(in srgb, var(--flash-color) 35%, transparent) 60%,
+    transparent 80%
+  );
+  animation: finish-flash 0.5s ease-out both;
+}
+[data-reduced-flash] .screen-flash.play[data-flash] {
+  background: none;
+  box-shadow: inset 0 0 0 5px color-mix(in srgb, var(--flash-color) 75%, transparent);
+  animation: soft-frame 0.9s ease-out both;
+}
+@keyframes edge-flash {
+  0% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes finish-flash {
+  0% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes soft-frame {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.finish-stamp {
+  position: absolute;
+  top: 17%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 26px 10px;
+  color: var(--ink);
+  background: var(--paper);
+  border-top: 3px solid var(--finish-color, var(--coral));
+  border-bottom: 3px solid var(--finish-color, var(--coral));
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+  --finish-color: var(--coral);
+}
+.finish-stamp strong {
+  font-size: clamp(30px, 7vw, 54px);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  line-height: 1;
+}
+.finish-stamp span {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+.finish-stamp.play {
+  animation: finish-stamp 1.8s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.finish-stamp[data-finish="ladderClear"] strong,
+.finish-stamp[data-finish="setWin"] strong {
+  color: var(--finish-color);
+}
+@keyframes finish-stamp {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1.6);
+  }
+  12% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  85% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.96);
+  }
+}
+/* The decisive stretch: the clock turns to the danger colour and beats gently. */
+[data-climax] .match-time {
+  color: var(--danger-text);
+  animation: climax-beat 1s ease-in-out infinite;
+}
+@keyframes climax-beat {
+  50% {
+    opacity: 0.55;
+  }
+}
+.setting-range {
+  width: 100%;
+  accent-color: var(--violet);
+}
+.setting-range:disabled {
+  opacity: 0.45;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2241,11 +3321,120 @@ kbd {
     transition: none !important;
     scroll-behavior: auto !important;
   }
+  .finish-stamp.play {
+    animation-name: finish-stamp-still;
+  }
+  [data-climax] .match-time {
+    animation: none;
+  }
   .fighter-card.respawning {
     animation: none;
     box-shadow:
       inset 0 2px 0 var(--fighter-color),
       0 0 0 3px color-mix(in srgb, var(--fighter-color) 35%, transparent),
       var(--shadow);
+  }
+}
+
+.training-hud {
+  pointer-events: auto;
+  position: absolute;
+  top: max(100px, 15%);
+  left: max(12px, 3%);
+  padding: 5px 8px;
+  max-width: min(380px, 94vw);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.training-hud button,
+.training-dialog button {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.training-state pre {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  font: inherit;
+}
+.training-dialog {
+  pointer-events: auto;
+  overscroll-behavior: contain;
+}
+.training-dialog fieldset {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+.training-dialog legend {
+  font-size: 13px;
+  font-weight: bold;
+}
+.training-dialog label {
+  display: block;
+  margin: 4px 0;
+  font-size: 13px;
+}
+.training-dialog p,
+.training-dialog small {
+  font-size: 12px;
+  line-height: 1.55;
+}
+.training-dialog input[type="number"] {
+  width: 5em;
+  padding: 4px;
+  border: 1px solid var(--line);
+}
+.training-damage,
+.training-footer {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.training-footer {
+  justify-content: space-between;
+}
+@media (max-width: 700px) {
+  .training-hud {
+    top: 160px;
+    left: 8px;
+    font-size: 10px;
+  }
+  .training-state {
+    max-height: 26dvh;
+    overflow: auto;
+  }
+}
+#interface:has(.training-dialog[open]) .pause-screen {
+  visibility: hidden;
+}
+
+@media (max-height: 570px) {
+  .training-hud {
+    top: 73px;
+  }
+  .training-state {
+    max-height: 34dvh;
+    overflow: auto;
+  }
+}
+[data-mode="training"] .pause-panel {
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@keyframes finish-stamp-still {
+  0%,
+  85% {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%);
   }
 }

@@ -88,6 +88,7 @@ export const RULES = {
   grabRecovery: 0.7,
   grabReach: 1.25,
   grabHold: 0.45,
+  throwSteerThreshold: 0.1,
   hitstop: 0.085,
   clashHitstop: 0.11,
   diAngle: Math.PI / 12,
@@ -99,7 +100,7 @@ export const RULES = {
   collapseStart: 32,
   collapseInterval: 22,
   collapseWarning: 4,
-  minHalfSize: 3,
+  minHalfSize: 5,
   safeZoneStart: 18,
   bombStart: 14,
   bombInterval: 11,
@@ -118,20 +119,47 @@ export const RULES = {
   respawnDelay: 1.4,
   respawnHeight: 6,
   respawnInvulnerable: 2.5,
+  /**
+   * Input buffer (seconds): an attack, step, jump or grab pressed while the fighter cannot do it
+   * (recovery, cancel lag, a step, clash, hitstun, hitstop, or in the air for a jump or grab)
+   * fires on the first tick it becomes legal, if that comes within this long of the press. Counted
+   * in fixed ticks (`INPUT_BUFFER_TICKS`), so it is the same at any render rate.
+   */
+  inputBuffer: 0.1,
 } as const;
 
-/** How a CPU of each strength plays. `normal` reproduces the original CPU. */
+/** `RULES.inputBuffer` in fixed simulation ticks: 6 at 60 Hz. */
+export const INPUT_BUFFER_TICKS = Math.round(RULES.inputBuffer / RULES.fixedStep);
+
+/** Landing recovery on the 60 Hz simulation clock. */
+export const UKEMI = {
+  windowTicks: 10,
+  duration: 16 * RULES.fixedStep,
+  protection: 8 * RULES.fixedStep,
+  rollTime: 12 * RULES.fixedStep,
+  rollSpeed: 9,
+  knockdownDuration: 28 * RULES.fixedStep,
+  knockdownProtection: 5 * RULES.fixedStep,
+  cpuChance: { easy: 0.2, normal: 0.5, hard: 0.8 },
+} as const;
+
+/** How a CPU of each strength plays. */
 export interface AiProfile {
   /** Seconds between decisions: `thinkMin + random × thinkRange`. */
   thinkMin: number;
   thinkRange: number;
   /** Chance to dodge a wind-up (or a bomb about to go off) it has noticed. */
   dodgeChance: number;
-  /**
-   * Holds a dodge until the wind-up it reacts to has at most this long left (seconds), so a
-   * tracking swing cannot follow it; infinite reacts at once.
-   */
-  dodgeWindow: number;
+  /** Age in fixed ticks of the opponent pose used for a combat decision. */
+  observationTicks: number;
+  /** Probability of treating a held charge as an imminent release. */
+  anticipateCharge: number;
+  /** Estimated elapsed charge time (seconds) when an anticipated release prompts a step. */
+  chargeReadMin: number;
+  chargeReadMax: number;
+  /** Seconds before estimated contact to start a step, plus uniform judgment error. */
+  dodgeLead: number;
+  leadSpread: number;
   /** Dodges the way that actually leaves the swing (back from a sweep, away from the blade line, away from a bomb). */
   smartDodge: boolean;
   /** Stamina it wants in hand before starting an attack. */
@@ -161,10 +189,15 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     thinkMin: 0.42,
     thinkRange: 0.28,
     dodgeChance: 0.2,
-    dodgeWindow: Number.POSITIVE_INFINITY,
+    observationTicks: 14,
+    anticipateCharge: 0.16,
+    chargeReadMin: 0.18,
+    chargeReadMax: 0.38,
+    dodgeLead: 0.18,
+    leadSpread: 0.14,
     smartDodge: false,
     attackStamina: 45,
-    chargeChance: 0,
+    chargeChance: 0.12,
     feintRange: 0,
     tracking: 0,
     bombNotice: 0.9,
@@ -179,7 +212,12 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     thinkMin: 0.18,
     thinkRange: 0.16,
     dodgeChance: 0.7,
-    dodgeWindow: Number.POSITIVE_INFINITY,
+    observationTicks: 9,
+    anticipateCharge: 0.36,
+    chargeReadMin: 0.28,
+    chargeReadMax: 0.44,
+    dodgeLead: 0.19,
+    leadSpread: 0.1,
     smartDodge: false,
     attackStamina: 30,
     chargeChance: 0.3,
@@ -197,10 +235,15 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     thinkMin: 0.1,
     thinkRange: 0.08,
     dodgeChance: 0.9,
-    dodgeWindow: 0.17,
+    observationTicks: 5,
+    anticipateCharge: 0.46,
+    chargeReadMin: 0.28,
+    chargeReadMax: 0.44,
+    dodgeLead: 0.17,
+    leadSpread: 0.075,
     smartDodge: true,
     attackStamina: 30,
-    chargeChance: 0.45,
+    chargeChance: 0.32,
     feintRange: 2.8,
     tracking: 1,
     bombNotice: Number.POSITIVE_INFINITY,

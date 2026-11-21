@@ -75,6 +75,42 @@ export const GUARD = make({
   footRYaw: -0.32,
 });
 
+/** Shoulder tucked, sword held across the chest as the feet leave the floor. */
+const TECH_TUCK = make({
+  hip: v3(0.06, -0.23, 0),
+  hipPitch: 0.46,
+  chestPitch: 0.78,
+  chestRoll: 0.32,
+  headPitch: 0.52,
+  footL: v3(0.15, 0.36, 0.24),
+  footR: v3(-0.14, 0.29, 0.18),
+  gripAt: v3(-0.14, 0.74, 0.25),
+  dir: dirYE(82, 12),
+});
+
+/** Down on one hip, bracing against the floor with the free hand. */
+const DOWN = make({
+  hip: v3(-0.14, -0.43, 0),
+  hipRoll: -0.48,
+  chestRoll: -0.62,
+  headRoll: 0.22,
+  footL: v3(0.33, 0, 0.4),
+  footR: v3(-0.26, 0, 0.22),
+  offFree: 1,
+  offHand: v3(0.4, -0.68, 0.04),
+  gripAt: v3(-0.35, 0.34, -0.12),
+  dir: dirYE(-152, -6),
+});
+
+export function getUpPose(success: boolean, progress: number): Pose {
+  const plant = success ? 0.6 : 0.48;
+  return blendPose(
+    success ? TECH_TUCK : DOWN,
+    GUARD,
+    easeInOut(Math.max(0, (progress - plant) / (1 - plant))),
+  );
+}
+
 /** Off duty: the blade resting on the shoulder, free hand on the hip. Title and victory. */
 export const SHOULDER = make({
   hip: v3(0.02, -0.015, 0),
@@ -661,6 +697,52 @@ export const CLASH = make({
   footR: v3(-0.22, 0, -0.26),
   footRYaw: -0.3,
 });
+
+/**
+ * A swing called off: the body recoils from its own cut, hips thrown back and low, chest leaning
+ * away, the front heel braking, and the blade yanked back down behind and held just off the
+ * floor. Everything moves away from where the cut was going, the opposite of a follow-through,
+ * so a cancel never reads as a finished swing.
+ */
+export const CHECK = make({
+  hip: v3(0, -0.15, -0.14),
+  hipPitch: -0.08,
+  lowerYaw: -0.34,
+  chestYaw: -0.5,
+  chestPitch: -0.12,
+  headYaw: 0.4,
+  headPitch: 0.08,
+  gripAt: v3(-0.3, 0.8, -0.1),
+  dir: dirYE(-160, -6),
+  footL: v3(0.17, 0, 0.3),
+  footLYaw: 0.4,
+  footLPitch: -0.38,
+  footR: v3(-0.21, 0, -0.24),
+  footRYaw: -0.32,
+});
+
+/** Share of a cancel (0-1) spent holding the check before the fighter rises into its guard. */
+export const cancelHold = (lag: number): number => 0.48 + 0.3 * lag;
+
+/**
+ * The cancel lag, start to finish (`progress` 0-1 of the cancel). The check is held while the
+ * lag lasts, lower and longer for a late cancel (`lag` 0-1), and the guard is only reached as
+ * the fighter becomes free to act, so the extra lag of a late cancel shows rather than hides.
+ */
+export function cancelPose(guard: Pose, checked: Pose, progress: number, lag: number): Pose {
+  const hold = cancelHold(lag);
+  const braced = make(
+    {
+      hip: v3(checked.hip.x, checked.hip.y - 0.08 * lag, checked.hip.z - 0.04 * lag),
+      chestPitch: checked.chestPitch - 0.08 * lag,
+      headPitch: checked.headPitch + 0.04 * lag,
+      footLPitch: checked.footLPitch - 0.1 * lag,
+    },
+    checked,
+  );
+  if (progress <= hold) return braced;
+  return blendPose(braced, guard, easeInOut((progress - hold) / (1 - hold)));
+}
 
 const GRAB_READY = make(
   {

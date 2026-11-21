@@ -6,24 +6,38 @@ import {
   DirectionalLight,
   Mesh3D,
   Plane,
+  TorusGeometry,
   Vector3,
   View3D,
 } from "@pixi/3d";
 import type { Pass3D, ShadowQuality } from "@pixi/3d";
 import { FxaaEffect, SsaoEffect } from "@pixi/3d/extras";
+import { drawTrainingDebug } from "./trainingDebug";
 import { Application, Container, Graphics, RendererType, Sprite, Text, Texture } from "pixi.js";
 import type { WebGLRenderer } from "pixi.js";
+import { canStandAt } from "../game/combat";
 import { CAMERA_FORWARD, CAMERA_OFFSET, CAMERA_RIGHT } from "../game/coordinates";
+import {
+  countHumans,
+  fighterTag,
+  sharesName,
+  SLOT_SHAPE_POINTS,
+  slotShape,
+} from "../game/identity";
 import { effectiveSamples, MSAA_SAMPLES, resolutionScale } from "../game/settings";
 import type { GraphicsSettings, MsaaSamples, ShadowLevel } from "../game/settings";
 import type { Bomb, Effect, Fighter, GameState, Vec2 } from "../game/types";
+import { combatCue } from "./combatCues";
 import { MeshLibrary } from "./meshes";
 import { norm, qLook } from "./math3";
 import { FighterMotion } from "./motion";
 import { PALETTE } from "./palette";
 import type { MotionEvent } from "./motion";
-import { applyFrame, createFighterRig, destroyFighterRig, RigAssets } from "./rig";
+import { applyFrame, createFighterRig, destroyFighterRig, rigIdentity, RigAssets } from "./rig";
 import type { FighterRig } from "./rig";
+import type { PresentationEvent } from "../game/presentation";
+import { FinishFx } from "./finishFx";
+import { StageShapes, StageView } from "./stageMesh";
 import { SwordTrail } from "./trail";
 
 const TAU = Math.PI * 2;
@@ -80,6 +94,32 @@ const FOLLOW_MARGIN_Y = 2.2;
 const FOLLOW_USABLE_WIDTH = 0.84;
 /** Fighter facing (0 is +Z) that looks straight back at the camera. */
 const FACING_CAMERA = Math.atan2(-CAMERA_FORWARD.x, -CAMERA_FORWARD.z);
+/** Where the camera is, for the slot markers that always face it. */
+const MARKER_CAMERA = { yaw: FACING_CAMERA, pitch: Math.asin(CAMERA_SIN) };
+/**
+ * Title screen close-up of the fighter whose look is being chosen: the share of the view's height
+ * its body takes on a wide screen, and the floor width a narrow one must still show around it.
+ */
+const SPOTLIGHT_HEIGHT_SHARE = 0.3;
+const SPOTLIGHT_MIN_WIDTH = 4.2;
+/**
+ * A standing fighter, ear tips included, and the height the close-up centres on: above the
+ * middle, which leaves room over the head for the label and keeps it clear of the top bar.
+ */
+const FIGHTER_HEIGHT = 2.1;
+const SPOTLIGHT_AIM = 1.4;
+/** The close-up's pan where the look picker docks along the bottom of a narrow screen. */
+const SPOTLIGHT_PAN_UP = -0.23;
+/**
+ * Height of the label over a fighter. A human's sits above the slot marker floating over its head
+ * (`rig.ts`), with a few pixels between the two for the stamina bar.
+ */
+const LABEL_HEIGHT = 2.65;
+const LABEL_HEIGHT_MARKED = 2.9;
+const LABEL_MARKER_GAP = 10;
+/** Half the size, in pixels, of the slot shape drawn in the label over a fighter. */
+const LABEL_GLYPH = 5;
+const LABEL_GLYPH_GAP = 5;
 const ease = (t: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
 type Vec3Like = { x: number; y: number; z: number };
 
@@ -104,15 +144,6 @@ export function hasSoftwareRenderer(): boolean {
   return /swiftshader|llvmpipe|softpipe|software/i.test(name);
 }
 
-interface TileView {
-  root: Container3D;
-  top: Mesh3D;
-  outline: Mesh3D;
-  x: number;
-  z: number;
-  tint: number;
-  fallenAt: number | null;
-}
 interface FighterView {
   rig: FighterRig;
   motion: FighterMotion;
@@ -122,6 +153,9 @@ interface FighterView {
   label: Text;
   stamina: Graphics;
   identity: string;
+  /** Title screen: when a new look replaced the old one (a little pop), and the close-up's share. */
+  changedAt: number;
+  featured: number;
 }
 interface BombView {
   root: Container3D;
@@ -162,6 +196,10 @@ interface Impact {
   cracks: Mesh3D[];
   sparks: Spark[];
   bolts: Bolt[];
+  /** Rings opening from radius `from` to `to` over the impact's life. */
+  rings: { mesh: Mesh3D; from: number; to: number }[];
+  /** Speed lines sliding along the floor, thinning as they go. */
+  streaks: { mesh: Mesh3D; vx: number; vz: number; length: number }[];
   flash: Mesh3D | null;
   age: number;
   life: number;
@@ -176,9 +214,15 @@ export class ArenaRenderer {
   private readonly view: View3D;
   private readonly scene = new Container3D();
   private readonly scenery = new Container3D();
+  private previousState: GameState | null = null;
+  private readonly trainingDebug = new Graphics();
   private readonly labels = new Container();
   private readonly assets = new MeshLibrary();
-  private readonly tiles: TileView[] = [];
+  private readonly stageShapes = new StageShapes();
+  /** The floor being shown; rebuilt whenever the state's stage is another one. */
+  private stage: StageView | null = null;
+  /** Runs only while belts do (not while paused or after the match), so their arrows stop too. */
+  private beltTime = 0;
   private readonly fighters = new Map<number, FighterView>();
   private readonly bombs = new Map<number, BombView>();
   private readonly effects = new Map<number, EffectView>();
@@ -190,6 +234,9 @@ export class ArenaRenderer {
     phase: number;
   }[] = [];
   private readonly zone = new Container3D();
+  private readonly destination: Mesh3D;
+  private readonly zonePath: Mesh3D;
+  private readonly zoneArrow: Mesh3D;
   private readonly zoneRing: Mesh3D;
   private readonly zoneCore: Mesh3D;
   private readonly zoneMarker: Text;
@@ -200,6 +247,22 @@ export class ArenaRenderer {
   private readonly windLines: Mesh3D[] = [];
   private readonly rigAssets = new RigAssets();
   private readonly impacts: Impact[] = [];
+  /** A thicker ring than the library's, for the invulnerable-dodge rings. */
+  private readonly evadeRing = new TorusGeometry({
+    radius: 1,
+    tube: 0.05,
+    radialSegments: 4,
+    tubularSegments: 40,
+  });
+  /**
+   * Each slot's dodge count (`playerStats`) when last drawn. It rises exactly when a sword or a
+   * bomb passes through a fighter's invulnerable step, on whatever tick that happened, so the
+   * dodge is shown even when several ticks fall between two frames.
+   */
+  private readonly dodgesSeen = new Map<number, number>();
+  /** KO and finish highlights (finishFx.ts). */
+  private readonly finishFx: FinishFx;
+  private arenaHalfSize = 7;
   /** Camera shake energy; decays every frame. */
   private shake = 0;
   /** Development aid: a fixed close-up camera for inspecting animation. */
@@ -223,6 +286,9 @@ export class ArenaRenderer {
   private lastElapsed = 0;
   /** Humans in the match being drawn: decides between "YOU" and player numbers. */
   private humanCount = 1;
+  /** Title screen: the slot shown in close-up while its look is chosen, or null for the line-up. */
+  private spotlight: number | null = null;
+  private spotlightSince = 0;
   private destroyed = false;
   private readonly software: boolean;
   private readonly sun: DirectionalLight;
@@ -287,8 +353,9 @@ export class ArenaRenderer {
     });
     this.view.eventMode = "none";
     this.labels.eventMode = "none";
-    app.stage.addChild(this.view, this.labels);
+    app.stage.addChild(this.view, this.trainingDebug, this.labels);
     this.view.root.addChild(this.scenery, this.scene);
+    this.finishFx = new FinishFx(this.scene, this.assets);
     this.view.camera.mode = "perspective";
     this.view.camera.fov = CAMERA_FOV;
     this.view.camera.near = CAMERA_NEAR;
@@ -318,7 +385,6 @@ export class ArenaRenderer {
     rim.lookAt({ x: 0, y: 1, z: 0 });
     // A strong, slightly blue fill keeps the shaded side of everything colourful.
     this.view.root.addChild(new AmbientLight({ color: PALETTE.light.ambient, intensity: 1.35 }));
-    this.buildArena();
     this.buildScenery();
     this.scene.addChild(this.zone);
     this.zoneRing = this.assets.mesh(
@@ -334,6 +400,10 @@ export class ArenaRenderer {
       -0.005,
       0,
     );
+    const routeInk = this.assets.material(PALETTE.zone.label, 1, 0.3);
+    this.destination = this.assets.mesh(this.scene, this.assets.dashedRing, routeInk);
+    this.zonePath = this.assets.mesh(this.scene, this.assets.cube, routeInk);
+    this.zoneArrow = this.assets.mesh(this.scene, this.stageShapes.chevron, routeInk);
     this.zoneMarker = new Text({
       text: "SAFE ZONE",
       style: {
@@ -397,75 +467,19 @@ export class ArenaRenderer {
     }
   }
 
-  private buildArena(): void {
-    const a = this.assets;
-    for (let row = -4; row <= 4; row++) {
-      for (let col = -4; col <= 4; col++) {
-        const root = new Container3D();
-        const x = col * 2,
-          z = row * 2;
-        root.position.set(x, 0, z);
-        this.scene.addChild(root);
-        const border = Math.abs(row) === 4 || Math.abs(col) === 4;
-        const tint = border
-          ? (row + col) % 2
-            ? PALETTE.floor.edgeDark
-            : PALETTE.floor.edgeLight
-          : (row + col) % 2
-            ? PALETTE.floor.dark
-            : PALETTE.floor.light;
-        const top = a.mesh(root, a.tile, a.flatMaterial(tint));
-        // Only takes effect while the shadow-receiving tile material is in use.
-        top.receiveShadow = true;
-        const outline = a.mesh(
-          root,
-          a.ring,
-          a.material(PALETTE.floor.warnRing, 0.9, 0.2),
-          0,
-          0.025,
-          0,
-          0.75,
-        );
-        outline.visible = false;
-        this.tiles.push({ root, top, outline, x, z, tint, fallenAt: null });
-        if (border && (col + row) % 3 === 0) {
-          const shard = a.mesh(
-            root,
-            a.cone,
-            a.material(PALETTE.floor.shard),
-            0,
-            -1.09,
-            0,
-            1.03,
-            1.1 + ((col * row + 17) % 3) * 0.4,
-            0.94,
-          );
-          shard.rotation.z = Math.PI;
-          shard.rotation.y = 0.4;
-        }
-        // Quiet decorative inlay: it never denotes a collider or hazard.
-        if (!border && (row + col + 12) % 5 === 0) {
-          a.box(root, PALETTE.floor.inlay, -0.57, 0.006, -0.5, 0.34, 0.012, 0.045).rotation.y = 0.5;
-          a.box(root, PALETTE.floor.inlay, -0.45, 0.007, -0.43, 0.18, 0.012, 0.045).rotation.y =
-            -0.45;
-        }
-      }
-    }
-    // A pale compass is a useful reference for depth and directional inputs.
-    a.mesh(this.scene, a.ring, a.material(PALETTE.floor.compass, 0.5), 0, 0.012, 0, 2.6);
-    for (let i = 0; i < 4; i++) {
-      const mark = a.box(
-        this.scene,
-        PALETTE.floor.compass,
-        Math.sin((i * Math.PI) / 2) * 2.6,
-        0.016,
-        Math.cos((i * Math.PI) / 2) * 2.6,
-        0.09,
-        0.013,
-        0.44,
-      );
-      mark.rotation.y = (i * Math.PI) / 2;
-    }
+  /**
+   * Shows the stage the match is on. The floor is built from the stage's tiles (stageMesh.ts),
+   * so picking another stage on the title screen swaps the whole island under the fighters.
+   */
+  private showStage(state: GameState): StageView {
+    const { stageId } = state.arena;
+    if (this.stage?.stageId === stageId) return this.stage;
+    this.stage?.destroy();
+    this.stage = new StageView(this.assets, this.stageShapes, stageId);
+    // Under everything else in the scene: zone, bombs and fighters draw over the floor.
+    this.scene.addChildAt(this.stage.root, 0);
+    this.canvas.dataset.stage = stageId;
+    return this.stage;
   }
 
   private buildScenery(): void {
@@ -555,45 +569,30 @@ export class ArenaRenderer {
   }
 
   private updateArena(state: GameState): void {
-    const a = this.assets;
     const reset = state.elapsed < this.lastElapsed;
     const safe = state.arena.safeZone;
-    for (const tile of this.tiles) {
-      const supported =
-        Math.abs(tile.x) < state.arena.halfSize && Math.abs(tile.z) < state.arena.halfSize;
-      if (reset || supported) tile.fallenAt = null;
-      if (!supported && tile.fallenAt === null) tile.fallenAt = this.time;
-      const falling = tile.fallenAt === null ? 0 : this.time - tile.fallenAt;
-      tile.root.visible = supported || falling < 1.1;
-      tile.root.position.y = supported ? 0 : -falling * falling * 16;
-      tile.root.rotation.set(
-        supported ? 0 : falling * 0.35,
-        0,
-        supported ? 0 : falling * 0.2 * Math.sign(tile.x || 1),
-      );
-      const warning =
-        supported &&
-        state.arena.warningRing &&
-        Math.max(Math.abs(tile.x), Math.abs(tile.z)) >= state.arena.halfSize - 2;
-      const unsafe = safe.active && Math.hypot(tile.x - safe.x, tile.z - safe.z) > safe.radius;
-      tile.top.material = a.tileMaterial(
-        warning
-          ? Math.sin(this.time * 7) > 0
-            ? PALETTE.floor.warnA
-            : PALETTE.floor.warnB
-          : unsafe
-            ? PALETTE.floor.unsafe
-            : tile.tint,
-        this.shadowsActive,
-      );
-      tile.outline.visible = warning;
-      if (warning) tile.outline.scale.set(0.5 + (Math.sin(this.time * 5) + 1) * 0.12);
-    }
+    this.showStage(state).update(state, this.time, this.beltTime, this.shadowsActive, reset);
     this.zone.visible = safe.active;
-    this.zoneMarker.visible = safe.active;
     this.zone.position.set(safe.x, 0.045, safe.z);
     this.zoneRing.scale.set(safe.radius);
     this.zoneCore.scale.set(safe.radius, 1, safe.radius);
+    const target = safe.destination;
+    this.destination.visible = this.zonePath.visible = safe.active && target !== null;
+    this.zoneArrow.visible = false;
+    if (target) {
+      this.destination.position.set(target.x, 0.075, target.z);
+      this.destination.scale.set(target.radius, 1, target.radius);
+      const dx = target.x - safe.x;
+      const dz = target.z - safe.z;
+      const length = Math.hypot(dx, dz);
+      this.zonePath.position.set((target.x + safe.x) / 2, 0.08, (target.z + safe.z) / 2);
+      this.zonePath.scale.set(0.07, 0.02, length);
+      this.zonePath.rotation.y = Math.atan2(dx, dz);
+      this.zoneArrow.visible = safe.active && length > 0.3;
+      this.zoneArrow.position.set(safe.x + dx * 0.7, 0.1, safe.z + dz * 0.7);
+      this.zoneArrow.scale.set(Math.min(1, length));
+      this.zoneArrow.rotation.y = this.zonePath.rotation.y;
+    }
     // Label the far edge of the ring, the one leaning away from the camera.
     const far = safe.radius - 0.4;
     const marker = this.view.worldToScreen({
@@ -601,6 +600,7 @@ export class ArenaRenderer {
       y: 0.1,
       z: safe.z + CAMERA_FORWARD.z * far,
     });
+    this.zoneMarker.visible = safe.active && marker !== null;
     if (marker) this.zoneMarker.position.set(marker.x, marker.y);
     for (const [i, line] of this.windLines.entries()) {
       line.visible = state.arena.windActive;
@@ -612,12 +612,21 @@ export class ArenaRenderer {
   }
 
   /**
+   * Title screen only: frames `slot` in close-up (and turns it slowly) while its look is being
+   * chosen, so the finished fighter can be judged before the match. Null returns to the line-up.
+   */
+  setSpotlight(slot: number | null): void {
+    if (slot === this.spotlight) return;
+    this.spotlight = slot;
+    this.spotlightSince = this.time;
+  }
+
+  /**
    * What floats over a human: "YOU" for a lone player, the player number when several share the
    * screen. Empty for a CPU.
    */
   private playerTag(f: Fighter): string {
-    if (!f.human) return "";
-    return this.humanCount > 1 ? `P${f.player ?? 1}` : "YOU";
+    return f.human ? fighterTag(f, this.humanCount) : "";
   }
 
   /** A lone player is the sunny one; several each wear their fighter's colour. */
@@ -625,12 +634,26 @@ export class ArenaRenderer {
     return this.humanCount > 1 ? f.color : PALETTE.label.you;
   }
 
+  /**
+   * The words over a fighter. A human is its tag (YOU, P1...). A CPU is its name and damage, or
+   * its tag (CPU 02) when another fighter has the same name. The title screen shows both, so each
+   * row of the menu can be matched to its fighter.
+   */
+  private labelText(f: Fighter, state: GameState): string {
+    const tag = fighterTag(f, this.humanCount);
+    if (state.phase === "menu") return `${tag}  ${f.name}`;
+    if (f.human) return tag;
+    return `${sharesName(f, state.fighters) ? tag : f.name}  ${Math.round(f.damage)}%`;
+  }
+
   private fighterView(f: Fighter): FighterView {
     const tag = this.playerTag(f);
-    const identity = `${f.species}/${f.color}/${tag}`;
+    // The look (animal, colours, accessory, slot shape) and whose it is.
+    const identity = `${rigIdentity(f)}/${tag}`;
     let view = this.fighters.get(f.id);
-    if (view && view.identity !== identity) {
-      this.destroyFighter(view);
+    const previous = view && view.identity !== identity ? view : undefined;
+    if (previous) {
+      this.destroyFighter(previous);
       this.fighters.delete(f.id);
       view = undefined;
     }
@@ -641,8 +664,10 @@ export class ArenaRenderer {
       this.scene,
       f,
       this.humanCount > 1 ? f.color : undefined,
+      MARKER_CAMERA,
     );
-    const motion = new FighterMotion();
+    // A new look on the same fighter keeps its pose: only the meshes are swapped.
+    const motion = previous?.motion ?? new FighterMotion();
     // On the pale floor a white smear would vanish: each blade trails its owner's colour.
     const trail = new SwordTrail(this.scene, f.color);
     const label = new Text({
@@ -659,15 +684,25 @@ export class ArenaRenderer {
     label.anchor.set(0.5, 1);
     const stamina = new Graphics();
     this.labels.addChild(stamina, label);
-    view = { rig, motion, trail, protected: false, label, stamina, identity };
+    view = {
+      rig,
+      motion,
+      trail,
+      protected: false,
+      label,
+      stamina,
+      identity,
+      changedAt: previous ? this.time : -Infinity,
+      featured: previous?.featured ?? 0,
+    };
     this.fighters.set(f.id, view);
     return view;
   }
 
   private updateFighter(f: Fighter, dt: number, state: GameState): void {
     const view = this.fighterView(f);
-    const onPlatform =
-      Math.abs(f.x) <= state.arena.halfSize && Math.abs(f.z) <= state.arena.halfSize;
+    // Over floor that is really there: no blob shadow or foot ring above a pit or a gap.
+    const onPlatform = canStandAt(state, f.x, f.z);
     // Off duty on the title screen, until just before "FIGHT", and for whoever is left standing.
     const atEase =
       state.phase === "menu" ||
@@ -679,12 +714,23 @@ export class ArenaRenderer {
         ? { ...f, mode: "idle", attack: null, hitstop: 0 }
         : f;
     const frame = view.motion.update(shown, dt, { floor: onPlatform, atEase });
-    applyFrame(view.rig, frame, shown, this.time);
+    // How the combat state reads (combatCues.ts): read from this frame's state, never smoothed.
+    const cue = combatCue(shown, this.time);
+    applyFrame(view.rig, frame, shown, this.time, cue);
     view.trail.update(frame.bladeBase, frame.bladeTip, f.mode === "dead" ? 0 : frame.trail, dt);
     for (const event of frame.events) this.spawnImpact(event);
-    // Showcase pose: face the camera, each turned a little toward the other (slot 0 is on the left).
-    if (state.phase === "menu")
-      view.rig.root.rotation.y = FACING_CAMERA + (f.id === 0 ? 0.42 : -0.36);
+    if (state.phase === "menu") {
+      // Showcase pose: face the camera, each turned a little toward the middle of the line-up.
+      const across = f.x * CAMERA_RIGHT.x + f.z * CAMERA_RIGHT.z;
+      const turn = Math.max(-1, Math.min(1, -across / 2.8)) * 0.4;
+      // The fighter in close-up turns slowly from side to side, so its back can be seen too.
+      view.featured += ((this.spotlight === f.id ? 1 : 0) - view.featured) * Math.min(1, dt * 5);
+      const sway = Math.sin((this.time - this.spotlightSince) * 0.85) * 0.85;
+      view.rig.root.rotation.y = FACING_CAMERA + turn * (1 - view.featured) + sway * view.featured;
+      // A freshly chosen look arrives with a small pop.
+      const age = (this.time - view.changedAt) / 0.26;
+      view.rig.root.scale.set(age < 1 ? 1 + Math.sin(age * Math.PI) * 0.07 : 1);
+    } else if (view.rig.root.scale.x !== 1) view.rig.root.scale.set(1);
     // The blob is a stand-in for a shadow; with real shadow maps it would double up.
     // Back from a knock-out: the body blinks for as long as nothing can touch it.
     if (f.invulnerable > 1) view.protected = true;
@@ -692,30 +738,51 @@ export class ArenaRenderer {
     view.rig.squash.visible = !view.protected || Math.floor(this.time * 11) % 2 === 0;
     view.rig.shadow.visible &&= onPlatform && !this.shadowsActive;
     view.rig.footRing.visible &&= onPlatform;
+    view.rig.brokenRing.visible &&= onPlatform;
+    view.rig.badge.visible &&= onPlatform;
     view.rig.heading.visible &&= onPlatform && state.phase !== "menu";
-    const point = this.view.worldToScreen({ x: f.x, y: Math.max(f.y, -1) + 2.65, z: f.z });
+    const point = this.view.worldToScreen({
+      x: f.x,
+      y: Math.max(f.y, -1) + (f.human ? LABEL_HEIGHT_MARKED : LABEL_HEIGHT),
+      z: f.z,
+    });
+    // The stamina bar hangs under the label: it goes between the label and a human's marker.
+    if (point && f.human) point.y -= state.phase === "menu" ? 3 : LABEL_MARKER_GAP;
     const labelVisible = f.mode !== "dead" && point !== null;
     view.label.visible = labelVisible;
     view.stamina.visible = labelVisible;
     if (point) {
-      view.label.position.set(point.x, point.y);
-      view.label.text = this.playerTag(f) || `${f.name}  ${Math.round(f.damage)}%`;
-      view.label.style.fill =
+      view.label.text = this.labelText(f, state);
+      const fill =
         f.outsideTime > 0.5
           ? PALETTE.label.outside
           : f.human
             ? this.tagColor(f)
             : PALETTE.label.text;
+      view.label.style.fill = fill;
+      // The slot's shape leads the words, drawn in 2D so it stays sharp at any 3D resolution:
+      // with the same animal in the same colours, shape and tag still say who is who.
+      const lead = LABEL_GLYPH * 2 + LABEL_GLYPH_GAP;
+      const left = point.x - (lead + view.label.width) / 2;
+      const middle = point.y - view.label.height / 2;
+      view.label.position.set(left + lead + view.label.width / 2, point.y);
       view.stamina
         .clear()
         .roundRect(
-          point.x - view.label.width / 2 - 6,
+          left - 6,
           point.y - view.label.height - 4,
-          view.label.width + 12,
+          lead + view.label.width + 12,
           view.label.height + 8,
           4,
         )
-        .fill({ color: PALETTE.label.ink, alpha: 0.9 });
+        .fill({ color: PALETTE.label.ink, alpha: 0.9 })
+        .poly(
+          SLOT_SHAPE_POINTS[slotShape(f.id)].flatMap(([x, y]) => [
+            left + LABEL_GLYPH + x * LABEL_GLYPH,
+            middle - y * LABEL_GLYPH,
+          ]),
+        )
+        .fill({ color: fill });
       if (state.phase !== "menu")
         view.stamina
           .roundRect(point.x - 19, point.y + 5, 38, 3, 1.5)
@@ -816,12 +883,18 @@ export class ArenaRenderer {
             ? effect.size > 1.15
               ? PALETTE.fx.hitHeavy
               : PALETTE.fx.hit
-            : effect.kind === "jump" || effect.kind === "land" || effect.kind === "cancel"
-              ? PALETTE.fx.dust
-              : effect.color;
+            : effect.kind === "cancel"
+              ? PALETTE.fx.snuff
+              : effect.kind === "jump" || effect.kind === "land"
+                ? PALETTE.fx.dust
+                : effect.color;
     const material = a.material(color, 1, 0.55);
     const count =
-      effect.kind === "ko" || effect.kind === "bomb" ? 12 : effect.kind === "clash" ? 10 : 6;
+      effect.kind === "ko" || effect.kind === "bomb"
+        ? 12
+        : effect.kind === "clash" || effect.kind === "cancel"
+          ? 10
+          : 6;
     const particles = Array.from({ length: count }, (_, i) =>
       a.mesh(root, i % 2 ? a.cube : a.pebble, material, 0, 0, 0, 0.08, 0.08, 0.08),
     );
@@ -844,22 +917,29 @@ export class ArenaRenderer {
   private updateEffect(effect: Effect): void {
     const view = this.effectView(effect);
     const progress = Math.max(0, Math.min(1, 1 - effect.life / effect.duration));
+    if (effect.kind === "cancel") {
+      view.root.position.set(effect.x, effect.y + 0.04, effect.z);
+      this.updateCancelEffect(view, progress);
+      return;
+    }
     const large = effect.kind === "bomb" || effect.kind === "ko";
     const radius = effect.size * (large ? 2.2 : 1.1) * ease(progress);
     const remaining = Math.max(0.01, 1 - progress);
     view.root.position.set(effect.x, effect.y + 0.04, effect.z);
     view.ring.scale.set(Math.max(0.01, radius));
-    view.ring.visible = progress < 0.7;
+    view.ring.visible = effect.kind === "ukemi" || progress < 0.7;
     for (const [i, particle] of view.particles.entries()) {
       const angle = (i / view.particles.length) * TAU + effect.id * 0.4;
       const vertical =
         effect.kind === "step" || effect.kind === "land"
           ? 0.12
           : Math.sin(progress * Math.PI) * (large ? 2.2 : 0.8);
+      // A second, tight halo rises inside the tech ring while the fighter rolls away.
+      const spread = effect.kind === "ukemi" ? radius * 0.62 : radius;
       particle.position.set(
-        Math.cos(angle) * radius,
+        Math.cos(angle) * spread,
         vertical * (0.5 + (i % 3) * 0.25),
-        Math.sin(angle) * radius,
+        Math.sin(angle) * spread,
       );
       particle.scale.set(
         remaining * (large ? 0.18 : 0.08),
@@ -870,16 +950,124 @@ export class ArenaRenderer {
     }
   }
 
-  render(state: GameState, dt: number): void {
+  /**
+   * A called-off swing: the charge halo breaks into dark shards that drift apart and sink, low
+   * round the feet. It never expands into a ring or throws particles up, so it reads neither as a
+   * hit nor as the dust of a jump, and it leaves the fighter's broken foot ring behind it.
+   */
+  private updateCancelEffect(view: EffectView, progress: number): void {
+    view.ring.visible = false;
+    const remaining = Math.max(0.01, 1 - progress);
+    const radius = 0.62 + 0.3 * ease(progress);
+    for (const [i, shard] of view.particles.entries()) {
+      const angle = (i / view.particles.length) * TAU;
+      shard.position.set(
+        Math.sin(angle) * radius,
+        0.28 * (1 - progress) + 0.03,
+        Math.cos(angle) * radius,
+      );
+      // Each shard lies along the circle it broke from (its long side is local X).
+      shard.rotation.set(0, angle, 0);
+      shard.scale.set(0.2 * remaining, 0.04, 0.05);
+    }
+  }
+
+  /**
+   * An invulnerable dodge: two ink rings opening round the dodger where the blade (or blast)
+   * passed through, and speed lines left behind along the step. No sparks, flash or shake, so it
+   * can never be mistaken for a hit or a clash.
+   */
+  private spawnEvade(f: Fighter): void {
+    if (this.impacts.length > 40) return;
+    const a = this.assets;
+    const root = new Container3D();
+    root.position.set(f.x, Math.max(0, f.y), f.z);
+    this.scene.addChild(root);
+    const impact = this.blankImpact(root);
+    impact.life = 0.34;
+    const material = a.material(PALETTE.fx.evade, 0.85, 0.3);
+    for (const [height, from, to] of [
+      [0.95, 0.4, 1.05],
+      [0.45, 0.3, 0.8],
+    ] as const) {
+      const ring = a.mesh(root, this.evadeRing, material, 0, height, 0, from);
+      impact.rings.push({ mesh: ring, from, to });
+    }
+    const travel = Math.hypot(f.stepDirection.x, f.stepDirection.z);
+    const back =
+      travel > 0.01
+        ? { x: -f.stepDirection.x / travel, z: -f.stepDirection.z / travel }
+        : { x: -Math.sin(f.facing), z: -Math.cos(f.facing) };
+    const yaw = Math.atan2(back.x, back.z);
+    for (let i = 0; i < 4; i++) {
+      const across = (i - 1.5) * 0.22;
+      const line = a.mesh(
+        root,
+        a.cube,
+        material,
+        back.x * 0.5 + back.z * across,
+        0.35 + (i % 2) * 0.5,
+        back.z * 0.5 - back.x * across,
+        0.035,
+        0.035,
+        0.6,
+      );
+      line.rotation.y = yaw;
+      impact.streaks.push({ mesh: line, vx: back.x * 2.4, vz: back.z * 2.4, length: 0.6 });
+    }
+    this.impacts.push(impact);
+  }
+
+  /** Shows the invulnerable dodges made since the last frame (`dodgesSeen`). */
+  private showDodges(state: GameState): void {
+    for (const f of state.fighters) {
+      const count = state.playerStats[f.id]?.dodges ?? 0;
+      const seen = this.dodgesSeen.get(f.id);
+      this.dodgesSeen.set(f.id, count);
+      if (seen !== undefined && count > seen && f.mode !== "dead" && state.phase !== "menu")
+        this.spawnEvade(f);
+    }
+  }
+
+  render(state: GameState, dt: number, showHitboxes = false): void {
     if (this.destroyed) return;
+    if (
+      this.previousState &&
+      this.previousState !== state &&
+      (this.previousState.phase !== "menu" || state.phase !== "menu")
+    ) {
+      for (const view of this.fighters.values()) {
+        view.motion = new FighterMotion();
+        view.trail.clear();
+      }
+      for (const impact of this.impacts) impact.root.destroy({ children: true });
+      this.impacts.length = 0;
+      for (const effect of this.effects.values()) effect.root.destroy({ children: true });
+      this.effects.clear();
+      this.finishFx.clear();
+      this.dodgesSeen.clear();
+      this.shake = 0;
+    }
+    this.previousState = state;
     this.adjustResolution(state);
     const visualDelta = state.phase === "paused" ? 0 : Math.min(dt, 0.05);
     this.time += visualDelta;
+    // Belts only carry fighters while the match is being played, so their arrows and the cog run
+    // only then (and on the title, as a preview): still through the countdown, a pause and the end.
+    if (state.phase === "playing" || state.phase === "menu") this.beltTime += visualDelta;
     // On the menu the arena slides right of the title panel (desktop) or above the menu copy (phone).
     const menu = state.phase === "menu";
     const sidePanel = this.width >= 900 || (this.height <= 570 && this.width > this.height);
     const panRight = menu && sidePanel ? MENU_PAN_RIGHT : 0;
-    const panUp = !menu ? this.hudPanUp : this.width < 650 ? MENU_PAN_UP : 0;
+    // A close-up with no room beside the menu sits above it (the look picker docks below).
+    const closeUp = menu && this.spotlight !== null && !sidePanel;
+    const panUp = !menu
+      ? this.hudPanUp
+      : closeUp
+        ? SPOTLIGHT_PAN_UP
+        : this.width < 650
+          ? MENU_PAN_UP
+          : 0;
     this.panRight += (panRight - this.panRight) * Math.min(1, dt * 4);
     this.panUp += (panUp - this.panUp) * Math.min(1, dt * 4);
     this.pullBack += ((menu ? MENU_PULL_BACK : 0) - this.pullBack) * Math.min(1, dt * 4);
@@ -903,7 +1091,7 @@ export class ArenaRenderer {
         this.fighters.delete(id);
       }
     }
-    this.humanCount = state.fighters.reduce((count, f) => count + (f.human ? 1 : 0), 0);
+    this.humanCount = countHumans(state.fighters);
     for (const fighter of state.fighters) this.updateFighter(fighter, visualDelta, state);
     const bombIds = new Set(state.bombs.map((b) => b.id));
     for (const [id, view] of this.bombs) {
@@ -922,12 +1110,37 @@ export class ArenaRenderer {
       }
     }
     for (const effect of state.effects) this.updateEffect(effect);
+    this.showDodges(state);
     this.updateImpacts(visualDelta);
+    const showDebug = state.mode === "training" && state.phase !== "menu" && showHitboxes;
+    if (showDebug) {
+      drawTrainingDebug(this.trainingDebug, state.fighters, (p) => this.view.worldToScreen(p));
+    } else if (this.trainingDebug.visible) {
+      this.trainingDebug.clear();
+    }
+    this.trainingDebug.visible = showDebug;
+    this.arenaHalfSize = state.arena.initialHalfSize;
+    this.finishFx.update(visualDelta, state.phase);
     this.app.render();
+  }
+
+  /**
+   * KO and finish highlights for this frame's presentation events. Visual only: the camera may
+   * jolt (when shake is on) but nothing waits, so the fighters still in play keep moving.
+   */
+  present(events: readonly PresentationEvent[]): void {
+    if (this.destroyed) return;
+    for (const event of events) {
+      const shake = this.finishFx.trigger(event, this.arenaHalfSize, this.settings.reducedFlash);
+      if (shake > 0) this.addShake(shake);
+    }
   }
 
   screenToWorld(clientX: number, clientY: number): Vec2 | null {
     const rect = this.canvas.getBoundingClientRect();
+    // Cosmetic impact/KO shake must never perturb gameplay aiming: pick through the unshaken camera.
+    const shaken = this.shake > 0 && this.settings.cameraShake && !this.debugCamera;
+    if (shaken) this.placeCamera(false);
     const hit = this.view.screenToWorld(
       {
         x: ((clientX - rect.left) * this.width) / rect.width,
@@ -935,6 +1148,7 @@ export class ArenaRenderer {
       },
       this.ground,
     );
+    if (shaken) this.placeCamera(true);
     return hit ? { x: hit.x, z: hit.z } : null;
   }
 
@@ -980,7 +1194,25 @@ export class ArenaRenderer {
       this.settings.cameraFollow && state.phase !== "menu"
         ? state.fighters.filter((f) => f.mode !== "dead")
         : [];
-    if (subjects.length) {
+    const featured =
+      state.phase === "menu" && this.spotlight !== null
+        ? state.fighters.find((f) => f.id === this.spotlight)
+        : undefined;
+    if (featured) {
+      // The close-up of the fighter whose look is being chosen, whatever the camera setting.
+      const aspect = this.width / this.height;
+      right = featured.x * CAMERA_RIGHT.x + featured.z * CAMERA_RIGHT.z;
+      up =
+        (featured.x * CAMERA_FORWARD.x + featured.z * CAMERA_FORWARD.z) * CAMERA_SIN +
+        SPOTLIGHT_AIM * CAMERA_COS;
+      scale = Math.min(
+        this.cameraScale,
+        Math.max(
+          (FIGHTER_HEIGHT * CAMERA_COS) / (VIEW_HEIGHT * SPOTLIGHT_HEIGHT_SHARE),
+          SPOTLIGHT_MIN_WIDTH / (VIEW_HEIGHT * aspect),
+        ),
+      );
+    } else if (subjects.length) {
       let minRight = Infinity,
         maxRight = -Infinity,
         minUp = Infinity,
@@ -1017,12 +1249,12 @@ export class ArenaRenderer {
     this.focusRight += (right - this.focusRight) * drift;
     this.focusUp += (up - this.focusUp) * drift;
     // Back off quickly so nobody leaves the frame; close in gently so the view does not pump.
-    const zoom = 1 - Math.exp(-dt * (scale > this.viewScale ? 6 : 1.7));
+    const zoom = 1 - Math.exp(-dt * (scale > this.viewScale ? 6 : featured ? 5 : 1.7));
     this.viewScale += (scale - this.viewScale) * zoom;
   }
 
   /** The only place the camera is positioned: pan the look-at target, then the fixed offset. */
-  private placeCamera(): void {
+  private placeCamera(applyShake = true): void {
     const s = (this.viewScale || this.cameraScale) * (1 + this.pullBack);
     const up = this.panUp * VIEW_HEIGHT * s;
     const right = ((this.panRight * VIEW_HEIGHT * s) / this.height) * this.width + this.focusRight;
@@ -1042,7 +1274,7 @@ export class ArenaRenderer {
     }
     this.view.camera.fov = CAMERA_FOV;
     // Impact shake: a decaying jolt along the screen axes, so the horizon never rolls.
-    if (this.shake > 0 && this.settings.cameraShake) {
+    if (applyShake && this.shake > 0 && this.settings.cameraShake) {
       const amount = Math.min(0.5, this.shake) * 0.55 * s;
       const jx = Math.sin(this.time * 83.1) * amount;
       const jy = Math.cos(this.time * 97.3) * amount;
@@ -1161,6 +1393,8 @@ export class ArenaRenderer {
       cracks: [],
       sparks: [],
       bolts: [],
+      rings: [],
+      streaks: [],
       flash: null,
       age: 0,
       life: 0.5,
@@ -1308,6 +1542,17 @@ export class ArenaRenderer {
           segment.scale.set(thick, length, thick);
           from = to;
         });
+      }
+      for (const ring of impact.rings) {
+        const radius = ring.from + (ring.to - ring.from) * ease(t);
+        ring.mesh.visible = t < 0.85;
+        ring.mesh.scale.set(radius, 1.6 * (1 - t) + 0.2, radius);
+      }
+      for (const streak of impact.streaks) {
+        const p = streak.mesh.position;
+        streak.mesh.position.set(p.x + streak.vx * dt, p.y, p.z + streak.vz * dt);
+        const thin = Math.max(0.001, 1 - t);
+        streak.mesh.scale.set(0.035 * thin, 0.035 * thin, streak.length * (0.5 + 0.5 * thin));
       }
       if (impact.flash) {
         const pop = impact.age / 0.07;
@@ -1515,12 +1760,25 @@ export class ArenaRenderer {
     this.resizeObserver.disconnect();
     this.canvas.removeEventListener("webglcontextrestored", this.handleContextRestored);
 
+    for (const view of this.fighters.values()) this.destroyFighter(view);
+    this.fighters.clear();
+    for (const bomb of this.bombs.values()) {
+      bomb.root.destroy({ children: true });
+      bomb.label.destroy();
+    }
+    this.bombs.clear();
+    for (const effect of this.effects.values()) effect.root.destroy({ children: true });
+    this.effects.clear();
+    this.finishFx.clear();
+    for (const impact of this.impacts) impact.root.destroy({ children: true });
+    this.impacts.length = 0;
+
     this.view.destroy({ children: true });
     this.ssao?.destroy();
     this.fxaa?.destroy();
-    for (const impact of this.impacts) impact.root.destroy({ children: true });
-    this.impacts.length = 0;
     this.rigAssets.destroy();
+    this.evadeRing.destroy(true);
+    this.stageShapes.destroy();
     this.assets.destroy();
     this.skyTexture.destroy(true);
     this.app.destroy({ removeView: true }, { children: true });

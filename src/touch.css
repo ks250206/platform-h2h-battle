@@ -64,7 +64,7 @@
 .touch-controls {
   display: none;
 }
-@media (pointer: coarse) {
+@media (pointer: coarse), (any-pointer: coarse) {
   .touch-controls:not([hidden]) {
     display: flex;
     align-items: end;
@@ -184,6 +184,11 @@
     background: var(--paper-2);
   }
 }
+@media (pointer: fine) {
+  #interface:not([data-tutorial="touch"]) ~ .touch-controls {
+    display: none;
+  }
+}
 @media (pointer: coarse) and (max-height: 530px) {
   .touch-stick {
     width: 92px;
@@ -205,6 +210,20 @@
 }
 
 @media (pointer: coarse) and (max-height: 570px) {
+  /* Leave 20px + 140px for each fighter card, and room below for the touch controls. */
+  #interface .training-hud,
+  #interface .tutorial-hud {
+    top: 76px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: min(380px, calc(100% - 332px));
+    max-height: calc(100dvh - 208px - env(safe-area-inset-bottom));
+    overflow: auto;
+  }
+  #interface .tutorial-hud {
+    pointer-events: auto;
+  }
   #interface .fighter-cards {
     top: 76px;
     bottom: auto;
@@ -243,5 +262,42 @@
   }
   #interface[data-mode="rumble"] .fighter-damage {
     margin-left: auto;
+  }
+}
+
+@media (pointer: coarse) and (max-height: 570px) and (max-width: 560px) {
+  /* Keep the actual card height (including zone cues) and scroll the lesson above the controls. */
+  #interface[data-tutorial] .game-hud {
+    display: grid;
+    padding: 76px 20px calc(136px + max(12px, env(safe-area-inset-bottom)));
+    grid-template-rows: auto minmax(0, 1fr);
+    row-gap: 6px;
+  }
+  #interface[data-tutorial] .fighter-cards {
+    position: static;
+    grid-row: 1;
+  }
+  #interface[data-tutorial] .tutorial-hud {
+    position: static;
+    grid-row: 2;
+    place-self: start center;
+    transform: none;
+    width: 100%;
+    max-width: 360px;
+    max-height: 100%;
+  }
+}
+@media (pointer: coarse) and (max-height: 530px) and (max-width: 560px) {
+  #interface[data-tutorial] .game-hud {
+    padding-bottom: calc(116px + max(8px, env(safe-area-inset-bottom)));
+  }
+}
+
+@media (pointer: coarse) and (max-height: 570px) and (max-width: 520px) {
+  /* The gap between the cards is too narrow for the shortcut buttons here. */
+  #interface .training-hud {
+    top: 166px;
+    max-width: calc(100% - 40px);
+    max-height: calc(100dvh - 298px - env(safe-area-inset-bottom));
   }
 }

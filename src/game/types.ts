@@ -1,4 +1,13 @@
+import type { AiMemory } from "./ai";
+import type { AccessoryId, PaletteId, Species } from "./characters";
 import type { AiLevel, MatchOptions } from "./match";
+import type { PlayerMatchStats } from "./matchStats";
+import type { EffectiveRules } from "./rules";
+import type { SafeZone } from "./safeZone";
+import type { SetMatch } from "./setMatch";
+import type { StageId } from "./stages";
+
+export type { Species } from "./characters";
 
 export type AttackId = "overhead" | "rising" | "sweep" | "thrust";
 export type FighterMode =
@@ -9,6 +18,8 @@ export type FighterMode =
   | "recovery"
   | "step"
   | "cancel"
+  | "ukemi"
+  | "knockdown"
   | "hitstun"
   | "grab"
   | "grabbed"
@@ -17,7 +28,7 @@ export type FighterMode =
   | "dead";
 export type MatchMode = "duel" | "rumble" | "training";
 export type Phase = "menu" | "countdown" | "playing" | "paused" | "ended";
-export type Species = "fox" | "rabbit" | "bear" | "raccoon";
+export type DrawReason = "allOut" | "timeUp";
 export type Vec2 = { x: number; z: number };
 
 /**
@@ -26,9 +37,15 @@ export type Vec2 = { x: number; z: number };
  */
 export interface Fighter {
   id: number;
+  /**
+   * The slot's look, from its loadout (`characters.ts`): name, animal, team colour and accessory.
+   * Cosmetic only: no rule of the simulation reads any of the five.
+   */
   name: string;
   species: Species;
   color: number;
+  palette: PaletteId;
+  accessory: AccessoryId;
   human: boolean;
   /** 1-based player number among the humans of this match (slot order); null for a CPU. */
   player: number | null;
@@ -72,24 +89,59 @@ export interface Fighter {
   grabbedId: number | null;
   grabbedBy: number | null;
   throwDirection: Vec2;
+  /** In hitstun from an applied launch, until landing or regaining control. */
+  tumbling: boolean;
   pendingLaunch: { x: number; y: number; z: number } | null;
   diInput: Vec2;
   lastAttacker: number | null;
+  lastHitAt: number;
   kills: number;
   eliminatedAt: number | null;
   eliminationReason: string | null;
   aiThink: number;
   aiCharge: number;
-  aiIntent: Vec2;
+  aiMemory: AiMemory | null;
+  /**
+   * A press made while this fighter could not act on it, held for a few fixed ticks so it fires on
+   * the first tick it becomes legal (see `RULES.inputBuffer`). CPUs use it only for a landing tech.
+   */
+  inputBuffer: BufferedInput | null;
+}
+
+/** The presses the input buffer can hold. `cancel` is never buffered. */
+export type BufferedAction = "attack" | "step" | "jump" | "grab";
+
+export interface BufferedInput {
+  action: BufferedAction;
+  /** The attack asked for when `action` is `"attack"`; null otherwise. */
+  attack: AttackId | null;
+  /**
+   * Fixed simulation ticks since the press (0 on its own tick); it may fire while
+   * within its action window (six ticks normally, ten for a tech).
+   */
+  age: number;
+  /**
+   * What the fighter was doing when the button went down. A tech claims only a hitstun press.
+   */
+  pressedIn: FighterMode;
+  /**
+   * Set when a landing frees this jump or grab. Input runs before physics, so it is first tried on
+   * the tick after the landing tick; this lets it live one tick past `INPUT_BUFFER_TICKS` so the
+   * landing window is as long as recovery's.
+   */
+  landingGrace: boolean;
 }
 
 export interface ArenaState {
+  /** The stage being fought on; with `halfSize` it decides where there is floor (stages.ts). */
+  stageId: StageId;
+  /** Half the side of the square that has not collapsed yet. */
   halfSize: number;
   initialHalfSize: number;
   tileSize: number;
   warningRing: boolean;
   nextCollapse: number;
-  safeZone: { x: number; z: number; radius: number; active: boolean };
+  safeZone: SafeZone;
   wind: Vec2;
   windActive: boolean;
 }
@@ -110,6 +162,7 @@ export type EffectKind =
   | "step"
   | "charge"
   | "jump"
+  | "ukemi"
   | "land"
   | "ko"
   | "bomb"
@@ -137,12 +190,21 @@ export interface GameState {
   bombs: Bomb[];
   effects: Effect[];
   winnerId: number | null;
+  drawReason: DrawReason | null;
+  /** What decided a finished match (`"ko"` when ≤1 contender remained, `"timeUp"` on deadline). */
+  finishReason?: "ko" | "timeUp" | null;
+  set: SetMatch | null;
   message: string;
   messageTime: number;
   seed: number;
   pausedFrom: "playing" | "countdown";
   /** What this match was started with. */
   options: MatchOptions;
+  /** The rules it runs with: lives, time limit and gimmicks after the mode and stage had a say. */
+  rules: EffectiveRules;
+  /** Running totals for this game, indexed by fighter slot. */
+  playerStats: PlayerMatchStats[];
+  /** Match-wide counters. `dodges` counts human step inputs that started a step. */
   stats: { hits: number; clashes: number; dodges: number; maxDamage: number };
 }
 
@@ -152,6 +214,7 @@ export interface PlayerInput {
   attackPressed: AttackId | null;
   attackHeld: AttackId | null;
   jump: boolean;
+  /** Rising edge from the input device, consumed once. */
   step: boolean;
   cancel: boolean;
   grab: boolean;
