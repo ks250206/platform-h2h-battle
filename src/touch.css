@@ -1,3 +1,37 @@
+html {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+}
+
+html[data-zoomed],
+html[data-zoomed] #arena canvas,
+html[data-zoomed] .touch-stick,
+html[data-zoomed] .touch-actions button {
+  touch-action: pinch-zoom pan-x pan-y !important;
+}
+
+.zoom-notice {
+  position: fixed;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  max-width: calc(var(--zoom-viewport-width, 100vw) - 24px);
+  margin: max(8px, env(safe-area-inset-top, 0px)) 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+}
+
+.zoom-notice button {
+  text-decoration: underline;
+}
+
 .loading-screen {
   position: fixed;
   inset: 0;
@@ -48,6 +82,8 @@
 }
 .boot-error h1 {
   font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
   margin-bottom: 1rem;
 }
 .boot-error p {
@@ -65,22 +101,38 @@
   display: none;
 }
 @media (pointer: coarse), (any-pointer: coarse) {
+  :root {
+    --stick: clamp(92px, 29vmin, 128px);
+    --pad: clamp(40px, 12.6vmin, 58px);
+    --util-h: 42px;
+    --touch-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    --touch-block-h: calc(var(--touch-bottom) + var(--stick) + 22px);
+  }
+  #app {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #app :is(input, textarea) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
   .touch-controls:not([hidden]) {
     display: flex;
     align-items: end;
     justify-content: space-between;
     position: fixed;
     z-index: 15;
-    bottom: max(12px, env(safe-area-inset-bottom));
-    left: 16px;
-    right: 16px;
+    bottom: var(--touch-bottom);
+    left: max(16px, env(safe-area-inset-left, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
     pointer-events: none;
-    gap: 16px;
+    gap: clamp(8px, 4vw, 16px);
     user-select: none;
   }
   .touch-stick {
-    width: 112px;
-    height: 112px;
+    width: var(--stick);
+    height: var(--stick);
     border: 2px solid color-mix(in srgb, var(--paper) 90%, transparent);
     background: color-mix(in srgb, var(--paper) 55%, transparent);
     box-shadow: var(--shadow-sm);
@@ -88,14 +140,17 @@
     pointer-events: auto;
     touch-action: none;
     position: relative;
-    flex: 0 0 112px;
+    flex: 0 0 var(--stick);
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .stick-knob {
     position: absolute;
-    width: 45px;
-    height: 45px;
-    top: 33px;
-    left: 33px;
+    width: 40%;
+    height: 40%;
+    top: 30%;
+    left: 30%;
     border-radius: 50%;
     border: 2px solid var(--paper);
     background: var(--sky);
@@ -120,7 +175,7 @@
   }
   .touch-attacks {
     display: grid;
-    grid-template-columns: repeat(4, 45px);
+    grid-template-columns: repeat(4, var(--pad));
     gap: 5px;
   }
   .touch-actions button {
@@ -133,12 +188,15 @@
       inset 0 -3px 0 color-mix(in srgb, var(--ink) 10%, transparent),
       var(--shadow-sm);
     border-radius: 12px;
-    min-height: 45px;
+    min-height: var(--pad);
     display: flex;
     align-items: center;
     justify-content: center;
     flex-direction: column;
     font-size: 19px;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .touch-actions button small {
     display: block;
@@ -175,12 +233,12 @@
   }
   .touch-utility {
     display: grid;
-    grid-template-columns: repeat(4, 45px);
+    grid-template-columns: repeat(4, var(--pad));
     gap: 5px;
   }
   .touch-utility button {
     font-size: 10px;
-    min-height: 32px;
+    min-height: var(--util-h);
     background: var(--paper-2);
   }
 }
@@ -190,17 +248,9 @@
   }
 }
 @media (pointer: coarse) and (max-height: 530px) {
-  .touch-stick {
-    width: 92px;
-    height: 92px;
-    flex-basis: 92px;
-  }
-  .stick-knob {
-    top: 23px;
-    left: 23px;
-  }
-  .touch-controls:not([hidden]) {
-    bottom: max(8px, env(safe-area-inset-bottom));
+  :root {
+    --stick: 92px;
+    --touch-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -209,7 +259,7 @@
   }
 }
 
-@media (pointer: coarse) and (max-height: 570px) {
+@media (pointer: coarse) and (max-height: 570px) and (orientation: landscape) {
   /* Leave 20px + 140px for each fighter card, and room below for the touch controls. */
   #interface .training-hud,
   #interface .tutorial-hud {
@@ -265,7 +315,7 @@
   }
 }
 
-@media (pointer: coarse) and (max-height: 570px) and (max-width: 560px) {
+@media (pointer: coarse) and (max-height: 570px) and (max-width: 560px) and (orientation: landscape) {
   /* Keep the actual card height (including zone cues) and scroll the lesson above the controls. */
   #interface[data-tutorial] .game-hud {
     display: grid;
@@ -287,13 +337,13 @@
     max-height: 100%;
   }
 }
-@media (pointer: coarse) and (max-height: 530px) and (max-width: 560px) {
+@media (pointer: coarse) and (max-height: 530px) and (max-width: 560px) and (orientation: landscape) {
   #interface[data-tutorial] .game-hud {
     padding-bottom: calc(116px + max(8px, env(safe-area-inset-bottom)));
   }
 }
 
-@media (pointer: coarse) and (max-height: 570px) and (max-width: 520px) {
+@media (pointer: coarse) and (max-height: 570px) and (max-width: 520px) and (orientation: landscape) {
   /* The gap between the cards is too narrow for the shortcut buttons here. */
   #interface .training-hud {
     top: 166px;

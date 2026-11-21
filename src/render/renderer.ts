@@ -55,11 +55,20 @@ const CAMERA_FAR = 180;
 const CAMERA_FIT_HEIGHT = 0.645;
 const CAMERA_FIT_WIDTH = 1.16;
 /** Pixel rows the HUD covers above and below the arena, following styles.css / touch.css. */
-function hudBand(height: number, touch: boolean): { top: number; bottom: number } {
-  // Short touch screens move the fighter cards to the top; the touch controls hug the corners.
-  if (touch && height <= 570) return { top: 150, bottom: 70 };
-  // Otherwise cards sit at the bottom, above the touch controls on touch screens.
-  const bottom = touch ? Math.min(330, height * 0.4) : Math.min(250, height * 0.3);
+function hudBand(
+  height: number,
+  touch: boolean,
+  portrait: boolean,
+): { top: number; bottom: number } {
+  // Short landscape touch screens move the fighter cards to the top; touch controls hug corners.
+  if (touch && !portrait && height <= 570) return { top: 150, bottom: 70 };
+  // Otherwise cards sit at the bottom, above the touch controls on touch screens. In portrait the
+  // cards are the slim two-row kind (styles.css), so the controls and cards need less.
+  const bottom = touch
+    ? portrait
+      ? Math.min(240, height * 0.32)
+      : Math.min(330, height * 0.4)
+    : Math.min(250, height * 0.3);
   return { top: Math.min(120, height * 0.2), bottom };
 }
 const CAMERA_DISTANCE = Math.hypot(CAMERA_OFFSET.x, CAMERA_OFFSET.y, CAMERA_OFFSET.z);
@@ -79,6 +88,15 @@ const MENU_PAN_RIGHT = -0.17;
 const MENU_PAN_UP = -0.2;
 /** The title screen stands a little further back so the arena clears the caption beside it. */
 const MENU_PULL_BACK = 0.13;
+/**
+ * Portrait phone title: the share of the screen height, from the top, left to the 3D picture.
+ * The menu is an opaque sheet below it: keep in step with `top: 38dvh` in styles.css.
+ */
+const MENU_HERO_SHARE = 0.38;
+/** Pixel rows the top bar takes above the hero band. */
+const MENU_HERO_TOP = 64;
+/** Share of the hero band the arena may fill; the rest is sky around it and room for the tags. */
+const MENU_HERO_FILL = 0.84;
 /** Sine and cosine of the camera's elevation: how ground depth and height foreshorten on screen. */
 const CAMERA_SIN = CAMERA_OFFSET.y / CAMERA_DISTANCE;
 const CAMERA_COS = Math.hypot(CAMERA_OFFSET.x, CAMERA_OFFSET.z) / CAMERA_DISTANCE;
@@ -641,6 +659,10 @@ export class ArenaRenderer {
    */
   private labelText(f: Fighter, state: GameState): string {
     const tag = fighterTag(f, this.humanCount);
+    // The portrait hero band is small: the tag alone, so labels never run into each other. A
+    // rumble's line-up stands close together: CPUs keep their number beside the slot shape.
+    if (this.compactMenu(state) && this.spotlight === null)
+      return state.fighters.length > 2 && !f.human ? tag.replace(/^CPU\s*/, "") : tag;
     if (state.phase === "menu") return `${tag}  ${f.name}`;
     if (f.human) return tag;
     return `${sharesName(f, state.fighters) ? tag : f.name}  ${Math.round(f.damage)}%`;
@@ -748,7 +770,14 @@ export class ArenaRenderer {
     });
     // The stamina bar hangs under the label: it goes between the label and a human's marker.
     if (point && f.human) point.y -= state.phase === "menu" ? 3 : LABEL_MARKER_GAP;
-    const labelVisible = f.mode !== "dead" && point !== null;
+    // On a portrait phone's title, a label outside the hero band would sit on the top bar or the
+    // menu sheet: it is hidden instead.
+    const outsideHero =
+      point !== null &&
+      this.compactMenu(state) &&
+      this.spotlight === null &&
+      (point.y < 52 || point.y > this.height * MENU_HERO_SHARE - 8);
+    const labelVisible = f.mode !== "dead" && point !== null && !outsideHero;
     view.label.visible = labelVisible;
     view.stamina.visible = labelVisible;
     if (point) {
@@ -1057,20 +1086,25 @@ export class ArenaRenderer {
     if (state.phase === "playing" || state.phase === "menu") this.beltTime += visualDelta;
     // On the menu the arena slides right of the title panel (desktop) or above the menu copy (phone).
     const menu = state.phase === "menu";
-    const sidePanel = this.width >= 900 || (this.height <= 570 && this.width > this.height);
+    const sidePanel = this.sidePanel();
     const panRight = menu && sidePanel ? MENU_PAN_RIGHT : 0;
     // A close-up with no room beside the menu sits above it (the look picker docks below).
     const closeUp = menu && this.spotlight !== null && !sidePanel;
+    // A portrait phone: the whole arena and its line-up go into the hero band above the sheet.
+    const hero = this.compactMenu(state) && this.spotlight === null ? this.heroFraming() : null;
     const panUp = !menu
       ? this.hudPanUp
       : closeUp
         ? SPOTLIGHT_PAN_UP
-        : this.width < 650
-          ? MENU_PAN_UP
-          : 0;
+        : hero
+          ? hero.panUp
+          : this.width < 650
+            ? MENU_PAN_UP
+            : 0;
+    const pullBack = !menu ? 0 : hero ? hero.pullBack : MENU_PULL_BACK;
     this.panRight += (panRight - this.panRight) * Math.min(1, dt * 4);
     this.panUp += (panUp - this.panUp) * Math.min(1, dt * 4);
-    this.pullBack += ((menu ? MENU_PULL_BACK : 0) - this.pullBack) * Math.min(1, dt * 4);
+    this.pullBack += (pullBack - this.pullBack) * Math.min(1, dt * 4);
     this.updateFollow(state, visualDelta);
     this.shake *= Math.exp(-visualDelta * 9);
     if (this.shake < 0.004 || state.phase === "menu") this.shake = 0;
@@ -1169,7 +1203,7 @@ export class ArenaRenderer {
     const aspect = this.width / this.height;
     this.setSceneResolution();
     const touch = window.matchMedia?.("(pointer: coarse)").matches ?? false;
-    const { top, bottom } = hudBand(this.height, touch);
+    const { top, bottom } = hudBand(this.height, touch, this.height >= this.width);
     this.cameraScale = Math.max(
       (CAMERA_FIT_HEIGHT * this.height) / (this.height - top - bottom),
       CAMERA_FIT_WIDTH / aspect,
@@ -1251,6 +1285,34 @@ export class ArenaRenderer {
     // Back off quickly so nobody leaves the frame; close in gently so the view does not pump.
     const zoom = 1 - Math.exp(-dt * (scale > this.viewScale ? 6 : featured ? 5 : 1.7));
     this.viewScale += (scale - this.viewScale) * zoom;
+  }
+
+  /** Wide or short-landscape windows: the title's menu is a column beside the arena. */
+  private sidePanel(): boolean {
+    return this.width >= 900 || (this.height <= 570 && this.width > this.height);
+  }
+
+  /** The title on a portrait phone, where the menu is a sheet under a hero band (styles.css). */
+  private compactMenu(state: GameState): boolean {
+    return (
+      state.phase === "menu" && !this.sidePanel() && this.width <= 700 && this.height >= this.width
+    );
+  }
+
+  /**
+   * Pan and pull-back that centre the arena in the portrait hero band (from under the top bar to
+   * MENU_HERO_SHARE of the height) and shrink it to fit there. Both are fractions of the view.
+   */
+  private heroFraming(): { panUp: number; pullBack: number } {
+    const bottom = this.height * MENU_HERO_SHARE;
+    const band = Math.max(1, bottom - MENU_HERO_TOP);
+    const centre = (MENU_HERO_TOP + bottom) / 2;
+    // The arena's height on screen is CAMERA_FIT_HEIGHT * height / scale (see resize()).
+    const needed = (CAMERA_FIT_HEIGHT * this.height) / (band * MENU_HERO_FILL);
+    return {
+      panUp: (centre - this.height / 2) / this.height,
+      pullBack: Math.max(MENU_PULL_BACK, needed / this.cameraScale - 1),
+    };
   }
 
   /** The only place the camera is positioned: pan the look-at target, then the fixed offset. */

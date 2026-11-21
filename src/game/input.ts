@@ -247,14 +247,23 @@ export class BattleInput {
     this.touchTarget = this.touch.querySelector<HTMLElement>(".touch-extra")!;
     const stick = this.touch.querySelector<HTMLElement>(".touch-stick")!;
     const knob = this.touch.querySelector<HTMLElement>(".stick-knob")!;
+    const blockTouchGesture = (event: TouchEvent) => {
+      if (event.cancelable && !document.documentElement.hasAttribute("data-zoomed"))
+        event.preventDefault();
+    };
+    for (const control of [stick, ...this.touch.querySelectorAll("button")]) {
+      control.addEventListener("touchstart", blockTouchGesture, { passive: false, signal });
+      control.addEventListener("touchend", blockTouchGesture, { passive: false, signal });
+      control.addEventListener("contextmenu", (event) => event.preventDefault(), { signal });
+    }
     const moveStick = (event: PointerEvent) => {
       const rect = stick.getBoundingClientRect();
       const dx = (event.clientX - rect.left - rect.width / 2) / (rect.width * 0.35);
       const dy = (event.clientY - rect.top - rect.height / 2) / (rect.height * 0.35);
       const d = Math.max(1, Math.hypot(dx, dy));
       this.touchMove = { x: dx / d, y: dy / d };
-      knob.style.transform =
-        "translate(" + this.touchMove.x * 30 + "px," + this.touchMove.y * 30 + "px)";
+      const travel = rect.width * 0.27;
+      knob.style.transform = `translate(${this.touchMove.x * travel}px, ${this.touchMove.y * travel}px)`;
     };
     stick.addEventListener(
       "pointerdown",
@@ -324,7 +333,7 @@ export class BattleInput {
   }
 
   private keyDown = (event: KeyboardEvent): void => {
-    if (document.querySelector("dialog[open]")) return;
+    if (document.querySelector("dialog[open], .match-options.rules-open")) return;
     if (
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLTextAreaElement ||

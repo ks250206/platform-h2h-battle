@@ -53,7 +53,9 @@ test("title, real 3D canvas, help and keyboard navigation load without errors", 
   page,
 }) => {
   const errors = await load(page);
-  await expect(page.getByRole("heading", { name: /小さな体に、.*大きな一撃。/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "BRAMBLE" })).toHaveCount(1);
+  await expect(page.locator(".mode-picker")).toBeVisible();
+  await expect(page.locator('[data-action="start"]')).toBeVisible();
   await page.screenshot({ path: "test-results/title-desktop.png" });
   await page.getByRole("button", { name: "操作方法を表示" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
