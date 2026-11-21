@@ -254,7 +254,7 @@ test("landscape Duel pause menu scrolls to help and return-to-title at 844x390",
   await context.close();
 });
 
-test("portrait rumble keeps knockdown visible and keeps lower outside warnings inside their card", async ({
+test("portrait rumble keeps card heights fixed across outside/recovering/knockdown states and hides air tokens and zone compass", async ({
   browser,
 }) => {
   const { context, page, errors } = await phone(browser, 390, 844);
@@ -264,33 +264,101 @@ test("portrait rumble keeps knockdown visible and keeps lower outside warnings i
   const cards = page.locator(".fighter-card");
   await expect(cards).toHaveCount(4);
 
-  // Measure knockdown display and row-2 warning geometry synchronously before the next RAF tick.
+  // Measure baseline heights, then activate outside, recovering, zone compass, and knockdown
+  // synchronously before the next RAF tick to prove card height never grows or shifts siblings.
   const layout = await page.evaluate(() => {
     const all = [...document.querySelectorAll<HTMLElement>(".fighter-card")];
-    const status = all[0]!.querySelector<HTMLElement>(".fighter-status")!;
-    status.classList.add("landing-status", "knockdown");
-    status.textContent = "DOWN";
-    const thirdWarning = all[2]!.querySelector<HTMLElement>(".outside-warning")!;
-    thirdWarning.hidden = false;
-    const statusDisplay = getComputedStyle(status).display;
+    const baselineHeights = all.map((c) => c.getBoundingClientRect().height);
+
+    // Card 0: outside warning + zone compass (zone compass stays hidden on phone).
+    const compass0 = all[0]!.querySelector<HTMLElement>(".zone-compass")!;
+    compass0.hidden = false;
+    compass0.textContent = "円 ↘　次 ↓";
+    const warning0 = all[0]!.querySelector<HTMLElement>(".outside-warning")!;
+    warning0.hidden = false;
+    warning0.classList.remove("recovering");
+    warning0.querySelector("div:first-child span")!.textContent = "エリア外";
+    warning0.querySelector("strong")!.textContent = "0.6/5s";
+
+    // Card 1: knockdown status only (no outside warning).
+    const status1 = all[1]!.querySelector<HTMLElement>(".fighter-status")!;
+    status1.classList.add("landing-status", "knockdown");
+    status1.textContent = "DOWN";
+
+    // Card 2: recovering warning + knockdown (warning wins, status hides, no overlap).
+    all[2]!.querySelector(".fighter-damage span")!.textContent = "127";
+    const status2 = all[2]!.querySelector<HTMLElement>(".fighter-status")!;
+    status2.classList.add("landing-status", "knockdown");
+    status2.textContent = "DOWN";
+    const warning2 = all[2]!.querySelector<HTMLElement>(".outside-warning")!;
+    warning2.hidden = false;
+    warning2.classList.add("recovering");
+    warning2.querySelector("div:first-child span")!.textContent = "ゲージ回復中";
+    warning2.querySelector("strong")!.textContent = "1.4/5s";
+
+    // Card 3: eliminated — stays greyed out with OUT status and hides its damage %.
+    all[3]!.classList.add("eliminated");
+    const status3 = all[3]!.querySelector<HTMLElement>(".fighter-status")!;
+    status3.textContent = "OUT";
+
+    const activeHeights = all.map((c) => c.getBoundingClientRect().height);
     const card0 = all[0]!.getBoundingClientRect();
     const card2 = all[2]!.getBoundingClientRect();
-    const warning2 = thirdWarning.getBoundingClientRect();
+    const life0 = all[0]!.querySelector<HTMLElement>(".fighter-life")!.getBoundingClientRect();
+    const dmg0 = all[0]!.querySelector<HTMLElement>(".fighter-damage")!.getBoundingClientRect();
+    const warn0 = warning0.getBoundingClientRect();
+    const life2 = all[2]!.querySelector<HTMLElement>(".fighter-life")!.getBoundingClientRect();
+    const dmg2 = all[2]!.querySelector<HTMLElement>(".fighter-damage")!.getBoundingClientRect();
+    const warn2 = warning2.getBoundingClientRect();
+    const span0 = warning0.querySelector<HTMLElement>("div:first-child span")!;
+    const span2 = warning2.querySelector<HTMLElement>("div:first-child span")!;
     return {
-      statusDisplay,
-      card0Bottom: card0.bottom,
-      card2Top: card2.top,
-      card2Bottom: card2.bottom,
-      warning2Top: warning2.top,
-      warning2Bottom: warning2.bottom,
-      warning2Height: warning2.height,
+      baselineHeights,
+      activeHeights,
+      airDisplay: getComputedStyle(all[0]!.querySelector<HTMLElement>(".air-tokens")!).display,
+      compassDisplay: getComputedStyle(compass0).display,
+      status1Display: getComputedStyle(status1).display,
+      status2Display: getComputedStyle(status2).display,
+      status3Display: getComputedStyle(status3).display,
+      eliminatedDamageVisibility: getComputedStyle(
+        all[3]!.querySelector<HTMLElement>(".fighter-damage")!,
+      ).visibility,
+      label0Truncated: span0.scrollWidth > span0.clientWidth + 0.5,
+      label2Truncated: span2.scrollWidth > span2.clientWidth + 0.5,
+      card0,
+      card2,
+      life0,
+      dmg0,
+      warn0,
+      life2,
+      dmg2,
+      warn2,
     };
   });
-  expect(layout.statusDisplay).toBe("block");
-  expect(layout.warning2Height).toBeGreaterThan(0);
-  expect(layout.warning2Top).toBeGreaterThanOrEqual(layout.card2Top);
-  expect(layout.warning2Bottom).toBeLessThanOrEqual(layout.card2Bottom + 1);
-  expect(layout.warning2Top).toBeGreaterThanOrEqual(layout.card0Bottom);
+  for (let i = 0; i < 4; i++) {
+    expect(layout.activeHeights[i]).toBeCloseTo(layout.baselineHeights[i]!, 1);
+    expect(layout.activeHeights[i]).toBeCloseTo(layout.baselineHeights[0]!, 1);
+  }
+  expect(layout.airDisplay).toBe("none");
+  expect(layout.compassDisplay).toBe("none");
+  expect(layout.status1Display).toBe("block");
+  expect(layout.status2Display).toBe("none");
+  expect(layout.status3Display).toBe("block");
+  expect(layout.eliminatedDamageVisibility).toBe("hidden");
+  expect(layout.label0Truncated).toBe(false);
+  expect(layout.label2Truncated).toBe(false);
+  // Both outside-warning boxes sit strictly inside their card, between life pips and damage %.
+  for (const [card, life, dmg, warn] of [
+    [layout.card0, layout.life0, layout.dmg0, layout.warn0],
+    [layout.card2, layout.life2, layout.dmg2, layout.warn2],
+  ] as const) {
+    expect(warn.height).toBeGreaterThan(0);
+    expect(warn.top).toBeGreaterThanOrEqual(card.top);
+    expect(warn.bottom).toBeLessThanOrEqual(card.bottom + 1);
+    expect(warn.left).toBeGreaterThanOrEqual(life.right - 0.5);
+    expect(warn.right).toBeLessThanOrEqual(dmg.left + 0.5);
+  }
+  expect(layout.warn2.top).toBeGreaterThanOrEqual(layout.card0.bottom);
   expect(errors).toEqual([]);
   await context.close();
 });
@@ -362,7 +430,7 @@ test("compact 320x568 in-match Rumble and Training keep slim cards clear of head
     expect(card.y + card.height).toBeLessThanOrEqual(rumbleControls.y);
   }
 
-  // Return to title and check Training at 320x568: air tokens stay visible and cards clear training pills.
+  // Return to title and check Training at 320x568: cards clear training pills and keep air tokens hidden.
   await page.locator(".pause-button").tap();
   const menuButton = page.locator('.pause-panel [data-action="menu"]');
   await menuButton.scrollIntoViewIfNeeded();
@@ -381,7 +449,9 @@ test("compact 320x568 in-match Rumble and Training keep slim cards clear of head
     const card = await box(trainCards.nth(i));
     expect(card.y).toBeGreaterThanOrEqual(trainHud.y + trainHud.height);
     expect(card.y + card.height).toBeLessThanOrEqual(trainControls.y);
-    await expect(trainCards.nth(i).locator(".air-tokens")).toBeVisible();
+    await expect(trainCards.nth(i).locator(".air-tokens")).toBeHidden();
+    await expect(trainCards.nth(i).locator(".zone-compass")).toBeHidden();
+    await expect(trainCards.nth(i).locator(".stamina-track")).toBeVisible();
   }
   await noHorizontalOverflow(page);
   expect(errors).toEqual([]);

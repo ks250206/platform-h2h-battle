@@ -294,8 +294,14 @@ html[data-zoomed] .touch-actions button {
   #interface .fighter-foot,
   #interface .fighter-species,
   #interface .fighter-avatar,
-  #interface .stamina-value {
+  #interface .stamina-value,
+  #interface .zone-compass {
     display: none;
+  }
+  #interface .outside-warning {
+    top: calc(100% + 4px);
+    bottom: auto;
+    padding: 4px 7px;
   }
   #interface .stamina-label {
     margin-top: 6px;
