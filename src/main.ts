@@ -4,6 +4,8 @@ import { BattleEngine } from "./game/engine";
 import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
+import { createMatchStore } from "./game/matchStore";
+import type { MatchOptions } from "./game/match";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
 import { GameUI } from "./ui/GameUI";
 import { emptyInput } from "./game/types";
@@ -19,6 +21,9 @@ const sound = new BattleAudio();
 let input: BattleInput | null = null;
 let renderer: ArenaRenderer | null = null;
 let selectedMode: MatchMode = "duel";
+// The title menu's remembered choices, and the ones the current match was started with.
+const match = createMatchStore();
+let matchOptions: MatchOptions = match.get();
 let animation = 0;
 let stopped = false;
 let lastTime = performance.now();
@@ -42,12 +47,19 @@ const pause = () => {
   if (engine.state.phase === "paused") engine.resume();
   else engine.pause();
 };
+/** V / the top-bar camera button / the settings dialog all write the same stored setting. */
+const toggleCameraFollow = () => {
+  if (document.querySelector("dialog[open]")) return;
+  settings.set({ cameraFollow: !settings.get().cameraFollow });
+};
 const ui = new GameUI(overlay, {
-  onStart: (mode) => {
+  onStart: (mode, options) => {
     selectedMode = mode;
+    matchOptions = options;
     sound.unlock();
     input?.reset();
-    engine.start(mode);
+    input?.newMatch();
+    engine.start(mode, matchOptions);
     ui.update(engine.state);
   },
   onPause: () => engine.pause(),
@@ -55,7 +67,8 @@ const ui = new GameUI(overlay, {
   onRestart: () => {
     sound.unlock();
     input?.reset();
-    engine.start(selectedMode);
+    input?.newMatch();
+    engine.start(selectedMode, matchOptions);
     ui.update(engine.state);
   },
   onMenu: () => {
@@ -66,6 +79,7 @@ const ui = new GameUI(overlay, {
     sound.unlock();
     sound.setEnabled(enabled);
   },
+  match,
   graphics: {
     store: settings,
     renderSize: () => renderer?.renderSize ?? null,
@@ -83,6 +97,7 @@ async function boot() {
       (x, y) => renderer!.screenToWorld(x, y),
       pause,
       () => sound.unlock(),
+      toggleCameraFollow,
     );
     root.querySelector(".loading-screen")?.remove();
     lastTime = performance.now();
@@ -113,6 +128,7 @@ async function boot() {
       if (now - lastUI > 33) {
         ui.update(engine.state);
         ui.setFps(fps);
+        ui.setLock(input.lock);
         lastUI = now;
       }
     };
@@ -129,7 +145,9 @@ async function boot() {
             ...inspect,
             start: (mode: MatchMode) => {
               selectedMode = mode;
-              engine.start(mode);
+              matchOptions = match.get();
+              input?.newMatch();
+              engine.start(mode, matchOptions);
               engine.state.phase = "playing";
             },
             engine,
