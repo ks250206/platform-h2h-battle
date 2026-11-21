@@ -1421,6 +1421,8 @@ export class GameUI {
         "landing-status",
         ["idle", "ukemi", "knockdown"].includes(fighter.mode),
       );
+      card.status.classList.toggle("ukemi", fighter.mode === "ukemi");
+      card.status.classList.toggle("knockdown", fighter.mode === "knockdown");
       setText(card.status, out ? "OUT" : respawning ? "復帰中" : statusLabels[fighter.mode]);
       card.stamina.style.transform = `scaleX(${Math.max(0, Math.min(1, fighter.stamina / RULES.maxStamina))})`;
       card.stamina.parentElement!.setAttribute(

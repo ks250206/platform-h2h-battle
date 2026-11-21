@@ -4,6 +4,7 @@ import { freshPadMemory, readPad } from "../src/game/gamepad";
 import type { StageId } from "../src/game/stages";
 import { RULES, UKEMI } from "../src/game/tuning";
 import { emptyInput, type Fighter } from "../src/game/types";
+import { cpuTechOpportunity } from "../src/game/ukemi";
 import { FighterMotion } from "../src/render/motion";
 
 const dt = RULES.fixedStep;
@@ -58,6 +59,35 @@ describe("a fresh dodge edge during a launch", () => {
     advance(engine, 30);
     expect(f.mode).toBe("idle");
     expect(engine.state.stats.dodges).toBe(0);
+    expect(f.inputBuffer).toBeNull();
+  });
+
+  test.each([{ attackPressed: "sweep" }, { jump: true }, { grab: true }] as const)(
+    "a later press %o preserves the armed step and is discarded on landing",
+    (press) => {
+      const { engine, f } = fixture();
+      tumble(f, 6);
+      engine.update(dt, step);
+      advance(engine, 2);
+      engine.update(dt, { ...emptyInput(), ...press });
+      advance(engine, 2);
+      expect(f.mode).toBe("ukemi");
+      expect(f.inputBuffer).toBeNull();
+      advance(engine, 16);
+      expect(f.mode).toBe("idle");
+      expect(f.attack).toBeNull();
+      expect(f.grounded).toBe(true);
+    },
+  );
+
+  test.each([true, false])("brief throw protection allows a tumbling landing (tech %s)", (tech) => {
+    const { engine, f } = fixture();
+    tumble(f);
+    f.invulnerable = 0.15;
+    expect(cpuTechOpportunity(engine.state, f, dt)).toBe(true);
+    engine.update(dt, tech ? step : { ...emptyInput(), attackPressed: "sweep" });
+    expect(f.invulnerable).toBeGreaterThan(0);
+    expect(f.mode).toBe(tech ? "ukemi" : "knockdown");
     expect(f.inputBuffer).toBeNull();
   });
 
@@ -261,6 +291,23 @@ describe("live floor and match rules", () => {
     expect(Math.hypot(f.x - x, f.z - z)).toBeLessThan(0.4);
   });
 
+  test.each([
+    ["garden", 8.85, 8.85, -1],
+    ["bridges", 3, 0.72, 1],
+  ] as const)("%s roll travels its full distance alongside an edge", (stage, x, z, dx) => {
+    const { engine, f } = fixture(stage);
+    tumble(f);
+    Object.assign(f, { x, z });
+    engine.update(dt, { ...step, move: { x: dx, z: 0 } });
+    expect(f.mode).toBe("ukemi");
+    for (let i = 0; i < 12; i++) {
+      engine.update(dt);
+      expect(f.grounded).toBe(true);
+      expect(f.x).toBeCloseTo(x + dx * UKEMI.rollSpeed * dt * (i + 1));
+      expect(f.z).toBeCloseTo(z);
+    }
+  });
+
   test("moving inward just below the rim cannot turn a fall into a tech", () => {
     const { engine, f } = fixture();
     tumble(f);
@@ -272,17 +319,23 @@ describe("live floor and match rules", () => {
     expect(engine.state.effects).toHaveLength(0);
   });
 
-  test("losing the rim during a roll drops the fighter", () => {
+  test.each([true, false])("losing the rim during get-up shows the falling pose (tech %s)", (tech) => {
     const { engine, f, other } = fixture("garden", "duel");
     other.hitstop = 100;
     tumble(f);
     f.x = 7.1;
     engine.state.elapsed = RULES.collapseStart - 1.5 * dt;
-    engine.update(dt, { ...step, move: { x: -1, z: 0 } });
-    expect(f.mode).toBe("ukemi");
+    engine.update(dt, { ...emptyInput(), step: tech, move: { x: -1, z: 0 } });
+    expect(f.mode).toBe(tech ? "ukemi" : "knockdown");
     engine.update(dt);
     expect(f.x).toBe(7.1);
     expect(f.grounded).toBe(false);
+    const context = { floor: false, atEase: false };
+    const falling = new FighterMotion().update({ ...f, mode: "idle" }, dt, context).skeleton;
+    const pose = new FighterMotion().update(f, dt, context).skeleton;
+    // The idle pose also has a small breathing offset.
+    expect(pose.pelvis.p.y).toBeCloseTo(falling.pelvis.p.y, 2);
+    expect(pose.tumble).toEqual(falling.tumble);
   });
 
   test.each([false, true])("outside gauge and clock continue; KO on impact = %s", (ko) => {

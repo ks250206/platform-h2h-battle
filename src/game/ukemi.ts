@@ -5,7 +5,7 @@ import type { Fighter, GameState, Vec2 } from "./types";
 
 /** A launched CPU gets one roll of the dice on the actual downward crossing. */
 export function cpuTechOpportunity(state: GameState, f: Fighter, dt: number): boolean {
-  if (!f.tumbling || f.hitstop > 0 || f.y < 0 || f.invulnerable > 0) return false;
+  if (!f.tumbling || f.hitstop > 0 || f.y < 0) return false;
   const nextVy = f.vy - RULES.gravity * dt;
   return (
     nextVy < 0 && f.y + nextVy * dt <= 0 && canStandAt(state, f.x + f.vx * dt, f.z + f.vz * dt)
@@ -23,7 +23,7 @@ export function advanceRoll(state: GameState, f: Fighter, dt: number): void {
     z: f.z + f.stepDirection.z * UKEMI.rollSpeed * dt,
   };
   const arena = state.arena;
-  if (clearWalk(arena.stageId, arena.halfSize, f, to, 0.2)) {
+  if (clearWalk(arena.stageId, arena.halfSize, f, to, 0)) {
     f.x = to.x;
     f.z = to.z;
   }

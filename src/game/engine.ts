@@ -450,6 +450,14 @@ export class BattleEngine {
     }
   }
 
+  private hasArmedTech(f: Fighter): boolean {
+    return (
+      (f.tumbling || f.pendingLaunch !== null) &&
+      f.inputBuffer?.pressedIn === "hitstun" &&
+      f.inputBuffer.action === "step"
+    );
+  }
+
   /**
    * One fixed tick older. Launched step presses use the tech window; other presses use six ticks. A jump or
    * grab freed by a landing gets one tick more (`landingGrace`, see `graceLanding`).
@@ -457,11 +465,7 @@ export class BattleEngine {
   private ageBuffer(f: Fighter): void {
     if (!f.inputBuffer) return;
     f.inputBuffer.age++;
-    const tech =
-      (f.tumbling || f.pendingLaunch !== null) &&
-      f.inputBuffer.pressedIn === "hitstun" &&
-      f.inputBuffer.action === "step";
-    const limit = tech
+    const limit = this.hasArmedTech(f)
       ? UKEMI.windowTicks
       : INPUT_BUFFER_TICKS + (f.inputBuffer.landingGrace ? 1 : 0);
     if (f.inputBuffer.age > limit) f.inputBuffer = null;
@@ -488,16 +492,14 @@ export class BattleEngine {
     f.inputBuffer = null;
   }
 
-  /** Keeps this tick's highest-priority press, replacing whatever was buffered before. */
+  /** Only a fresh step can replace an armed tech during hitstun. */
   private holdPress(f: Fighter, input: PlayerInput): void {
     const [press] = pressedActions(input);
-    if (press) f.inputBuffer = { ...press, age: 0, pressedIn: f.mode, landingGrace: false };
+    if (!press || (press.action !== "step" && this.hasArmedTech(f))) return;
+    f.inputBuffer = { ...press, age: 0, pressedIn: f.mode, landingGrace: false };
   }
 
-  /**
-   * Removes and returns the buffered press if it is `action` (any action when omitted). The one
-   * place a buffered press is taken, whether claimed at impact or replayed on recovery.
-   */
+  /** Removes and returns the buffered press if it is `action` (any action when omitted). */
   private takeBuffered(f: Fighter, action?: BufferedAction): BufferedInput | null {
     const held = f.inputBuffer;
     if (!held || (action && held.action !== action)) return null;
@@ -507,9 +509,9 @@ export class BattleEngine {
 
   /**
    * The input `handleInput` should see this tick, after the buffer has had its say:
-   * - A fresh press always wins. If anything pressed this tick may be tried (`canTry`), the tick's
-   *   input runs exactly as it always did and the buffer is emptied; otherwise the press replaces
-   *   the buffer.
+   * - If anything pressed this tick may be tried (`canTry`), the tick's
+   *   input runs exactly as it always did and the buffer is emptied. Otherwise holdPress decides
+   *   whether to replace the buffer.
    * - With no fresh press, a buffered press that may now be tried is replayed once, as if pressed
    *   now: direction and aim come from this tick's stick, and an attack whose button is already
    *   up is a tap (it commits on the next tick) while one still held charges as usual.
@@ -781,13 +783,13 @@ export class BattleEngine {
     f.y = f.vy = 0;
     f.grounded = true;
     f.airRisingUsed = f.airThrustUsed = f.airStepUsed = false;
-    const tech = f.tumbling && this.takeBuffered(f, "step")?.pressedIn === "hitstun";
-    if (!f.tumbling || f.invulnerable > 0) {
-      f.tumbling = false;
+    if (!f.tumbling) {
       this.graceLanding(f);
       this.effect("land", f, 0xbed9cc, 0.3);
       return;
     }
+    const tech = this.hasArmedTech(f);
+    this.interruptBuffer(f);
     f.vx = f.vz = 0;
     if (tech) {
       f.stepDirection = rollDirection(move);

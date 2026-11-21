@@ -359,7 +359,7 @@ export class FighterMotion {
       }
       if (frozen) this.tumbleAngle = Math.max(this.tumbleAngle, 0.34);
       if (f.grounded) this.tumbleAngle += (0.5 - this.tumbleAngle) * (1 - Math.exp(-step * 9));
-    } else if (f.mode === "ukemi") {
+    } else if (f.mode === "ukemi" && f.grounded) {
       const d = norm(toBody(f.stepDirection.x, f.stepDirection.z), v3(0, 0, 1));
       this.tumbleAxis = norm(cross(v3(0, 1, 0), d));
       this.tumbleAngle = TAU * easeInOut(clamp01(f.modeTime / UKEMI.rollTime));
@@ -580,6 +580,7 @@ export class FighterMotion {
       }
       case "ukemi":
       case "knockdown": {
+        if (!f.grounded) return result;
         result.pose = this.sided(getUpPose(f.mode === "ukemi", progress));
         result.planted = result.legs = result.carry = 0;
         return result;

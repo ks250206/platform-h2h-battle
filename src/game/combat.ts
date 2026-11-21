@@ -38,8 +38,9 @@ export function isInvulnerable(f: Fighter, ahead = 0): boolean {
   const at = f.modeTime + ahead;
   if (f.mode === "ukemi") return at + 1e-8 < UKEMI.protection;
   if (f.mode === "knockdown") return at + 1e-8 < UKEMI.knockdownProtection;
-  const stepTime = at - f.stepDelay;
-  return f.mode === "step" && stepTime >= RULES.stepInvulStart && stepTime < RULES.stepInvulEnd;
+  if (f.mode !== "step" || f.stepDelay > ahead) return false;
+  const stepTime = f.modeTime + (ahead - f.stepDelay);
+  return stepTime >= RULES.stepInvulStart && stepTime < RULES.stepInvulEnd;
 }
 
 export function attackContains(a: Fighter, b: Fighter): boolean {

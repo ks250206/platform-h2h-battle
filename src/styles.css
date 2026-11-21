@@ -1071,6 +1071,21 @@ h1 > span {
   letter-spacing: 0.13em;
   white-space: nowrap;
 }
+.fighter-status.ukemi,
+.fighter-status.knockdown {
+  font-weight: 700;
+  border-radius: 2px;
+  background: var(--status-bg);
+  box-shadow: 0 0 0 2px var(--status-bg);
+}
+.fighter-status.ukemi {
+  color: #00534f;
+  --status-bg: #a8ede0;
+}
+.fighter-status.knockdown {
+  color: #643800;
+  --status-bg: #ffcf75;
+}
 .fighter-avatar {
   display: grid;
   place-items: center;
