@@ -6,6 +6,7 @@ import { createMatchStore, playableOptions } from "../src/game/matchStore";
 import { STAGES } from "../src/game/stages";
 import { RULES } from "../src/game/tuning";
 import { emptyInput } from "../src/game/types";
+import { GameUI } from "../src/ui/GameUI";
 
 const newRun = () => new LadderSession(DEFAULT_MATCH_OPTIONS);
 
@@ -50,7 +51,9 @@ describe("CPU ladder", () => {
       retries: 2,
       elapsed: 162,
     });
+    const cleared = run.progress;
     expect(run.startAttempt()).toBeNull();
+    expect(run.progress).toEqual(cleared);
 
     const fresh = newRun();
     const attempt = fresh.startAttempt()!;
@@ -113,6 +116,79 @@ describe("CPU ladder", () => {
     expect(run.progress).toMatchObject({ round: 1, totals: { retries: 1 } });
   });
 
+  test.each([0, 1])("shows the engine's time-up reason with a stock lead of %i", (lead) => {
+    const run = newRun();
+    const attempt = run.startAttempt()!;
+    const engine = new BattleEngine(1);
+    engine.start("duel", attempt.options);
+    engine.state.phase = "playing";
+    engine.state.fighters[1].stocks -= lead;
+    engine.state.elapsed = engine.state.rules.timeLimit!;
+    engine.update(1 / 60, emptyInput());
+    expect(engine.state.message).toMatch(/^TIME UP/);
+    expect(engine.state.winnerId).toBe(lead === 0 ? null : 0);
+    run.finish(attempt.id, engine.state.winnerId, engine.state.elapsed);
+
+    const element = () => ({
+      classList: { toggle: vi.fn() },
+      children: [{}, {}, {}],
+      dataset: {},
+      querySelector: () => ({}),
+      setAttribute: vi.fn(),
+    });
+    const subtitle = { textContent: "" };
+    const ui: GameUI = Object.assign(Object.create(GameUI.prototype), {
+      currentPhase: "playing",
+      host: {
+        dataset: {},
+        querySelector: (selector: string) => (selector === ".result-subtitle" ? subtitle : element()),
+      },
+      menu: element(),
+      hud: element(),
+      result: element(),
+      pausePanel: element(),
+      dialog: { open: true },
+      cards: new Map(),
+      locks: [],
+    });
+    // The result panel doesn't need fighter HUD cards.
+    ui.update({ ...engine.state, fighters: [] }, run.progress);
+    expect(subtitle.textContent).toContain("第1戦 / 全4戦 · 庭園の見習い");
+    expect(subtitle.textContent).toContain(engine.state.message);
+    if (lead === 0) expect(subtitle.textContent).toContain("この戦を同じ相手と再戦");
+  });
+
+  test.each([-10, 0])(
+    "a duel lasting %i seconds leaves the total elapsed time unchanged",
+    (elapsed) => {
+      const run = newRun();
+      run.finish(run.startAttempt()!.id, 0, 15);
+      expect(run.finish(run.startAttempt()!.id, 1, elapsed)).toBe(true);
+      expect(run.progress.totals.elapsed).toBe(15);
+    },
+  );
+
+  test("the final opponent has no next opponent on a retry or on clear", () => {
+    const run = newRun();
+    for (let round = 1; round < LADDER_ROUNDS.length; round++) {
+      run.finish(run.startAttempt()!.id, 0, 10);
+    }
+    const finalOpponent = LADDER_ROUNDS.at(-1);
+    run.finish(run.startAttempt()!.id, null, 10);
+    expect(run.progress).toMatchObject({
+      phase: "result",
+      outcome: "draw",
+      opponent: finalOpponent,
+      nextOpponent: null,
+    });
+    run.finish(run.startAttempt()!.id, 0, 10);
+    expect(run.progress).toMatchObject({
+      phase: "clear",
+      opponent: finalOpponent,
+      nextOpponent: null,
+    });
+  });
+
   test("rejects overlapping starts, repeat finishes and stale finishes after advancing", () => {
     const run = newRun();
     const first = run.startAttempt()!;
@@ -139,7 +215,9 @@ describe("CPU ladder", () => {
     const second = run.startAttempt()!;
     run.exit();
     expect(run.finish(second.id, 0, 25)).toBe(false);
+    const exited = run.progress;
     expect(run.startAttempt()).toBeNull();
+    expect(run.progress).toEqual(exited);
     expect(run.progress).toMatchObject({
       round: 2,
       phase: "exited",

@@ -95,7 +95,9 @@ export class LadderSession {
       round: this.index + 1,
       opponent: LADDER_ROUNDS[this.index],
       nextOpponent:
-        this.phase === "result" && this.outcome === "win" ? LADDER_ROUNDS[this.index + 1] : null,
+        this.phase === "result" && this.outcome === "win"
+          ? (LADDER_ROUNDS[this.index + 1] ?? null)
+          : null,
       outcome: this.outcome,
       totals: { ...this.totals },
     };
@@ -104,8 +106,10 @@ export class LadderSession {
   startAttempt(): { id: symbol; options: MatchOptions } | null {
     if (this.phase !== "ready" && this.phase !== "result") return null;
     if (this.phase === "result") {
-      if (this.outcome === "win") this.index++;
-      else this.totals.retries++;
+      if (this.outcome === "win") {
+        if (this.index + 1 >= LADDER_ROUNDS.length) return null;
+        this.index++;
+      } else this.totals.retries++;
     }
     this.phase = "playing";
     this.outcome = null;
@@ -121,7 +125,7 @@ export class LadderSession {
     this.attemptId = null;
     this.outcome = winnerId === 0 ? "win" : winnerId === null ? "draw" : "loss";
     this.totals[this.outcome === "win" ? "wins" : this.outcome === "loss" ? "losses" : "draws"]++;
-    this.totals.elapsed += elapsed;
+    this.totals.elapsed += Math.max(0, elapsed);
     this.phase = this.totals.wins === LADDER_ROUNDS.length ? "clear" : "result";
     return true;
   }

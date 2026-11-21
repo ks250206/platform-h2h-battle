@@ -176,7 +176,7 @@ const icons = {
 
 type TitleMode = MatchMode | "ladder";
 
-const modes: Record<TitleMode, { label: string; en: string; detail: string; number?: string }> = {
+const modes: Record<TitleMode, { label: string; en: string; detail: string; number: string }> = {
   duel: { label: "一騎打ち", en: "DUEL", detail: "1対1、剣一本の読み合い。", number: "01" },
   rumble: {
     label: "乱闘",
@@ -194,6 +194,7 @@ const modes: Record<TitleMode, { label: string; en: string; detail: string; numb
     label: "CPUラダー",
     en: "LADDER",
     detail: "1Pの操作と見た目は「対戦設定」の先頭枠を使います。",
+    number: "04",
   },
 };
 
@@ -509,7 +510,7 @@ export class GameUI {
             ${Object.entries(modes)
               .map(
                 ([id, mode]) =>
-                  `<button class="mode-option ${id === "duel" ? "selected" : ""}" data-mode="${id}" aria-pressed="${id === "duel"}">${mode.number ? `<span class="mode-number">${mode.number}</span>` : ""}<span class="mode-label">${mode.label}<small>${mode.en}</small></span></button>`,
+                  `<button class="mode-option ${id === "duel" ? "selected" : ""}" data-mode="${id}" aria-pressed="${id === "duel"}"><span class="mode-number">${mode.number}</span><span class="mode-label">${mode.label}<small>${mode.en}</small></span></button>`,
               )
               .join("")}
           </div>
@@ -701,9 +702,13 @@ export class GameUI {
       const device = deviceLabel(playable.controls[0] ?? "keyboard");
       const fallback = substitutes[0] ? `（${deviceLabel(substitutes[0].device)}が未接続）` : "";
       const character = CHARACTERS[look.species].name;
+      const multiplayerNote =
+        Object.keys(options.controls).length > 1
+          ? "。操作とキャラクターは「対戦設定」の先頭枠を使用します。通常モードに戻ると、保存済みの複数人設定をそのまま使えます。"
+          : "";
       setText(
         this.query(".ladder-player"),
-        `1P専用 · ${character}（${PALETTES[look.palette].label} / ${ACCESSORIES[look.accessory].label}） · ${device}${fallback}`,
+        `1P専用 · ${character}（${PALETTES[look.palette].label} / ${ACCESSORIES[look.accessory].label}） · ${device}${fallback}${multiplayerNote}`,
       );
       this.syncStage(STAGES[first.stage], false);
       this.callbacks.onPreview("duel", first);
@@ -1379,7 +1384,7 @@ export class GameUI {
     };
   }
 
-  private syncLadderResult(ladder: LadderProgress, roundLabel: string): void {
+  private syncLadderResult(ladder: LadderProgress, roundLabel: string, message: string): void {
     const clear = ladder.phase === "clear";
     this.result.classList.toggle("ladder-clear", clear);
     this.query(".result-winner").hidden = true;
@@ -1394,10 +1399,9 @@ export class GameUI {
             ? "引き分け。"
             : "敗北。",
     );
-    setText(
-      this.query(".result-subtitle"),
-      clear ? `全${LADDER_ROUNDS.length}戦クリア · ${roundLabel}` : roundLabel,
-    );
+    const summary = clear ? `全${LADDER_ROUNDS.length}戦クリア · ${roundLabel}` : roundLabel;
+    const retryNote = ladder.outcome === "draw" ? "この戦を同じ相手と再戦します。" : "";
+    setText(this.query(".result-subtitle"), [summary, message, retryNote].filter(Boolean).join(" · "));
     const next = this.query(".ladder-next");
     next.hidden = !ladder.nextOpponent;
     if (ladder.nextOpponent) {
@@ -1454,7 +1458,7 @@ export class GameUI {
       primary.dataset.action = ladder ? "ladder-continue" : "restart";
       this.result.setAttribute("aria-label", ladder ? "CPUラダーの結果" : "対戦結果");
       this.query(".result-stats").hidden = Boolean(ladder);
-      if (ladder) this.syncLadderResult(ladder, ladderLabel);
+      if (ladder) this.syncLadderResult(ladder, ladderLabel, state.message);
       else {
         this.result.classList.remove("ladder-clear");
         this.query(".ladder-next").hidden = true;
