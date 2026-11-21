@@ -399,3 +399,47 @@ test("landscape 844x390 Rumble keeps top-actions clear of match-heading", async 
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test("desktop 1280x800 Rumble keeps top-actions clear of match-heading and 700x700 frames title fighters in the hero band", async ({
+  browser,
+}) => {
+  // Desktop 1280x800 Rumble: fullscreen icon + top-actions must never overlap 4 ALIVE.
+  const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const desktopPage = await desktopContext.newPage();
+  const desktopErrors: string[] = [];
+  desktopPage.on("pageerror", (error) => desktopErrors.push(error.message));
+  await desktopPage.goto("./");
+  await desktopPage.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await desktopPage.locator('button[data-mode="rumble"]').click();
+  await desktopPage.locator('[data-action="start"]').click();
+  await desktopPage.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const heading = await box(desktopPage.locator(".match-heading"));
+  const actions = await box(desktopPage.locator(".top-actions"));
+  expect(heading.x + heading.width).toBeLessThanOrEqual(actions.x);
+  expect(desktopErrors).toEqual([]);
+  await desktopContext.close();
+
+  // Square 700x700 viewport matches CSS (orientation: portrait); fighters stay inside hero band.
+  const squareContext = await browser.newContext({ viewport: { width: 700, height: 700 } });
+  const squarePage = await squareContext.newPage();
+  const squareErrors: string[] = [];
+  squarePage.on("pageerror", (error) => squareErrors.push(error.message));
+  await squarePage.goto("./");
+  await squarePage.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  const topbar = await box(squarePage.locator(".topbar"));
+  const sheet = await box(squarePage.locator(".menu-content"));
+  await expect
+    .poll(() =>
+      squarePage.evaluate(
+        ([minY, maxY]) =>
+          window.__BRAMBLE__!.snapshot().fighters.every((f) => {
+            const point = window.__BRAMBLE__!.screen(f.x, 1, f.z);
+            return point !== null && point !== undefined && point.y > minY && point.y < maxY;
+          }),
+        [topbar.y + topbar.height, sheet.y] as const,
+      ),
+    )
+    .toBe(true);
+  expect(squareErrors).toEqual([]);
+  await squareContext.close();
+});

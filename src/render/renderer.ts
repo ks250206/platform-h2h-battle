@@ -1203,7 +1203,7 @@ export class ArenaRenderer {
     const aspect = this.width / this.height;
     this.setSceneResolution();
     const touch = window.matchMedia?.("(pointer: coarse)").matches ?? false;
-    const { top, bottom } = hudBand(this.height, touch, this.height > this.width);
+    const { top, bottom } = hudBand(this.height, touch, this.height >= this.width);
     this.cameraScale = Math.max(
       (CAMERA_FIT_HEIGHT * this.height) / (this.height - top - bottom),
       CAMERA_FIT_WIDTH / aspect,
@@ -1295,7 +1295,7 @@ export class ArenaRenderer {
   /** The title on a portrait phone, where the menu is a sheet under a hero band (styles.css). */
   private compactMenu(state: GameState): boolean {
     return (
-      state.phase === "menu" && !this.sidePanel() && this.width <= 700 && this.height > this.width
+      state.phase === "menu" && !this.sidePanel() && this.width <= 700 && this.height >= this.width
     );
   }
 

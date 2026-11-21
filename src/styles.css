@@ -2539,6 +2539,13 @@ kbd {
     padding: 23px 25px;
   }
 }
+/* During matches, hide the prototype badge below 1400px so the fullscreen icon never pushes
+   the badge into the centered Rumble or BO3 match heading (e.g. at 1280x800). */
+@media (max-width: 1400px) {
+  #interface[data-phase]:not([data-phase="menu"]) .prototype-chip {
+    display: none;
+  }
+}
 @media (max-width: 1100px) {
   .prototype-chip {
     display: none;
