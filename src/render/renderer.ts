@@ -257,7 +257,6 @@ export class ArenaRenderer {
   private readonly zoneArrow: Mesh3D;
   private readonly zoneRing: Mesh3D;
   private readonly zoneCore: Mesh3D;
-  private readonly zoneMarker: Text;
   private readonly background: Sprite;
   private readonly skyTexture: Texture;
   private readonly resizeObserver: ResizeObserver;
@@ -422,18 +421,6 @@ export class ArenaRenderer {
     this.destination = this.assets.mesh(this.scene, this.assets.dashedRing, routeInk);
     this.zonePath = this.assets.mesh(this.scene, this.assets.cube, routeInk);
     this.zoneArrow = this.assets.mesh(this.scene, this.stageShapes.chevron, routeInk);
-    this.zoneMarker = new Text({
-      text: "SAFE ZONE",
-      style: {
-        fontFamily: "system-ui, sans-serif",
-        fontSize: 10,
-        fontWeight: "700",
-        fill: PALETTE.zone.label,
-        letterSpacing: 2,
-      },
-    });
-    this.zoneMarker.anchor.set(0.5, 0.5);
-    this.labels.addChild(this.zoneMarker);
     for (let i = 0; i < 8; i++) {
       const line = this.assets.box(this.scene, PALETTE.wind, 0, 0.2, 0, 0.035, 0.025, 0.9);
       line.material = this.assets.material(PALETTE.wind, 0.7, 0.2);
@@ -611,15 +598,6 @@ export class ArenaRenderer {
       this.zoneArrow.scale.set(Math.min(1, length));
       this.zoneArrow.rotation.y = this.zonePath.rotation.y;
     }
-    // Label the far edge of the ring, the one leaning away from the camera.
-    const far = safe.radius - 0.4;
-    const marker = this.view.worldToScreen({
-      x: safe.x + CAMERA_FORWARD.x * far,
-      y: 0.1,
-      z: safe.z + CAMERA_FORWARD.z * far,
-    });
-    this.zoneMarker.visible = safe.active && marker !== null;
-    if (marker) this.zoneMarker.position.set(marker.x, marker.y);
     for (const [i, line] of this.windLines.entries()) {
       line.visible = state.arena.windActive;
       const progress = (this.time * 0.6 + i * 0.19) % 1;
@@ -653,9 +631,9 @@ export class ArenaRenderer {
   }
 
   /**
-   * The words over a fighter. A human is its tag (YOU, P1...). A CPU is its name and damage, or
-   * its tag (CPU 02) when another fighter has the same name. The title screen shows both, so each
-   * row of the menu can be matched to its fighter.
+   * The words over a fighter. A human is its tag (YOU, P1...). A CPU is its name (or tag when
+   * another fighter shares the name), with live damage % on wide screens like PC where labels have
+   * room to breathe. The title screen shows both, so each menu row matches its fighter.
    */
   private labelText(f: Fighter, state: GameState): string {
     const tag = fighterTag(f, this.humanCount);
@@ -665,7 +643,8 @@ export class ArenaRenderer {
       return state.fighters.length > 2 && !f.human ? tag.replace(/^CPU\s*/, "") : tag;
     if (state.phase === "menu") return `${tag}  ${f.name}`;
     if (f.human) return tag;
-    return `${sharesName(f, state.fighters) ? tag : f.name}  ${Math.round(f.damage)}%`;
+    const name = sharesName(f, state.fighters) ? tag : f.name;
+    return this.width >= 900 && this.height > 570 ? `${name}  ${Math.round(f.damage)}%` : name;
   }
 
   private fighterView(f: Fighter): FighterView {

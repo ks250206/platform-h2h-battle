@@ -294,7 +294,60 @@ html[data-zoomed] .touch-actions button {
   #interface .fighter-foot,
   #interface .fighter-species,
   #interface .fighter-avatar,
-  #interface .stamina-value {
+  #interface .stamina-value,
+  #interface .zone-compass {
+    display: none;
+  }
+  #interface .fighter-card.outside-zone:not(.eliminated) {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 7%, var(--paper));
+    box-shadow:
+      inset 0 2px 0 var(--danger),
+      0 0 0 2px color-mix(in srgb, var(--danger) 42%, transparent),
+      var(--shadow-sm);
+  }
+  #interface .fighter-card:is(.eliminated, .respawning) .outside-warning {
+    display: none;
+  }
+  /* Replace STAMINA label with the compact inline countdown/bar so cards keep fixed height and
+     never overlap the lesson panel in compact landscape tutorials. */
+  #interface
+    .fighter-card:not(.eliminated, .respawning):has(.outside-warning:not([hidden]))
+    .stamina-label {
+    display: none;
+  }
+  #interface .outside-warning {
+    position: static;
+    margin-top: 4px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    transition: opacity 0.2s;
+  }
+  #interface .outside-warning > .outside-desktop {
+    display: none;
+  }
+  #interface .outside-warning > .outside-compact {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    margin-bottom: 2px;
+    font-size: 8.5px;
+    font-weight: 750;
+    line-height: 1;
+    color: var(--danger-text);
+  }
+  #interface .outside-warning > .outside-compact strong {
+    font-size: 8.5px;
+    font-weight: 750;
+  }
+  #interface .outside-warning.recovering {
+    opacity: 0.4;
+  }
+  #interface .outside-warning.recovering > .outside-compact {
     display: none;
   }
   #interface .stamina-label {
