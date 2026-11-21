@@ -250,6 +250,9 @@ export class FighterMotion {
       // heaved up, and that takes a good part of the wind-up.
       if (f.mode === "windup" && this.previousMode === "charge" && this.blend < 1 && f.attack)
         duration = Math.min(0.26, ATTACKS[f.attack].startup * 0.55);
+      // Stopping a swing takes as long as the simulation says it does: a blade arrested late in
+      // its wind-up is lowered slowly, not snapped back.
+      if (f.mode === "cancel") duration = clamp(f.modeDuration, 0.1, 0.34);
       this.from = clonePose(this.base);
       this.blend = duration > 0 ? 0 : 1;
       this.blendDuration = duration;
@@ -604,7 +607,20 @@ export class FighterMotion {
         result.carry = 0.8;
         return result;
       }
-      case "cancel":
+      case "cancel": {
+        // Arresting the blade: the knees and back take the load, then let it go.
+        const heavy = clamp01((f.modeDuration - RULES.cancelDuration) / 0.2);
+        const brace = Math.sin(progress * Math.PI);
+        const braced = clonePose(guard);
+        braced.hip.y -= (0.05 + 0.08 * heavy) * brace;
+        braced.hipPitch += 0.06 * heavy * brace;
+        braced.chestPitch += (0.06 + 0.1 * heavy) * brace;
+        braced.headPitch -= 0.05 * heavy * brace;
+        result.pose = braced;
+        result.planted = 0.3;
+        result.carry = 0.6;
+        return result;
+      }
       case "idle":
       case "dead":
       default: {
