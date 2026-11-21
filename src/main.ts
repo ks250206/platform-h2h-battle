@@ -43,6 +43,17 @@ const startMatch = (mode: MatchMode, options: MatchOptions) => {
   ui.setPadNotice(null);
   engine.start(mode, playable.options, currentStage());
 };
+/** The mode the title menu shows, for the line-up of fighters behind it. */
+let titleMode: MatchMode = "duel";
+/**
+ * The title screen: the fighters of the selected mode in the looks the menu shows, with a CPU on
+ * every slot whose pad is away, exactly as a match would start.
+ */
+const showTitle = () => {
+  const count = titleMode === "rumble" ? 4 : 2;
+  const playable = playableOptions(match.get(), count, (pad) => pads.isConnected(pad));
+  engine.menu(titleMode, playable.options);
+};
 let animation = 0;
 let stopped = false;
 let lastTime = performance.now();
@@ -100,8 +111,14 @@ const ui = new GameUI(overlay, {
   },
   onMenu: () => {
     input?.reset();
-    engine.menu();
+    renderer?.setSpotlight(null);
+    showTitle();
   },
+  onPreview: (mode) => {
+    titleMode = mode;
+    if (engine.state.phase === "menu") showTitle();
+  },
+  onSpotlight: (slot) => renderer?.setSpotlight(slot),
   onSound: (enabled) => {
     sound.unlock();
     sound.setEnabled(enabled);

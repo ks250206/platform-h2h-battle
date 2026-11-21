@@ -28,8 +28,12 @@ interface FakePad {
 
 const A = 0;
 const B = 1;
+const Y = 3;
+const LB = 4;
 const RB = 5;
 const START = 9;
+const DOWN = 13;
+const RIGHT = 15;
 
 async function installPads(page: Page) {
   await page.addInitScript(() => {
@@ -240,5 +244,178 @@ test("pads join on the title and a keyboard player and a pad player share a duel
   await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
   await button(page, 1, B, false);
   await page.screenshot({ path: "test-results/multiplayer-duel.png" });
+  expect(errors).toEqual([]);
+});
+
+test("a pad alone picks a look: Y opens, the d-pad and A choose, B cancels, Start confirms", async ({
+  page,
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await installPads(page);
+  await page.goto("./");
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await page.evaluate(() => window.__padConnect(0));
+  await frames(page, 5);
+  /** One full press: the menu reads the pads once a frame. */
+  const press = async (which: number) => {
+    await button(page, 0, which, true);
+    await frames(page, 4);
+    await button(page, 0, which, false);
+    await frames(page, 4);
+  };
+  const saved = () =>
+    page.evaluate(() => JSON.parse(localStorage.getItem("bramble.match.v1") ?? "{}"));
+  const focused = () =>
+    page.evaluate(() => ({ ...(document.activeElement as HTMLElement | null)?.dataset }));
+  const dialog = page.locator(".character-dialog");
+  const original = { species: "rabbit", palette: "sky", accessory: "none" };
+
+  // The pad joins slot 1; Y opens the picker on the fighter it plays.
+  await press(A);
+  await expect(device(page, 1)).toHaveValue("pad1");
+  await expect(page.locator(".join-hint")).toContainText("見た目");
+  await press(Y);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('[data-customize-slot="1"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.locator(".character-pad-hint")).toBeVisible();
+  await expect(dialog.locator('[data-species="rabbit"]')).toBeFocused();
+
+  // Right and A: the next animal. Down reaches the colours, then the accessories; A takes the
+  // focused one each time, and the fighter in the arena follows.
+  await press(RIGHT);
+  await press(A);
+  await expect(dialog.locator('[data-species="bear"]')).toHaveAttribute("aria-pressed", "true");
+  await press(DOWN);
+  await press(RIGHT);
+  const palette = (await focused()).palette;
+  expect(palette).toBeTruthy();
+  await press(A);
+  let accessory: string | undefined;
+  for (let step = 0; step < 5 && !accessory; step++) {
+    await press(DOWN);
+    accessory = (await focused()).accessory;
+  }
+  expect(accessory).toBeTruthy();
+  await press(RIGHT);
+  accessory = (await focused()).accessory;
+  await press(A);
+  const chosen = { species: "bear", palette, accessory };
+  expect((await saved()).loadouts[1]).toEqual(chosen);
+  await page.waitForFunction(
+    (look) => {
+      const f = window.__BRAMBLE__!.snapshot().fighters[1]!;
+      return (
+        f.species === look.species && f.palette === look.palette && f.accessory === look.accessory
+      );
+    },
+    chosen as { species: string; palette: string; accessory: string },
+  );
+
+  // B is "back": the look from before the picker opened returns, and the pad still plays slot 1.
+  await press(B);
+  await expect(dialog).toBeHidden();
+  expect((await saved()).loadouts[1]).toEqual(original);
+  expect((await saved()).controls).toEqual({ 0: "keyboard", 1: "pad1" });
+  expect(await phase(page)).toBe("menu");
+
+  // Again, and this time Start keeps it. LB moves to the other slot's tab on the way.
+  await press(Y);
+  await expect(dialog).toBeVisible();
+  await press(RIGHT);
+  await press(A);
+  await press(LB);
+  await expect(dialog.locator('[data-customize-slot="0"]')).toHaveAttribute("aria-pressed", "true");
+  await press(START);
+  await expect(dialog).toBeHidden();
+  expect(await phase(page)).toBe("menu");
+  expect((await saved()).loadouts[1]).toEqual({ ...original, species: "bear" });
+  expect((await saved()).controls).toEqual({ 0: "keyboard", 1: "pad1" });
+
+  // Start on the title starts the duel: the pad plays the bear it chose, as P2.
+  await press(START);
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const fighters = await page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters);
+  expect(fighters[1]).toMatchObject({ name: "モカ", species: "bear", human: true, player: 2 });
+  expect(fighters[0]).toMatchObject({ name: "コハク", species: "fox", human: true, player: 1 });
+  await expect(page.locator(".fighter-card .fighter-tag")).toHaveText(["P1", "P2"]);
+  expect(errors).toEqual([]);
+});
+
+test("a colour changed between matches reaches the lock chips and the winner's badge", async ({
+  page,
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await installPads(page);
+  await page.goto("./");
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await page.evaluate(() => window.__padConnect(0));
+  await frames(page, 5);
+  const card = (id: number) => page.locator(`.fighter-card[data-fighter="${id}"]`);
+  const badge = page.locator(".result-winner");
+  /** A fighter's look in the arena right now, its team colour as CSS computes it. */
+  const fighter = (id: number) =>
+    page.evaluate((index) => {
+      const f = window.__BRAMBLE__!.snapshot().fighters[index]!;
+      const color = `rgb(${f.color >> 16}, ${(f.color >> 8) & 255}, ${f.color & 255})`;
+      return { color, name: f.name, species: f.species, palette: f.palette };
+    }, id);
+  /**
+   * One duel to its end. Each player's chip sits on the other's card in the colour of the player
+   * who locks; then P1 walks off the island and the result names P2 on a chip of P2's colour.
+   */
+  const playMatch = async () => {
+    await page.locator('[data-action="start"]').click();
+    await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
+    const [p1, p2] = [await fighter(0), await fighter(1)];
+    await expect(card(1).locator(".fighter-lock")).toHaveText("P1 LOCK");
+    await expect(card(1).locator(".fighter-lock")).toHaveCSS("background-color", p1.color);
+    await expect(card(0).locator(".fighter-lock")).toHaveText("P2 LOCK");
+    await expect(card(0).locator(".fighter-lock")).toHaveCSS("background-color", p2.color);
+    // The keyboard player heads for the edge on their own side of the screen.
+    const leftOfCentre = await page.evaluate(() => {
+      const { snapshot, screen } = window.__BRAMBLE__!;
+      const f = snapshot().fighters[0]!;
+      return screen(f.x, 0, f.z)!.x < screen(0, 0, 0)!.x;
+    });
+    const key = leftOfCentre ? "KeyA" : "KeyD";
+    await page.keyboard.down(key);
+    await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "ended");
+    await page.keyboard.up(key);
+    expect(await page.evaluate(() => window.__BRAMBLE__!.snapshot().winnerId)).toBe(1);
+    await expect(badge).toBeVisible();
+    await expect(badge.locator(".winner-tag")).toHaveText("P2");
+    await expect(badge.locator(".winner-name")).toHaveText(p2.name);
+    await expect(badge.locator(".winner-tag")).toHaveCSS("background-color", p2.color);
+    return p2;
+  };
+
+  // パッド1 joins as P2. One life each: a single fall ends the match, and the lock-ons stay as
+  // they were from the first frame to the last.
+  await button(page, 0, A, true);
+  await expect(device(page, 1)).toHaveValue("pad1");
+  await button(page, 0, A, false);
+  await page.locator('[data-stocks="1"]').click();
+  const first = await playMatch();
+  expect(first).toMatchObject({ name: "シロ", species: "rabbit", palette: "sky" });
+  await page.screenshot({ path: "test-results/multiplayer-winner-sky.png" });
+
+  // Back on the title P2 changes nothing but the colour. P2's card is drawn anew for it, while
+  // P1's card, the order of the cards and both lock-ons are what they were, and the same fighter
+  // wins again: every chip and the badge must still take the new colour.
+  await page.locator('.result-screen [data-action="menu"]').click();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "menu");
+  await page.locator('.player-row[data-slot="1"] .player-character').click();
+  const dialog = page.locator(".character-dialog");
+  await dialog.locator('[data-palette="mint"]').click();
+  await dialog.locator('[data-action="confirm-character"]').click();
+  await expect(dialog).toBeHidden();
+  const second = await playMatch();
+  expect(second).toMatchObject({ name: "シロ", species: "rabbit", palette: "mint" });
+  expect(second.color).not.toBe(first.color);
+  await page.screenshot({ path: "test-results/multiplayer-winner-mint.png" });
   expect(errors).toEqual([]);
 });

@@ -1,6 +1,13 @@
 // Match options the player chooses before a fight. Importable in node (tests): no DOM access.
 
 import {
+  DEFAULT_LOADOUTS,
+  LOADOUT_SLOTS,
+  defaultLoadout,
+  sanitizeLoadouts,
+  type Loadout,
+} from "./characters";
+import {
   isTimeRule,
   presetRules,
   sanitizeGimmicks,
@@ -26,7 +33,7 @@ export const CONTROL_DEVICES: readonly ControlDevice[] = [
   "pad4",
 ];
 /** Fighter slots a match can have: 2 in a duel, 4 in a rumble. */
-export const MAX_FIGHTERS = 4;
+export const MAX_FIGHTERS = LOADOUT_SLOTS;
 
 export interface MatchOptions {
   /**
@@ -44,6 +51,12 @@ export interface MatchOptions {
   time: TimeRule;
   /** Which arena gimmicks run. Training ignores it: it never has any. */
   gimmicks: Gimmicks;
+  /**
+   * What each slot (0-3) looks like: animal, colours and accessory. Always four entries. It is
+   * independent of everything above: a look belongs to its slot whoever plays it, any two slots
+   * may share one, and none of it changes how a fighter plays.
+   */
+  loadouts: Loadout[];
 }
 
 export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
@@ -51,6 +64,7 @@ export const DEFAULT_MATCH_OPTIONS: MatchOptions = {
   difficulty: "normal",
   overrides: {},
   ...presetRules(DEFAULT_PRESET),
+  loadouts: DEFAULT_LOADOUTS.map((loadout) => ({ ...loadout })),
 };
 
 /** A deep copy: changing it never changes `options`. */
@@ -60,7 +74,13 @@ export function copyMatchOptions(options: MatchOptions): MatchOptions {
     controls: { ...options.controls },
     overrides: { ...options.overrides },
     gimmicks: { ...options.gimmicks },
+    loadouts: options.loadouts.map((loadout) => ({ ...loadout })),
   };
+}
+
+/** The look of slot `fighterId`; a slot the options somehow lack wears its default. */
+export function loadoutFor(options: Pick<MatchOptions, "loadouts">, fighterId: number): Loadout {
+  return options.loadouts[fighterId] ?? defaultLoadout(fighterId);
 }
 
 /** The strength a given CPU fighter plays at. */
@@ -131,5 +151,6 @@ export function sanitizeMatchOptions(raw: unknown): MatchOptions {
     overrides,
     time: isTimeRule(source.time) ? source.time : DEFAULT_MATCH_OPTIONS.time,
     gimmicks: sanitizeGimmicks(source.gimmicks),
+    loadouts: sanitizeLoadouts(source.loadouts),
   };
 }

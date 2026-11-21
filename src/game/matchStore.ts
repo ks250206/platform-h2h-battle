@@ -2,6 +2,7 @@
 // settings one. Importable in node (tests): nothing touches `localStorage` at import time, every
 // access to it is guarded, and the storage can be injected.
 
+import { withLoadout, type Loadout } from "./characters";
 import {
   copyMatchOptions as copy,
   DEFAULT_MATCH_OPTIONS,
@@ -121,12 +122,13 @@ export function playableOptions(
       substitutes.push({ slot: 0, device: options.controls[0], by: "keyboard" });
     substitutes.sort((a, b) => a.slot - b.slot);
   }
+  // A slot keeps its look whoever ends up playing it (`copy` deep-copies loadouts and gimmicks).
   return { options: { ...copy(options), controls }, substitutes };
 }
 
 /**
- * `options` with a preset's rules (lives, time limit, gimmicks). Who plays which slot and how
- * strong the CPUs are stay exactly as they were.
+ * `options` with a preset's rules (lives, time limit, gimmicks). Who plays which slot, their
+ * looks and how strong the CPUs are stay exactly as they were.
  */
 export function applyPreset(options: MatchOptions, id: PresetId): MatchOptions {
   return { ...copy(options), ...presetRules(id) };
@@ -171,14 +173,19 @@ export interface MatchStore {
   /** A copy of the current options; changing it does not change the store. */
   get(): MatchOptions;
   /**
-   * Merges `patch` (a `controls`, `overrides` or `gimmicks` patch replaces that map), sanitizes
-   * and saves.
+   * Merges `patch` (a `controls`, `overrides`, `gimmicks` or `loadouts` patch replaces that whole
+   * field), sanitizes and saves.
    */
   set(patch: Partial<MatchOptions>): void;
   /** Applies a rule preset: lives, time limit and gimmicks only (`applyPreset`). */
   preset(id: PresetId): void;
   /** Switches one gimmick on or off; the other rules stay. */
   toggleGimmick(id: GimmickId, on?: boolean): void;
+  /**
+   * Changes the look of one slot (animal, colours, accessory) and nothing else: who plays the
+   * slot, the other slots and the CPU strengths stay exactly as they are.
+   */
+  setLoadout(slot: number, patch: Partial<Loadout>): void;
   /** Puts a device (null: a CPU) on a slot, swapping with the slot that had it (`assignDevice`). */
   assign(slot: number, device: ControlDevice | null, fighterCount: number): void;
   /** Pad `index` joins on the first CPU slot; returns that slot, or null (`joinPad`). */
@@ -206,6 +213,10 @@ export function createMatchStore(storage: MatchStorage | null = browserStorage()
     },
     toggleGimmick(id, on = !current.gimmicks[id]) {
       set({ gimmicks: { ...current.gimmicks, [id]: on } });
+    },
+    setLoadout(slot, patch) {
+      const loadouts = withLoadout(current.loadouts, slot, patch);
+      if (JSON.stringify(loadouts) !== JSON.stringify(current.loadouts)) set({ loadouts });
     },
     assign(slot, device, fighterCount) {
       const controls = assignDevice(current.controls, slot, device, fighterCount);

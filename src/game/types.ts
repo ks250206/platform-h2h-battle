@@ -1,5 +1,8 @@
+import type { AccessoryId, PaletteId, Species } from "./characters";
 import type { AiLevel, MatchOptions } from "./match";
 import type { EffectiveRules } from "./rules";
+
+export type { Species } from "./characters";
 
 export type AttackId = "overhead" | "rising" | "sweep" | "thrust";
 export type FighterMode =
@@ -18,7 +21,6 @@ export type FighterMode =
   | "dead";
 export type MatchMode = "duel" | "rumble" | "training";
 export type Phase = "menu" | "countdown" | "playing" | "paused" | "ended";
-export type Species = "fox" | "rabbit" | "bear" | "raccoon";
 export type Vec2 = { x: number; z: number };
 
 /**
@@ -27,9 +29,15 @@ export type Vec2 = { x: number; z: number };
  */
 export interface Fighter {
   id: number;
+  /**
+   * The slot's look, from its loadout (`characters.ts`): name, animal, team colour and accessory.
+   * Cosmetic only: no rule of the simulation reads any of the five.
+   */
   name: string;
   species: Species;
   color: number;
+  palette: PaletteId;
+  accessory: AccessoryId;
   human: boolean;
   /** 1-based player number among the humans of this match (slot order); null for a CPU. */
   player: number | null;

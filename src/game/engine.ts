@@ -1,8 +1,12 @@
+import { CHARACTERS, PALETTES } from "./characters";
+import { CAMERA_FORWARD, CAMERA_RIGHT } from "./coordinates";
+import { fighterTitle } from "./identity";
 import {
   copyMatchOptions,
   DEFAULT_MATCH_OPTIONS,
   humanSlots,
   levelFor,
+  loadoutFor,
   sanitizeMatchOptions,
   type MatchOptions,
 } from "./match";
@@ -66,20 +70,36 @@ function invulnerableAfter(f: Fighter, t: number): boolean {
   return at >= RULES.stepInvulStart && at < RULES.stepInvulEnd;
 }
 
-const CAST = [
-  { name: "コハク", species: "fox" as const, color: 0xff7a45 },
-  { name: "シロ", species: "rabbit" as const, color: 0x3fb4ff },
-  { name: "モカ", species: "bear" as const, color: 0xb57bff },
-  { name: "スミ", species: "raccoon" as const, color: 0xffc93c },
-];
+/**
+ * Where the title screen lines the fighters up, as [screen right, away from the camera] on the
+ * floor: slot order from left to right, in a shallow zigzag so nobody hides a neighbour.
+ */
+const SHOWCASE_SPOTS: Readonly<Record<number, readonly (readonly [number, number])[]>> = {
+  2: [
+    [-2.8, 2.1],
+    [2.8, -2.1],
+  ],
+  4: [
+    [-6, 2],
+    [-2, -1],
+    [2, 1],
+    [6, -2],
+  ],
+};
 
 function makeFighter(id: number, count: number, options: MatchOptions): Fighter {
   // Player numbers follow slot order: the first human slot is P1.
   const player = humanSlots(options, count).findIndex((slot) => slot.id === id) + 1;
   const theta =
     count === 2 ? (id === 0 ? -Math.PI / 2 : Math.PI / 2) : (id * Math.PI) / 2 - Math.PI / 2;
+  // The slot's look. Nothing below this block reads it: every animal plays exactly alike.
+  const loadout = loadoutFor(options, id);
   return {
-    ...CAST[id],
+    name: CHARACTERS[loadout.species].name,
+    species: loadout.species,
+    color: PALETTES[loadout.palette].color,
+    palette: loadout.palette,
+    accessory: loadout.accessory,
     id,
     human: player > 0,
     player: player > 0 ? player : null,
@@ -227,9 +247,20 @@ export class BattleEngine {
   resume(): void {
     if (this.state.phase === "paused") this.state.phase = this.state.pausedFrom;
   }
-  menu(): void {
-    this.start("duel");
+  /**
+   * The title screen: the fighters `mode` would have, in the looks `options` give them, lined up
+   * for the camera. Nothing is simulated until a match starts.
+   */
+  menu(mode: MatchMode = "duel", options?: Partial<MatchOptions>): void {
+    this.start(mode, options);
     this.state.phase = "menu";
+    const spots = SHOWCASE_SPOTS[this.state.fighters.length];
+    this.state.fighters.forEach((f, index) => {
+      const spot = spots?.[index];
+      if (!spot) return;
+      f.x = CAMERA_RIGHT.x * spot[0] + CAMERA_FORWARD.x * spot[1];
+      f.z = CAMERA_RIGHT.z * spot[0] + CAMERA_FORWARD.z * spot[1];
+    });
   }
 
   /** Drops every buffered press (a fresh match starts with empty buffers anyway). */
@@ -1046,8 +1077,8 @@ export class BattleEngine {
     if (this.state.mode !== "training") f.stocks = Math.max(0, f.stocks - 1);
     if (this.state.mode !== "training" && f.stocks > 0) {
       f.respawnTimer = RULES.respawnDelay;
-      this.announce(`${f.name} DOWN — 残り${f.stocks}`, 1.8);
-    } else this.announce(f.name + " OUT", 1.8);
+      this.announce(`${this.title(f)} DOWN — 残り${f.stocks}`, 1.8);
+    } else this.announce(this.title(f) + " OUT", 1.8);
   }
 
   /** Counts down downed fighters that still have lives and brings them back. */
@@ -1141,7 +1172,7 @@ export class BattleEngine {
       state.winnerId = contenders[0]?.id ?? null;
       state.phase = "ended";
       this.clearBuffers();
-      this.announce(contenders[0] ? contenders[0].name + " WINS" : "DRAW", 10);
+      this.announce(contenders[0] ? this.title(contenders[0]) + " WINS" : "DRAW", 10);
     } else if (state.elapsed >= (state.rules.timeLimit ?? Infinity)) {
       // A fighter waiting to respawn already lost the damage it carried with that life.
       const damage = (f: Fighter) => (f.mode === "dead" ? 0 : f.damage);
@@ -1354,6 +1385,11 @@ export class BattleEngine {
     });
     if (this.state.effects.length > 100)
       this.state.effects.splice(0, this.state.effects.length - 100);
+  }
+
+  /** The name an announcement uses: led by the tag (P2, CPU 03) when two fighters share it. */
+  private title(f: Fighter): string {
+    return fighterTitle(f, this.state.fighters);
   }
 
   private announce(message: string, duration = 1.2): void {
