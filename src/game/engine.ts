@@ -1,3 +1,4 @@
+import { DEFAULT_MATCH_OPTIONS, levelFor, sanitizeMatchOptions, type MatchOptions } from "./match";
 import { ATTACKS, RULES } from "./tuning";
 import {
   angleDelta,
@@ -37,7 +38,7 @@ const CAST = [
   { name: "スミ", species: "raccoon" as const, color: 0xffc93c },
 ];
 
-function makeFighter(id: number, count: number): Fighter {
+function makeFighter(id: number, count: number, options: MatchOptions): Fighter {
   const theta =
     count === 2 ? (id === 0 ? -Math.PI / 2 : Math.PI / 2) : (id * Math.PI) / 2 - Math.PI / 2;
   return {
@@ -65,6 +66,10 @@ function makeFighter(id: number, count: number): Fighter {
     outsideTime: 0,
     airRisingUsed: false,
     airThrustUsed: false,
+    airStepUsed: false,
+    stocks: options.stocks,
+    respawnTimer: 0,
+    aiLevel: levelFor(options, id),
     stepDirection: { x: 0, z: 0 },
     stepDelay: 0,
     hitTargets: [],
@@ -93,6 +98,7 @@ export class BattleEngine {
   private inputs = new Map<number, PlayerInput>();
   private timeRemainder = 0;
   private pendingInput = emptyInput();
+  private options: MatchOptions = { ...DEFAULT_MATCH_OPTIONS, overrides: {} };
 
   constructor(seed = 20261121) {
     this.randomState = seed >>> 0;
@@ -112,7 +118,7 @@ export class BattleEngine {
       elapsed: 0,
       countdown: 3,
       fighters: Array.from({ length: mode === "rumble" ? 4 : 2 }, (_, i) =>
-        makeFighter(i, mode === "rumble" ? 4 : 2),
+        makeFighter(i, mode === "rumble" ? 4 : 2, this.options),
       ),
       arena: {
         halfSize: RULES.arenaHalfSize,
@@ -131,11 +137,14 @@ export class BattleEngine {
       messageTime: 0,
       seed,
       pausedFrom: "playing",
+      options: { ...this.options, overrides: { ...this.options.overrides } },
       stats: { hits: 0, clashes: 0, dodges: 0, maxDamage: 0 },
     };
   }
 
-  start(mode: MatchMode): void {
+  /** Starts a match. Options given once are kept for later restarts until new ones arrive. */
+  start(mode: MatchMode, options?: Partial<MatchOptions>): void {
+    if (options) this.options = sanitizeMatchOptions({ ...this.options, ...options });
     this.state = this.createState(mode, this.state.seed);
     this.randomState = this.state.seed >>> 0;
     this.nextBomb = RULES.bombStart;
@@ -794,7 +803,7 @@ export class BattleEngine {
       for (let i = 0; i < state.fighters.length; i++) {
         const f = state.fighters[i];
         if (f.mode === "dead" && state.elapsed - (f.eliminatedAt ?? 0) > 1.5) {
-          state.fighters[i] = makeFighter(f.id, 2);
+          state.fighters[i] = makeFighter(f.id, 2, this.options);
         }
       }
       return;

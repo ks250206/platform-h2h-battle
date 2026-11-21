@@ -1,3 +1,5 @@
+import type { AiLevel, MatchOptions } from "./match";
+
 export type AttackId = "overhead" | "rising" | "sweep" | "thrust";
 export type FighterMode =
   | "idle"
@@ -49,6 +51,14 @@ export interface Fighter {
   outsideTime: number;
   airRisingUsed: boolean;
   airThrustUsed: boolean;
+  /** The one air dodge per airtime has been spent; cleared on landing. */
+  airStepUsed: boolean;
+  /** Lives left, including the one in play. */
+  stocks: number;
+  /** Seconds until a downed fighter with lives left comes back; 0 otherwise. */
+  respawnTimer: number;
+  /** How well a CPU plays; unused for the human. */
+  aiLevel: AiLevel;
   stepDirection: Vec2;
   stepDelay: number;
   hitTargets: number[];
@@ -125,6 +135,8 @@ export interface GameState {
   messageTime: number;
   seed: number;
   pausedFrom: "playing" | "countdown";
+  /** What this match was started with. */
+  options: MatchOptions;
   stats: { hits: number; clashes: number; dodges: number; maxDamage: number };
 }
 

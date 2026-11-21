@@ -35,6 +35,7 @@ describe("device profile defaults", () => {
       ambientOcclusion: false,
       showFps: false,
       cameraShake: true,
+      cameraFollow: true,
     });
   });
 
