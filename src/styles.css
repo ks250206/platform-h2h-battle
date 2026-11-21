@@ -2624,41 +2624,56 @@ kbd {
     top: 81px;
   }
 }
-/* A short desktop screen (1280x720): the stage row makes way and the column tightens a little, so
-   the default Duel menu fits without scrolling, the start and tutorial included. */
+/* A short desktop screen (1280x720): the stage row makes way and the column tightens enough that
+   the default Duel menu (including stage-override notes on taller Linux/Windows CJK fonts) fits
+   without scrolling, Start and Tutorial included. */
 @media (max-height: 760px) and (min-width: 701px) {
+  .topbar {
+    top: 16px;
+  }
   .menu-features {
     display: none;
   }
   .menu-content {
-    top: 68px;
-    bottom: 30px;
-    padding-bottom: 4px;
+    top: 58px;
+    bottom: 24px;
+    padding-bottom: 0;
+  }
+  .menu-content > .eyebrow {
+    margin-bottom: 4px;
   }
   .mode-option {
-    padding-top: 8px;
-    padding-bottom: 8px;
+    padding-top: 7px;
+    padding-bottom: 7px;
   }
   .mode-description {
-    margin-top: 6px;
-    margin-bottom: 8px;
+    margin-top: 5px;
+    margin-bottom: 7px;
   }
   .match-options {
-    margin-bottom: 10px;
+    padding: 8px 11px 7px;
+    margin-bottom: 8px;
   }
   .match-options-head {
-    margin-bottom: 5px;
+    margin-bottom: 4px;
   }
   .match-options-body {
+    gap: 2.5px;
+  }
+  .player-rows {
     gap: 3px;
+    padding-top: 5px;
   }
   .start-button {
-    padding-top: 11px;
-    padding-bottom: 11px;
+    padding-top: 10px;
+    padding-bottom: 10px;
   }
   .menu-controls-link,
   .menu-links {
-    margin-top: 8px;
+    margin-top: 6px;
+  }
+  .menu-bottom {
+    bottom: 8px;
   }
 }
 @media (max-height: 700px) and (min-width: 701px) {

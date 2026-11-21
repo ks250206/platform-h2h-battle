@@ -123,15 +123,25 @@ test("instructions stay zoomable, reset and pinch-out recovery both return to 1x
   const cdp = await context.newCDPSession(page);
   const notice = page.locator(".zoom-notice");
 
+  const commitCompositor = () =>
+    page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+
   const zoomViaHelp = async () => {
     await page.locator(".pause-button").tap();
     await page.locator('.pause-panel [data-action="help"]').tap();
     await expect(page.locator("dialog.help-dialog")).toBeVisible();
+    // Wait for compositor commit so hit-testing sees help-dialog (not the canvas behind it).
+    await commitCompositor();
     await cdp.send("Input.synthesizePinchGesture", {
       x: 195,
       y: 400,
-      scaleFactor: 1.45,
-      relativeSpeed: 800,
+      scaleFactor: 1.5,
+      relativeSpeed: 300,
       gestureSourceType: "touch",
     });
     await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 1)).toBeGreaterThan(1.2);
@@ -141,6 +151,7 @@ test("instructions stay zoomable, reset and pinch-out recovery both return to 1x
     await page.locator('.pause-panel [data-action="resume"]').dispatchEvent("click");
     await page.waitForFunction(() => window.__BRAMBLE__?.snapshot().phase === "playing");
     await expect(notice).toBeVisible();
+    await commitCompositor();
   };
 
   // Start Training and exercise reset-button recovery first.
@@ -163,7 +174,7 @@ test("instructions stay zoomable, reset and pinch-out recovery both return to 1x
     x: 195,
     y: 420,
     scaleFactor: 0.5,
-    relativeSpeed: 800,
+    relativeSpeed: 300,
     gestureSourceType: "touch",
   });
   await expect.poll(() => page.evaluate(() => visualViewport?.scale ?? 0)).toBeCloseTo(1, 2);
