@@ -51,6 +51,8 @@ async function start(page: Page, mode: string, options?: Parameters<typeof choos
 
 type Spot = { x: number; z: number };
 type AimProbe = { __aimGap: (self: Spot & { facing: number }, to: Spot) => number };
+/** One frame of the lock-on log: the facing's error, and whether the player was free to turn. */
+type AimFrame = { gap: number; settled: boolean };
 
 test("title, real 3D canvas, help and keyboard navigation load without errors", async ({
   page,
@@ -371,28 +373,60 @@ test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", asyn
   await expect(page.locator(".opponent-card .fighter-lock")).toBeVisible();
   await expect(page.locator(".game-hud")).not.toHaveClass(/lock-off/);
   await page.evaluate(() => {
-    const recorder = window as unknown as AimProbe & { __aim?: { gap: number; mode: string }[] };
+    const recorder = window as unknown as AimProbe & { __aim?: AimFrame[] };
     recorder.__aim = [];
+    // The aim is taken from where both stood before the frame's simulation steps, so the facing
+    // trails a moving opponent by one frame: a degree or two at 60 fps, several on a slow machine.
+    // Measured against the previous frame's positions as well, the check holds at any frame rate.
+    let before: [Spot, Spot] | null = null;
+    // Match time since which the player has been free. A hit leaves the facing wherever it was,
+    // and turning back takes up to 0.16 s (half a turn at the idle rate), so a frame only counts
+    // once the player has been free for longer than that.
+    let freeSince: number | null = null;
     const poll = () => {
       if (!recorder.__aim) return;
-      const [self, other] = window.__BRAMBLE__!.snapshot().fighters;
-      recorder.__aim.push({ gap: recorder.__aimGap(self, other), mode: self.mode });
+      const state = window.__BRAMBLE__!.snapshot();
+      const [self, other] = state.fighters;
+      const now = recorder.__aimGap(self, other);
+      const then = before
+        ? recorder.__aimGap({ ...before[0], facing: self.facing }, before[1])
+        : now;
+      if (self.mode !== "idle" || other.mode === "dead") freeSince = null;
+      else freeSince ??= state.elapsed;
+      recorder.__aim.push({
+        gap: Math.min(now, then),
+        settled: freeSince !== null && state.elapsed - freeSince > 0.3,
+      });
+      before = [
+        { x: self.x, z: self.z },
+        { x: other.x, z: other.z },
+      ];
       requestAnimationFrame(poll);
     };
     requestAnimationFrame(poll);
   });
   await page.mouse.move(box.x + box.width - target.x, box.y + box.height - target.y);
   await page.mouse.move(target.x, target.y, { steps: 8 });
-  await page.waitForFunction(() => (window as unknown as { __aim: unknown[] }).__aim.length > 10);
+  // The opponent may land a hit meanwhile, so wait for enough settled frames with the cursor
+  // parked on the far point rather than for a number of frames.
+  const parked = await page.evaluate(
+    () => (window as unknown as { __aim: AimFrame[] }).__aim.length,
+  );
+  await page.waitForFunction(
+    (from) =>
+      (window as unknown as { __aim: AimFrame[] }).__aim.slice(from).filter((f) => f.settled)
+        .length > 5,
+    parked,
+  );
   const locked = await page.evaluate(() => {
-    const recorder = window as unknown as { __aim?: { gap: number; mode: string }[] };
+    const recorder = window as unknown as { __aim?: AimFrame[] };
     const log = recorder.__aim!;
     delete recorder.__aim;
     return log;
   });
-  const free = locked.filter((frame) => frame.mode === "idle");
-  expect(free.length).toBeGreaterThan(5);
-  for (const frame of free) expect(frame.gap).toBeLessThan(5);
+  const settled = locked.filter((frame) => frame.settled);
+  expect(settled.length).toBeGreaterThan(5);
+  for (const frame of settled) expect(frame.gap).toBeLessThan(5);
 
   // Tab turns the lock off: the chip goes, and the cursor now steers the facing (a steady state,
   // so waiting for it is safe even if a hit briefly freezes the player).
