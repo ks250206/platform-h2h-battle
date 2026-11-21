@@ -29,7 +29,15 @@ type FullscreenNavigator = Pick<Navigator, "userAgent"> & { standalone?: boolean
 interface FullscreenEnvironment {
   matchMedia?: (query: string) => Pick<MediaQueryList, "matches">;
   navigator?: FullscreenNavigator;
-  document?: Partial<Pick<FullscreenDocument, "fullscreenEnabled" | "webkitFullscreenEnabled">>;
+  document?: Partial<
+    Pick<
+      FullscreenDocument,
+      | "fullscreenEnabled"
+      | "webkitFullscreenEnabled"
+      | "fullscreenElement"
+      | "webkitFullscreenElement"
+    >
+  >;
   target?: Partial<Pick<FullscreenTarget, "requestFullscreen" | "webkitRequestFullscreen">>;
 }
 
@@ -44,13 +52,18 @@ function browserEnvironment(target: HTMLElement): FullscreenEnvironment {
   };
 }
 
+const DISPLAY_MODE_QUERY = "(display-mode: standalone), (display-mode: fullscreen)";
+
 export function detectFullscreenSupport(
   env: FullscreenEnvironment = typeof document === "undefined"
     ? {}
     : browserEnvironment(document.documentElement),
 ): FullscreenSupport {
+  const apiFullscreen = Boolean(
+    env.document?.fullscreenElement || env.document?.webkitFullscreenElement,
+  );
   if (
-    env.matchMedia?.("(display-mode: standalone), (display-mode: fullscreen)").matches ||
+    (!apiFullscreen && env.matchMedia?.(DISPLAY_MODE_QUERY).matches) ||
     env.navigator?.standalone === true
   ) {
     return "standalone";
@@ -68,24 +81,28 @@ export function createFullscreen(
   target: FullscreenTarget = document.documentElement,
 ): FullscreenController {
   const doc: FullscreenDocument = target.ownerDocument;
-  const support = detectFullscreenSupport(browserEnvironment(target));
-  const isActive = () =>
-    support === "standalone" || Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
-  let state: FullscreenState = { active: isActive(), support };
+  const readState = (): FullscreenState => {
+    const support = detectFullscreenSupport(browserEnvironment(target));
+    const active =
+      support === "standalone" || Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+    return { active, support };
+  };
+  let state: FullscreenState = readState();
   let destroyed = false;
   const listeners = new Set<(state: FullscreenState) => void>();
 
   function sync(): FullscreenState {
-    const active = isActive();
-    if (!destroyed && state.active !== active) {
-      state = { active, support };
+    const next = readState();
+    if (!destroyed && (state.active !== next.active || state.support !== next.support)) {
+      state = next;
       for (const listener of listeners) listener(state);
     }
     return state;
   }
 
   async function setActive(active: boolean): Promise<FullscreenState> {
-    if (destroyed || support !== "api" || isActive() === active) return state;
+    const current = sync();
+    if (destroyed || current.support !== "api" || current.active === active) return state;
     try {
       if (active) {
         const request = doc.fullscreenEnabled
@@ -104,13 +121,16 @@ export function createFullscreen(
     return sync();
   }
 
+  const displayMode = doc.defaultView?.matchMedia?.(DISPLAY_MODE_QUERY);
+  const hasDisplayModeListener = typeof displayMode?.addEventListener === "function";
+  if (hasDisplayModeListener) displayMode.addEventListener("change", sync);
   doc.addEventListener("fullscreenchange", sync);
   doc.addEventListener("webkitfullscreenchange", sync);
   return {
     get state() {
       return state;
     },
-    toggle: () => setActive(!isActive()),
+    toggle: () => setActive(!sync().active),
     enter: () => setActive(true),
     exit: () => setActive(false),
     subscribe(listener) {
@@ -119,6 +139,7 @@ export function createFullscreen(
     },
     destroy() {
       destroyed = true;
+      if (hasDisplayModeListener) displayMode.removeEventListener("change", sync);
       doc.removeEventListener("fullscreenchange", sync);
       doc.removeEventListener("webkitfullscreenchange", sync);
       listeners.clear();

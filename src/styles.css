@@ -1746,16 +1746,12 @@ kbd {
   filter: drop-shadow(0 0 9px var(--sun));
 }
 .result-panel:has([data-action="ladder-continue"]),
-.pause-panel:has([data-action="restart"][hidden]) {
+.pause-panel {
   max-height: calc(100dvh - 24px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-:is(
-    .result-panel:has([data-action="ladder-continue"]),
-    .pause-panel:has([data-action="restart"][hidden])
-  )
-  .text-button {
+:is(.result-panel:has([data-action="ladder-continue"]), .pause-panel) .text-button {
   min-height: 40px;
   padding-inline: 12px;
   margin-top: 6px;
@@ -3250,6 +3246,45 @@ kbd {
     display: none;
   }
 }
+/* Very compact portrait phones (e.g. 320x568): keep top bar clear of wordmark and row 1 above CTA. */
+@media (max-width: 360px) and (orientation: portrait) {
+  .topbar {
+    left: max(12px, var(--safe-l));
+    right: max(12px, var(--safe-r));
+  }
+  .wordmark {
+    font-size: 14px;
+    gap: 6px;
+  }
+  .wordmark-icon {
+    width: 18px;
+  }
+  .top-actions {
+    gap: 5px;
+  }
+  .icon-button {
+    width: 30px;
+    height: 30px;
+  }
+  .player-row {
+    grid-template-columns: 82px 1fr 1fr;
+  }
+}
+@media (max-width: 700px) and (orientation: portrait) and (max-height: 600px) {
+  .menu-content {
+    gap: 5px;
+  }
+  .match-options-body {
+    gap: 5px;
+  }
+  .player-rows {
+    padding-top: 5px;
+  }
+  .menu-cta {
+    padding-top: 6px;
+    padding-bottom: max(8px, var(--safe-b));
+  }
+}
 /* A touch phone without pads has nobody to press "A to join". */
 @media (max-width: 700px) and (orientation: portrait) and (pointer: coarse) {
   .join-hint:not(.warning, .pads-connected) {
@@ -3346,7 +3381,7 @@ kbd {
   .stamina-label,
   .air-tokens > small,
   .fighter-status,
-  [data-mode="rumble"] .fighter-status.landing-status {
+  [data-mode="rumble"] .fighter-status.landing-status:not(.ukemi, .knockdown) {
     display: none;
   }
   /* Only the states worth a glance stay: down, out, coming back. They take the tokens' place. */
@@ -3368,6 +3403,19 @@ kbd {
     grid-column: 1 / -1;
     grid-row: 4;
   }
+  /* Keep outside-zone warnings inside their own slim card so lower rumble cards never cover row 1. */
+  .outside-warning {
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 5;
+    margin-top: 2px;
+    padding: 3px 6px;
+    box-shadow: none;
+  }
+  .outside-warning > div:first-child {
+    margin-bottom: 3px;
+    font-size: 8px;
+  }
   /* Rumble: two by two. */
   [data-mode="rumble"] .fighter-cards {
     flex-wrap: wrap;
@@ -3386,10 +3434,15 @@ kbd {
     bottom: calc(var(--touch-block-h, 150px) + 8px);
   }
   .game-hud.no-keyboard .fighter-cards {
+    bottom: max(66px, calc(var(--safe-b) + 50px));
+  }
+}
+@media (pointer: coarse) and (orientation: portrait) and (max-width: 700px) {
+  .game-hud.no-keyboard .fighter-cards {
     bottom: max(16px, var(--safe-b));
   }
 }
-@media (max-height: 570px) and (max-width: 950px) {
+@media (max-height: 570px) and (max-width: 950px) and (orientation: landscape) {
   .topbar {
     top: 14px;
     left: max(25px, var(--safe-l));
@@ -3880,7 +3933,7 @@ kbd {
   visibility: hidden;
 }
 
-@media (max-height: 570px) {
+@media (max-height: 570px) and (orientation: landscape) {
   .training-hud {
     top: 73px;
   }
@@ -3888,11 +3941,6 @@ kbd {
     max-height: 34dvh;
     overflow: auto;
   }
-}
-[data-mode="training"] .pause-panel {
-  max-height: calc(100dvh - 24px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 @keyframes finish-stamp-still {
   0%,

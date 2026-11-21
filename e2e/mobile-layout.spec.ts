@@ -1,9 +1,10 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 
-/** Portrait phones: the iPhone 12–15 size and the iPhone SE. */
+/** Portrait phones: iPhone 12–15, iPhone SE 2/3, and compact iPhone SE 1st gen. */
 const PHONES = [
   { name: "390x844", width: 390, height: 844 },
   { name: "375x667", width: 375, height: 667 },
+  { name: "320x568", width: 320, height: 568 },
 ] as const;
 
 async function phone(browser: Browser, width: number, height: number) {
@@ -110,6 +111,18 @@ for (const size of PHONES) {
     expect(panelBox.y).toBeGreaterThanOrEqual(0);
     const done = panel.locator("[data-rules-close]");
     await expect(done).toBeInViewport({ ratio: 1 });
+    await expect(panel).toHaveAttribute("role", "dialog");
+    await expect(panel).toHaveAttribute("aria-modal", "true");
+    // Keyboard modal check: Shift+Tab stays inside the sheet and KeyF does not toggle fullscreen.
+    await done.focus();
+    await page.keyboard.press("Shift+Tab");
+    expect(
+      await page.evaluate(() =>
+        document.getElementById("match-rules-panel")!.contains(document.activeElement),
+      ),
+    ).toBe(true);
+    await page.keyboard.press("f");
+    expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
     await panel.locator('[data-stocks="2"]').tap();
     await panel.locator('[data-gimmick="wind"]').tap();
     await expect
@@ -203,6 +216,122 @@ test("phone training at 390x844: slim cards above the touch controls, pills insi
   // A tap on the pill still opens the settings.
   await hud.locator("[data-open]").tap();
   await expect(page.locator("dialog.training-dialog")).toBeVisible();
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
+test("landscape Duel pause menu scrolls to help and return-to-title at 844x390", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await phone(browser, 844, 390);
+  await page.locator('[data-action="start"]').tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  await page.locator(".pause-button").tap();
+  const pausePanel = page.locator(".pause-panel");
+  await expect(pausePanel).toBeVisible();
+  const panelBox = await box(pausePanel);
+  expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(390);
+
+  // Help is reachable from pause even when the phone top bar hides the help icon.
+  const helpButton = pausePanel.locator('[data-action="help"]');
+  await helpButton.scrollIntoViewIfNeeded();
+  await expect(helpButton).toBeInViewport({ ratio: 1 });
+  await helpButton.tap();
+  await expect(page.locator("dialog.help-dialog")).toBeVisible();
+  await page.locator('.help-dialog .help-head [data-action="close-help"]').tap();
+  await expect(page.locator("dialog.help-dialog")).toBeHidden();
+
+  // Scrolling the pause panel brings "タイトルへ戻る" completely into view and clickable.
+  const menuButton = pausePanel.locator('[data-action="menu"]');
+  await menuButton.scrollIntoViewIfNeeded();
+  await expect(menuButton).toBeInViewport({ ratio: 1 });
+  await menuButton.tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "menu");
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
+test("portrait rumble keeps knockdown visible and keeps lower outside warnings inside their card", async ({
+  browser,
+}) => {
+  const { context, page, errors } = await phone(browser, 390, 844);
+  await page.locator('button[data-mode="rumble"]').tap();
+  await page.locator('[data-action="start"]').tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const cards = page.locator(".fighter-card");
+  await expect(cards).toHaveCount(4);
+
+  // Measure knockdown display and row-2 warning geometry synchronously before the next RAF tick.
+  const layout = await page.evaluate(() => {
+    const all = [...document.querySelectorAll<HTMLElement>(".fighter-card")];
+    const status = all[0]!.querySelector<HTMLElement>(".fighter-status")!;
+    status.classList.add("landing-status", "knockdown");
+    status.textContent = "DOWN";
+    const thirdWarning = all[2]!.querySelector<HTMLElement>(".outside-warning")!;
+    thirdWarning.hidden = false;
+    const statusDisplay = getComputedStyle(status).display;
+    const card0 = all[0]!.getBoundingClientRect();
+    const card2 = all[2]!.getBoundingClientRect();
+    const warning2 = thirdWarning.getBoundingClientRect();
+    return {
+      statusDisplay,
+      card0Bottom: card0.bottom,
+      card2Top: card2.top,
+      card2Bottom: card2.bottom,
+      warning2Top: warning2.top,
+      warning2Bottom: warning2.bottom,
+      warning2Height: warning2.height,
+    };
+  });
+  expect(layout.statusDisplay).toBe("block");
+  expect(layout.warning2Height).toBeGreaterThan(0);
+  expect(layout.warning2Top).toBeGreaterThanOrEqual(layout.card2Top);
+  expect(layout.warning2Bottom).toBeLessThanOrEqual(layout.card2Bottom + 1);
+  expect(layout.warning2Top).toBeGreaterThanOrEqual(layout.card0Bottom);
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
+test("portrait tablet gamepad-only HUD keeps fighter cards clear of the pad legend", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 820, height: 1180 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    const pad = {
+      index: 0,
+      id: "Fake standard pad 0",
+      connected: true,
+      mapping: "standard",
+      timestamp: performance.now(),
+      axes: [0, 0, 0, 0],
+      buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0, touched: false })),
+    };
+    Object.defineProperty(navigator, "getGamepads", {
+      configurable: true,
+      value: () => [pad, null, null, null],
+    });
+  });
+  await page.goto("./");
+  await page.waitForFunction(() => Boolean(window.__BRAMBLE__));
+  await page.locator('.player-row[data-slot="0"] .player-device').selectOption("pad1");
+  await page.locator('[data-action="start"]').tap();
+  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase !== "menu");
+  const legend = page.locator(".pad-legend");
+  await expect(legend).toBeVisible();
+  const legendBox = await box(legend);
+  const cards = page.locator(".fighter-card");
+  for (let i = 0; i < 2; i++) {
+    const card = await box(cards.nth(i));
+    expect(card.y + card.height).toBeLessThanOrEqual(legendBox.y);
+  }
   expect(errors).toEqual([]);
   await context.close();
 });

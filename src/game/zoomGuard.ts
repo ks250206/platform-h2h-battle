@@ -7,6 +7,8 @@ interface ZoomWindow {
   scrollTo(x: number, y: number): void;
 }
 
+const READABLE_SURFACE = "dialog[open], .match-options.rules-open #match-rules-panel";
+
 export function installZoomGuard(win: ZoomWindow = window, doc: Document = document): () => void {
   const root = doc.documentElement;
   const viewport = win.visualViewport;
@@ -15,9 +17,12 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
   const cancelable = { passive: false, signal };
   const zoomed = () => root.hasAttribute("data-zoomed");
   const scrollHome = () => win.scrollTo(0, 0);
+  const inReadableSurface = (target: EventTarget | null) =>
+    target instanceof Element && Boolean(target.closest(READABLE_SURFACE));
 
+  // Suppress pinch zoom on gameplay/shell surfaces while leaving open dialogs and sheets zoomable.
   const blockPinch = (event: Event) => {
-    if (!zoomed() && event.cancelable) event.preventDefault();
+    if (!zoomed() && !inReadableSurface(event.target) && event.cancelable) event.preventDefault();
   };
   doc.addEventListener("gesturestart", blockPinch, cancelable);
   doc.addEventListener("gesturechange", blockPinch, cancelable);
@@ -59,6 +64,22 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
     );
   }
 
+  let savedViewport: { meta: Element; content: string } | null = null;
+  let restoreTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearRestoreTimer = () => {
+    if (restoreTimer !== null) {
+      clearTimeout(restoreTimer);
+      restoreTimer = null;
+    }
+  };
+  const restoreViewport = () => {
+    clearRestoreTimer();
+    if (savedViewport?.meta.isConnected) {
+      savedViewport.meta.setAttribute("content", savedViewport.content);
+    }
+    savedViewport = null;
+  };
+
   const notice = doc.createElement("aside");
   notice.className = "zoom-notice";
   notice.hidden = true;
@@ -68,10 +89,18 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
     "click",
     () => {
       const meta = doc.querySelector('meta[name="viewport"]');
-      const content = meta?.getAttribute("content");
-      if (meta && content !== null && content !== undefined) {
+      const baseContent =
+        savedViewport?.meta === meta ? savedViewport.content : meta?.getAttribute("content");
+      if (meta && baseContent !== null && baseContent !== undefined) {
+        clearRestoreTimer();
+        savedViewport = { meta, content: baseContent };
+        const locked = /(?:^|,)\s*maximum-scale\s*=/i.test(baseContent)
+          ? baseContent
+          : `${baseContent}, maximum-scale=1`;
         meta.removeAttribute("content");
-        meta.setAttribute("content", content);
+        meta.setAttribute("content", locked);
+        // Keep maximum-scale=1 long enough for the browser to clamp zoom, then restore zoomability.
+        restoreTimer = setTimeout(restoreViewport, 350);
       }
       scrollHome();
     },
@@ -89,6 +118,7 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
         notice.style.top = `${viewport.offsetTop}px`;
         notice.style.setProperty("--zoom-viewport-width", `${viewport.width}px`);
       } else {
+        if (savedViewport) restoreViewport();
         scrollHome();
       }
     };
@@ -99,6 +129,7 @@ export function installZoomGuard(win: ZoomWindow = window, doc: Document = docum
 
   return () => {
     abort.abort();
+    restoreViewport();
     root.removeAttribute("data-zoomed");
     notice.remove();
   };

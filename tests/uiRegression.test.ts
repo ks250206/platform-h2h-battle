@@ -343,25 +343,55 @@ describe("phone rules bottom sheet", () => {
       expect(cta.querySelector(".tutorial-entry")).not.toBeNull();
       expect(cta.querySelector(".menu-links")).not.toBeNull();
 
-      // Open with the toggle: focus moves to 完了; 完了 closes and hands focus back.
+      // Open with the toggle: modal semantics + inert background + Tab focus trap.
       toggle.click();
       expect(isOpen()).toBe(true);
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(panel.getAttribute("role")).toBe("dialog");
+      expect(panel.getAttribute("aria-modal")).toBe("true");
+      expect(toggle.inert).toBe(true);
+      expect($(".menu-cta").inert).toBe(true);
+      expect($(".topbar").inert).toBe(true);
+      expect($(".rules-sheet-backdrop").inert).toBe(false);
       expect(document.activeElement).toBe(done);
+
+      // Shift+Tab from 完了 wraps to the last control inside the sheet instead of the toggle.
+      const shiftTab = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      done.dispatchEvent(shiftTab);
+      expect(shiftTab.defaultPrevented).toBe(true);
+      expect(panel.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).not.toBe(done);
+      // Tab from the last control wraps back to 完了.
+      const forwardTab = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      });
+      document.activeElement!.dispatchEvent(forwardTab);
+      expect(forwardTab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(done);
+
+      // 完了 closes, restores inert state & ARIA, and hands focus back to the toggle.
       done.click();
       expect(isOpen()).toBe(false);
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(panel.getAttribute("role")).toBe("group");
+      expect(panel.hasAttribute("aria-modal")).toBe(false);
+      expect(toggle.inert).toBe(false);
+      expect($(".menu-cta").inert).toBe(false);
+      expect($(".topbar").inert).toBe(false);
       expect(document.activeElement).toBe(toggle);
 
-      // The toggle also closes it again.
-      toggle.click();
-      toggle.click();
-      expect(isOpen()).toBe(false);
-
-      // A tap on the backdrop closes it.
+      // A tap on the backdrop closes it and returns focus.
       toggle.click();
       $(".rules-sheet-backdrop").click();
       expect(isOpen()).toBe(false);
+      expect(document.activeElement).toBe(toggle);
 
       // Escape closes it, is consumed (no pause, nothing else hears it) and refocuses the toggle.
       toggle.click();
@@ -407,27 +437,73 @@ describe("phone rules bottom sheet", () => {
       draw();
       expect(toggle.classList.contains("has-notes")).toBe(true);
 
-      // Switching modes closes it; in 稽古 the toggle is hidden with the other rules.
-      toggle.click();
+      // In 稽古 the toggle is hidden with the other rules.
       $<HTMLButtonElement>('button[data-mode="rumble"]').click();
-      expect(isOpen()).toBe(false);
       expect(summary.textContent).not.toMatch(/^BO3/);
       $<HTMLButtonElement>('button[data-mode="training"]').click();
       expect(toggle.hidden).toBe(true);
       $<HTMLButtonElement>('button[data-mode="duel"]').click();
       expect(toggle.hidden).toBe(false);
 
-      // Start closes it and the match begins.
+      // Starting a match closes an open sheet cleanly on phase transition, and pause includes help.
       toggle.click();
       expect(isOpen()).toBe(true);
-      $<HTMLButtonElement>('.menu-cta [data-action="start"]').click();
+      app.engine!.start("duel", app.snapshot().options);
       draw(2);
       expect(isOpen()).toBe(false);
+      expect(toggle.inert).toBe(false);
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(app.snapshot().phase).not.toBe("menu");
+      const pauseHelp = $<HTMLButtonElement>('.pause-panel [data-action="help"]');
+      pauseHelp.click();
+      expect($<HTMLDialogElement>("dialog.help-dialog").open).toBe(true);
     } finally {
       teardown();
     }
+  });
+
+  test("PadMenu treats the open rules sheet as its own modal layer", () => {
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
+      new DOMRect(0, 0, 80, 32),
+    ] as unknown as DOMRectList);
+    document.body.innerHTML = `
+      <div id="root">
+        <div class="topbar"></div>
+        <div class="menu-screen">
+          <section class="match-options rules-open">
+            <div id="match-rules-panel">
+              <button type="button" data-rules-close>完了</button>
+              <button type="button" data-stocks="2">2</button>
+            </div>
+          </section>
+          <button data-action="start">START</button>
+        </div>
+      </div>`;
+    const root = document.getElementById("root")!;
+    const startClicks = vi.fn();
+    const closeClicks = vi.fn();
+    root.querySelector('[data-action="start"]')!.addEventListener("click", startClicks);
+    root.querySelector("[data-rules-close]")!.addEventListener("click", closeClicks);
+
+    const titleButton = vi.fn(() => true);
+    const pads = new PadHub();
+    const menu = new PadMenu(root, pads, { phase: () => "menu", titleButton });
+    // Connect neutral, then press Start (must neither join nor launch match).
+    pads.current[0] = pad();
+    menu.update(1);
+    pads.current[0] = pad([BUTTON.START]);
+    menu.update(2);
+    expect(titleButton).not.toHaveBeenCalled();
+    expect(startClicks).not.toHaveBeenCalled();
+
+    // Pressing B closes the rules sheet instead of removing a joined title player.
+    pads.current[0] = pad();
+    menu.update(3);
+    pads.current[0] = pad([BUTTON.B]);
+    menu.update(4);
+    expect(titleButton).not.toHaveBeenCalled();
+    expect(closeClicks).toHaveBeenCalledTimes(1);
+    menu.destroy();
   });
 });
 

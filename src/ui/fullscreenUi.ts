@@ -9,9 +9,10 @@ const exitPath = "M4 9h5V4m11 5h-5V4M9 20v-5H4m11 5v-5h5";
 
 export class FullscreenUI {
   private readonly abort = new AbortController();
+  private readonly root: HTMLElement;
   private readonly buttons: HTMLButtonElement[] = [];
   private readonly row: HTMLElement | null;
-  private readonly guide: HTMLDialogElement | null;
+  private guide: HTMLDialogElement | null = null;
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -20,6 +21,7 @@ export class FullscreenUI {
       root.ownerDocument.documentElement,
     ),
   ) {
+    this.root = root;
     const doc = root.ownerDocument;
     const { signal } = this.abort;
     const makeButton = (className: string) => {
@@ -47,51 +49,6 @@ export class FullscreenUI {
       footer.before(this.row);
     }
 
-    this.guide =
-      fullscreen.state.support === "install-ios" && this.buttons.length
-        ? doc.createElement("dialog")
-        : null;
-    if (this.guide) {
-      const guide = this.guide;
-      guide.className = "fullscreen-ios-dialog";
-      guide.setAttribute("aria-labelledby", "fullscreen-ios-title");
-      guide.innerHTML = `
-        <h2 id="fullscreen-ios-title">iPhoneで全画面表示</h2>
-        <p>iPhoneのSafariでは、全画面表示にホーム画面への追加が必要です。</p>
-        <ol>
-          <li>Safariの「共有」ボタンをタップします。</li>
-          <li>「ホーム画面に追加」を選択します。</li>
-          <li>ホーム画面のBRAMBLEアイコンから起動します。</li>
-        </ol>
-        <button type="button" class="secondary-button" data-pad-back>戻る</button>`;
-      guide.querySelector("button")!.addEventListener("click", () => guide.close(), { signal });
-      guide.addEventListener(
-        "cancel",
-        (event) => {
-          event.preventDefault();
-          guide.close();
-        },
-        { signal },
-      );
-      guide.addEventListener(
-        "click",
-        (event) => {
-          if (event.target !== guide) return;
-          const { left, right, top, bottom } = guide.getBoundingClientRect();
-          if (
-            event.clientX < left ||
-            event.clientX > right ||
-            event.clientY < top ||
-            event.clientY > bottom
-          )
-            guide.close();
-        },
-        { signal },
-      );
-      // PadMenu chooses the first open dialog, including when settings opened this guide.
-      root.prepend(guide);
-    }
-
     this.sync(fullscreen.state);
     this.unsubscribe = fullscreen.subscribe(this.sync);
     doc.defaultView?.addEventListener(
@@ -105,7 +62,7 @@ export class FullscreenUI {
           event.ctrlKey ||
           event.metaKey ||
           event.shiftKey ||
-          doc.querySelector("dialog[open]") ||
+          doc.querySelector("dialog[open], .match-options.rules-open") ||
           doc.activeElement?.matches("input, textarea, select") ||
           (event.target instanceof Element && event.target.matches("input, textarea, select"))
         ) {
@@ -118,12 +75,62 @@ export class FullscreenUI {
     );
   }
 
+  private ensureGuide(): HTMLDialogElement | null {
+    if (this.guide || !this.buttons.length) return this.guide;
+    const doc = this.root.ownerDocument;
+    const { signal } = this.abort;
+    const guide = doc.createElement("dialog");
+    guide.className = "fullscreen-ios-dialog";
+    guide.setAttribute("aria-labelledby", "fullscreen-ios-title");
+    guide.innerHTML = `
+        <h2 id="fullscreen-ios-title">iPhoneで全画面表示</h2>
+        <p>iPhoneのSafariでは、全画面表示にホーム画面への追加が必要です。</p>
+        <ol>
+          <li>Safariの「共有」ボタンをタップします。</li>
+          <li>「ホーム画面に追加」を選択します。</li>
+          <li>ホーム画面のBRAMBLEアイコンから起動します。</li>
+        </ol>
+        <button type="button" class="secondary-button" data-pad-back>戻る</button>`;
+    guide.querySelector("button")!.addEventListener("click", () => guide.close(), { signal });
+    guide.addEventListener(
+      "cancel",
+      (event) => {
+        event.preventDefault();
+        guide.close();
+      },
+      { signal },
+    );
+    guide.addEventListener(
+      "click",
+      (event) => {
+        if (event.target !== guide) return;
+        const { left, right, top, bottom } = guide.getBoundingClientRect();
+        if (
+          event.clientX < left ||
+          event.clientX > right ||
+          event.clientY < top ||
+          event.clientY > bottom
+        )
+          guide.close();
+      },
+      { signal },
+    );
+    // PadMenu chooses the first open dialog, including when settings opened this guide.
+    this.root.prepend(guide);
+    this.guide = guide;
+    return guide;
+  }
+
   private toggle = () => {
     if (this.fullscreen.state.support === "api") void this.fullscreen.toggle();
-    else if (this.guide && !this.guide.open) this.guide.showModal();
+    else if (this.fullscreen.state.support === "install-ios") {
+      const guide = this.ensureGuide();
+      if (guide && !guide.open) guide.showModal();
+    }
   };
 
   private sync = ({ active, support }: FullscreenState) => {
+    if (support === "install-ios") this.ensureGuide();
     const visible = support === "api" || support === "install-ios";
     const label =
       support === "install-ios"
@@ -135,6 +142,7 @@ export class FullscreenUI {
     for (const button of this.buttons) {
       button.hidden = !visible;
       if (support === "api") button.setAttribute("aria-pressed", String(active));
+      else button.removeAttribute("aria-pressed");
       if (button.classList.contains("fullscreen-button")) {
         button.setAttribute("aria-label", label);
         button.title = support === "api" ? (active ? `${label} · F` : "全画面表示 · F") : label;

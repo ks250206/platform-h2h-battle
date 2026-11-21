@@ -559,6 +559,7 @@ export class GameUI {
   private resumeAfterHelp = false;
   private resumeAfterSettings = false;
   private rulesSheetOpen = false;
+  private rulesInert: HTMLElement[] = [];
   private previousFocus: HTMLElement | null = null;
   private renderSizeFrame = 0;
   private lastFpsText = 0;
@@ -639,6 +640,7 @@ export class GameUI {
           <button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button>
           <button class="secondary-button" data-action="restart">はじめから</button>
           <button type="button" class="secondary-button tutorial-pause-link" data-tutor="catalog">課題を選ぶ</button>
+          <button type="button" class="secondary-button" data-action="help">操作方法</button>
           <button class="secondary-button" data-action="settings">グラフィック設定</button>
           <button class="text-button" data-action="menu">タイトルへ戻る</button>
           <p class="pause-exit-note" hidden>タイトルに戻ると、勝利数を加算せずにこのセットを終了します。</p>
@@ -804,14 +806,37 @@ export class GameUI {
       },
       { signal: this.abort.signal },
     );
-    // Esc closes the phone rules sheet before anything else hears it (pause, pad menus).
+    // Keep Esc and Tab trapped inside the open phone rules sheet before anything else hears them.
     window.addEventListener(
       "keydown",
       (event) => {
-        if (event.key !== "Escape" || !this.rulesOpen()) return;
-        event.preventDefault();
-        event.stopPropagation();
-        this.setRulesOpen(false, true);
+        if (!this.rulesOpen()) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          this.setRulesOpen(false, true);
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const panel = this.query("#match-rules-panel");
+        const focusables = [
+          ...panel.querySelectorAll<HTMLElement>(
+            "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+          ),
+        ].filter((el) => !el.closest("[hidden]") && getComputedStyle(el).display !== "none");
+        if (focusables.length === 0) return;
+        const first = focusables[0]!;
+        const last = focusables[focusables.length - 1]!;
+        const active = document.activeElement;
+        if (event.shiftKey) {
+          if (active === first || !panel.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !panel.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
       },
       { capture: true, signal: this.abort.signal },
     );
@@ -1348,18 +1373,53 @@ export class GameUI {
   }
 
   /**
-   * Opens or closes the phone rules sheet. Opening moves focus into it; closing with
-   * `returnFocus` hands it back to the toggle.
+   * Opens or closes the phone rules sheet as a modal layer. Opening marks the title behind it
+   * inert and moves focus into the sheet; closing restores inert state and optionally refocuses
+   * the toggle.
    */
   private setRulesOpen(open: boolean, returnFocus = false): void {
     if (this.rulesSheetOpen === open) return;
     this.rulesSheetOpen = open;
     const block = this.query(".match-options");
     const toggle = this.query(".rules-toggle");
+    const panel = this.query("#match-rules-panel");
     block.classList.toggle("rules-open", open);
     toggle.setAttribute("aria-expanded", String(open));
-    if (open) this.query("#match-rules-panel [data-rules-close]").focus({ preventScroll: true });
-    else if (returnFocus) toggle.focus({ preventScroll: true });
+    if (open) {
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      this.setRulesBackgroundInert(panel, true);
+      this.query("#match-rules-panel [data-rules-close]").focus({ preventScroll: true });
+    } else {
+      panel.setAttribute("role", "group");
+      panel.removeAttribute("aria-modal");
+      this.setRulesBackgroundInert(panel, false);
+      if (returnFocus) toggle.focus({ preventScroll: true });
+    }
+  }
+
+  private setRulesBackgroundInert(panel: HTMLElement, inert: boolean): void {
+    for (const element of this.rulesInert) element.inert = false;
+    this.rulesInert = [];
+    if (!inert) return;
+    let current: HTMLElement | null = panel;
+    while (current && current !== this.host) {
+      const parent: HTMLElement | null = current.parentElement;
+      if (!parent) break;
+      for (const child of parent.children) {
+        if (
+          child === current ||
+          !(child instanceof HTMLElement) ||
+          child.classList.contains("rules-sheet-backdrop") ||
+          child.inert
+        ) {
+          continue;
+        }
+        child.inert = true;
+        this.rulesInert.push(child);
+      }
+      current = parent;
+    }
   }
 
   private query<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -2069,6 +2129,7 @@ export class GameUI {
   }
 
   destroy(): void {
+    this.setRulesOpen(false);
     this.abort.abort();
     cancelAnimationFrame(this.renderSizeFrame);
     this.dialog.close();

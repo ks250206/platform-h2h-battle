@@ -137,6 +137,65 @@ describe("fullscreen controller", () => {
       }
     },
   );
+  test("keeps API support active when entering API fullscreen also matches display-mode: fullscreen", async () => {
+    const media = Object.assign(new EventTarget(), { matches: false });
+    vi.spyOn(window, "matchMedia").mockReturnValue(media as unknown as MediaQueryList);
+    const api = mockApi();
+    const root = uiRoot();
+    const ui = new FullscreenUI(root, api.controller);
+    try {
+      const top = root.querySelector<HTMLButtonElement>(".fullscreen-button")!;
+      expect(top.hidden).toBe(false);
+      await api.controller.enter();
+      // Chromium matches (display-mode: fullscreen) while document.fullscreenElement is set.
+      media.matches = true;
+      media.dispatchEvent(new Event("change"));
+      expect(api.controller.state).toEqual({ active: true, support: "api" });
+      expect(top.hidden).toBe(false);
+      expect(top.getAttribute("aria-pressed")).toBe("true");
+      await api.controller.exit();
+      media.matches = false;
+      media.dispatchEvent(new Event("change"));
+      expect(api.controller.state).toEqual({ active: false, support: "api" });
+      expect(top.hidden).toBe(false);
+      expect(top.getAttribute("aria-pressed")).toBe("false");
+    } finally {
+      ui.destroy();
+      api.destroy();
+    }
+  });
+
+  test("recomputes support when temporary fullscreen display mode ends", async () => {
+    const media = Object.assign(new EventTarget(), { matches: true });
+    vi.spyOn(window, "matchMedia").mockReturnValue(media as unknown as MediaQueryList);
+    const api = mockApi();
+    const root = uiRoot();
+    const ui = new FullscreenUI(root, api.controller);
+    try {
+      const listener = vi.fn();
+      api.controller.subscribe(listener);
+      expect(api.controller.state).toEqual({ active: true, support: "standalone" });
+      expect(
+        root.querySelectorAll(
+          ".fullscreen-button[hidden], .fullscreen-pause-button[hidden], .fullscreen-setting-row[hidden]",
+        ),
+      ).toHaveLength(3);
+
+      media.matches = false;
+      media.dispatchEvent(new Event("change"));
+      expect(api.controller.state).toEqual({ active: false, support: "api" });
+      expect(listener).toHaveBeenCalledWith({ active: false, support: "api" });
+      expect(
+        root.querySelectorAll(
+          ".fullscreen-button[hidden], .fullscreen-pause-button[hidden], .fullscreen-setting-row[hidden]",
+        ),
+      ).toHaveLength(0);
+      expect(await api.controller.enter()).toEqual({ active: true, support: "api" });
+    } finally {
+      ui.destroy();
+      api.destroy();
+    }
+  });
 });
 
 function uiRoot() {
@@ -184,6 +243,11 @@ describe("FullscreenUI", () => {
       dialog.showModal();
       key(root);
       dialog.close();
+      const rules = document.createElement("section");
+      rules.className = "match-options rules-open";
+      root.append(rules);
+      key(root);
+      rules.remove();
       expect(api.exit).not.toHaveBeenCalled();
       key(root);
       expect(api.exit).toHaveBeenCalledTimes(1);

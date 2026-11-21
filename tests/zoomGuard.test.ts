@@ -25,7 +25,11 @@ function zoomGuard(ios: boolean) {
     width: 390,
   });
   const scrollTo = vi.fn();
-  const win = { visualViewport: viewport, scrollTo, ...(ios ? { ongesturestart: null } : {}) };
+  const win = {
+    visualViewport: viewport,
+    scrollTo,
+    ...(ios ? { ongesturestart: null } : {}),
+  };
   const destroy = installZoomGuard(win, document);
   cleanup.push(destroy);
   return { viewport, scrollTo, destroy };
@@ -90,6 +94,30 @@ describe("zoom guard", () => {
     expect(click).not.toHaveBeenCalled();
   });
 
+  test("allows pinching inside open dialogs and the open rules sheet while blocking it on gameplay surfaces", () => {
+    zoomGuard(true);
+    document.body.innerHTML = `
+      <canvas></canvas>
+      <dialog open><p id="help-text">操作方法</p></dialog>
+      <section class="match-options rules-open">
+        <div id="match-rules-panel"><p id="rules-text">ルール詳細</p></div>
+      </section>
+    `;
+    const gestureOn = (target: EventTarget, type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(gestureOn(document.querySelector("canvas")!, "gesturestart")).toBe(true);
+    expect(gestureOn(document.querySelector("canvas")!, "gesturechange")).toBe(true);
+    expect(gestureOn(document.getElementById("help-text")!, "gesturestart")).toBe(false);
+    expect(gestureOn(document.getElementById("help-text")!, "gesturechange")).toBe(false);
+    expect(gestureOn(document.getElementById("rules-text")!, "gesturestart")).toBe(false);
+    expect(gestureOn(document.getElementById("rules-text")!, "gesturechange")).toBe(false);
+    document.querySelector("section")!.classList.remove("rules-open");
+    expect(gestureOn(document.getElementById("rules-text")!, "gesturestart")).toBe(true);
+  });
+
   test("allows pinching while zoomed and follows the visual viewport until recovery", () => {
     const { viewport, scrollTo, destroy } = zoomGuard(true);
     const gesture = (type: string) => {
@@ -116,20 +144,29 @@ describe("zoom guard", () => {
     scrollTo.mockClear();
     const meta = document.createElement("meta");
     meta.name = "viewport";
-    meta.content = "width=device-width, initial-scale=1";
+    meta.content = "width=device-width, initial-scale=1, viewport-fit=cover";
     document.head.append(meta);
     try {
-      const update = vi.spyOn(meta, "setAttribute");
-      notice.querySelector("button")!.click();
-      expect(update).toHaveBeenCalledWith("content", "width=device-width, initial-scale=1");
+      const resetButton = notice.querySelector("button")!;
+      resetButton.click();
+      // Rapid second click must keep the true base content, not capture maximum-scale=1.
+      resetButton.click();
+      expect(meta.getAttribute("content")).toBe(
+        "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1",
+      );
       expect(scrollTo).toHaveBeenCalledWith(0, 0);
+
+      // Once visualViewport settles back to <= 1.02, viewport meta restores zoomability immediately.
+      viewport.scale = 1.02;
+      scrollTo.mockClear();
+      viewport.dispatchEvent(new Event("resize"));
+      expect(meta.getAttribute("content")).toBe(
+        "width=device-width, initial-scale=1, viewport-fit=cover",
+      );
     } finally {
       meta.remove();
     }
 
-    viewport.scale = 1.02;
-    scrollTo.mockClear();
-    viewport.dispatchEvent(new Event("resize"));
     expect(document.documentElement.hasAttribute("data-zoomed")).toBe(false);
     expect(notice.hidden).toBe(true);
     expect(scrollTo).toHaveBeenCalledWith(0, 0);
