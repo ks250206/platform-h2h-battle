@@ -194,6 +194,7 @@ describe("storage", () => {
       gimmicks: ALL_GIMMICKS,
       loadouts: DEFAULT_LOADOUTS,
       stage: "garden",
+      setFormat: "single",
     });
     expect(presetOf(options)).toBe("standard");
     expect(presetOf(loadMatchOptions(memoryStorage(JSON.stringify({ stocks: 1 }))))).toBe("custom");

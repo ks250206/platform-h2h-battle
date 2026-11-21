@@ -356,6 +356,7 @@ describe("looks are independent of who plays and how strong the CPUs are", () =>
     time: DEFAULT_MATCH_OPTIONS.time,
     gimmicks: DEFAULT_MATCH_OPTIONS.gimmicks,
     stage: DEFAULT_MATCH_OPTIONS.stage,
+    setFormat: "single" as const,
   };
 
   test("changing a look changes nothing else", () => {

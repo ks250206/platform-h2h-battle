@@ -49,6 +49,7 @@ export function ladderMatchOptions(
   loadouts[1] = { ...opponent.loadout };
   return {
     ...presetRules("standard"),
+    setFormat: "single",
     controls: { 0: saved.controls[0] ?? "keyboard" },
     overrides: {},
     difficulty: opponent.difficulty,

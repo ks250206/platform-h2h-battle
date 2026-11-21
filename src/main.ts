@@ -5,7 +5,7 @@ import { BattleInput } from "./game/input";
 import { BattleAudio } from "./game/audio";
 import { createSettingsStore, defaultSettings, detectTouch } from "./game/settings";
 import { createMatchStore, playableOptions } from "./game/matchStore";
-import type { MatchOptions } from "./game/match";
+import { humanSlots, padIndex, type MatchOptions } from "./game/match";
 import { LadderSession } from "./game/ladder";
 import { PadHub } from "./game/pads";
 import { ArenaRenderer, hasSoftwareRenderer } from "./render/renderer";
@@ -38,11 +38,8 @@ const startMatch = (mode: MatchMode, options: MatchOptions) => {
   matchOptions = options;
   const count = mode === "rumble" ? 4 : 2;
   const playable = playableOptions(options, count, connected);
-  input?.reset();
-  input?.newMatch();
-  lostPad = null;
-  ui.setPadNotice(null);
   engine.start(mode, playable.options);
+  prepareGame();
 };
 /** The mode the title menu shows, for the line-up of fighters behind it. */
 let titleMode: MatchMode = "duel";
@@ -76,12 +73,35 @@ let manualStepping = false;
 /** The pad (1-based) whose loss paused the match, until it is back or the match goes on. */
 let lostPad: number | null = null;
 
+/** A set keeps its starting line-up, including during a disconnect between games. */
+const missingSetPad = (): number | null => {
+  if (!engine.state.set) return null;
+  for (const { device } of humanSlots(engine.state.options, 2)) {
+    const pad = padIndex(device);
+    if (pad !== null && !pads.isConnected(pad)) return pad + 1;
+  }
+  return null;
+};
+const prepareGame = () => {
+  input?.reset();
+  input?.newMatch();
+  lostPad = null;
+  ui.setPadNotice(null);
+  const missing = missingSetPad();
+  if (missing !== null) padLost(missing);
+  updateUI();
+};
 const pause = () => {
   if (document.querySelector("dialog[open]")) return;
   if (engine.state.phase === "paused") resume();
   else engine.pause();
 };
 const resume = () => {
+  const missing = missingSetPad();
+  if (missing !== null) {
+    padLost(missing);
+    return;
+  }
   if (ladder && lostPad !== null) {
     // Keep the current duel intact. A later attempt resolves the preferred pad again.
     engine.state.options.controls = playableOptions(matchOptions, 2, connected).options.controls;
@@ -97,7 +117,7 @@ const padLost = (padNumber: number) => {
   const hint = ladder
     ? "つなぎ直すか、キーボード・マウス（タッチ）で再開できます。"
     : "つなぎ直してから再開してください。";
-  ui.setPadNotice(`パッド${padNumber} の接続が切れました。${hint}`);
+  ui.setPadNotice(`パッド${padNumber} の接続が切れました。${hint}`, engine.state.set !== null);
 };
 /** V / the top-bar camera button / the settings dialog all write the same stored setting. */
 const toggleCameraFollow = () => {
@@ -118,7 +138,6 @@ const playLadderAttempt = () => {
   sound.unlock();
   ladderAttempt = attempt.id;
   startMatch("duel", attempt.options);
-  updateUI();
 };
 const leaveLadder = () => {
   ladder?.exit();
@@ -130,7 +149,6 @@ const ui = new GameUI(overlay, {
     leaveLadder();
     sound.unlock();
     startMatch(mode, options);
-    updateUI();
   },
   onStartLadder: (options) => {
     if (engine.state.phase !== "menu") return;
@@ -147,14 +165,21 @@ const ui = new GameUI(overlay, {
   onRestart: () => {
     if (ladder) return;
     sound.unlock();
-    startMatch(selectedMode, matchOptions);
-    updateUI();
+    if (engine.state.set) {
+      engine.start(engine.state.mode);
+      prepareGame();
+    } else startMatch(selectedMode, matchOptions);
+  },
+  onNextGame: () => {
+    if (!engine.nextSetGame()) return;
+    sound.unlock();
+    prepareGame();
   },
   onMenu: () => {
     leaveLadder();
+    input?.reset();
     lostPad = null;
     ui.setPadNotice(null);
-    input?.reset();
     renderer?.setSpotlight(null);
     showTitle();
     updateUI();
@@ -180,7 +205,14 @@ const ui = new GameUI(overlay, {
 updateUI();
 pads.subscribe((connected) => {
   ui.setPads(connected);
-  // The pad that went away during the match is back (another pad connecting changes nothing).
+  // Notice immediately if the set's roster is missing a pad. Results can still be browsed.
+  if (engine.state.phase !== "ended") {
+    const missing = missingSetPad();
+    if (missing !== null) {
+      padLost(missing);
+      return;
+    }
+  }
   if (lostPad !== null && connected.includes(lostPad - 1)) {
     lostPad = null;
     ui.setPadNotice(null);
@@ -253,7 +285,7 @@ async function boot() {
             start: (mode: MatchMode) => {
               leaveLadder();
               startMatch(mode, match.get());
-              engine.state.phase = "playing";
+              if (engine.state.phase === "countdown") engine.state.phase = "playing";
             },
             engine,
             renderer,
