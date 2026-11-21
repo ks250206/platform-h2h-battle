@@ -521,6 +521,254 @@ describe("one jump and finite aerial recovery", () => {
   });
 });
 
+describe("re-aiming during the wind-up", () => {
+  const aimAt = (x: number, z: number): PlayerInput => ({ ...emptyInput(), aim: { x, z } });
+
+  /** Tap (press, then release) so the attack commits into its wind-up facing +Z. */
+  function commit(engine: BattleEngine, attack: AttackId) {
+    startCharge(engine, attack);
+    engine.update(DT, emptyInput());
+  }
+
+  test("a committed swing keeps turning toward the aim, but only at the wind-up rate", () => {
+    const { engine, player } = fixture();
+    commit(engine, "overhead");
+    expect(player.mode).toBe("windup");
+    expect(player.facing).toBe(0);
+    engine.update(DT, aimAt(1, 0));
+    expect(player.facing).toBeCloseTo(RULES.windupTurnRate * DT, 10);
+    for (let frame = 0; frame < 11; frame++) engine.update(DT, aimAt(1, 0));
+    expect(player.mode).toBe("windup");
+    expect(player.facing).toBeCloseTo(RULES.windupTurnRate * DT * 12, 8);
+    expect(player.facing).toBeLessThan(Math.PI / 2);
+    expect(RULES.windupTurnRate).toBeLessThan(RULES.chargeTurnRate);
+  });
+
+  test("the move direction is the fallback aim, as when idle", () => {
+    const { engine, player } = fixture();
+    commit(engine, "overhead");
+    engine.update(DT, { ...emptyInput(), move: { x: -1, z: 0 } });
+    expect(player.facing).toBeCloseTo(-RULES.windupTurnRate * DT, 10);
+  });
+
+  test("facing locks once the blade is cutting: no turning during active or recovery", () => {
+    const { engine, player } = fixture();
+    commit(engine, "overhead");
+    while (player.mode === "windup") engine.update(DT, aimAt(1, 0));
+    expect(player.mode).toBe("active");
+    const locked = player.facing;
+    expect(locked).toBeGreaterThan(0.3);
+    const seen = new Set<Fighter["mode"]>();
+    for (let frame = 0; frame < 60 && player.mode !== "idle"; frame++) {
+      seen.add(player.mode);
+      engine.update(DT, aimAt(-1, 0));
+      if (player.mode === "active" || player.mode === "recovery")
+        expect(player.facing).toBe(locked);
+    }
+    expect(seen.has("active") && seen.has("recovery")).toBe(true);
+  });
+
+  test("the thrust lunges along the adjusted facing", () => {
+    const { engine, player } = fixture();
+    commit(engine, "thrust");
+    while (player.mode === "windup") engine.update(DT, aimAt(1, 0));
+    expect(player.mode).toBe("active");
+    expect(player.facing).toBeGreaterThan(0.3);
+    expect(player.vx).toBeGreaterThan(0);
+    expect(Math.atan2(player.vx, player.vz)).toBeCloseTo(player.facing, 8);
+  });
+
+  test("the rising launch also follows the adjusted facing", () => {
+    const { engine, player } = fixture();
+    commit(engine, "rising");
+    while (player.mode === "windup") engine.update(DT, aimAt(-1, 0));
+    expect(player.mode).toBe("active");
+    expect(player.facing).toBeLessThan(-0.3);
+    expect(Math.atan2(player.vx, player.vz)).toBeCloseTo(player.facing, 8);
+  });
+
+  test("a wind-up cancel still works while re-aiming", () => {
+    const { engine, player } = fixture();
+    commit(engine, "overhead");
+    advance(engine, 0.1, aimAt(1, 0));
+    engine.update(DT, { ...aimAt(1, 0), cancel: true });
+    expect(player.mode).toBe("cancel");
+    expect(player.attack).toBeNull();
+  });
+
+  test.each([
+    ["easy", 0],
+    ["normal", 0.5],
+    ["hard", 1],
+  ] as const)("a %s CPU tracks at %s of the wind-up rate", (difficulty, factor) => {
+    const engine = new BattleEngine(5);
+    engine.start("duel", { stocks: 1, difficulty });
+    engine.state.phase = "playing";
+    const [human, cpu] = engine.state.fighters;
+    Object.assign(human, { x: 1, z: 2, hitstop: 100 });
+    Object.assign(cpu, {
+      x: 0,
+      z: 0,
+      facing: 0,
+      mode: "windup",
+      modeTime: 0,
+      modeDuration: ATTACKS.overhead.startup,
+      attack: "overhead",
+    });
+    engine.update(DT, emptyInput());
+    expect(cpu.mode).toBe("windup");
+    expect(cpu.facing).toBeCloseTo(RULES.windupTurnRate * factor * DT, 10);
+  });
+});
+
+describe("air dodge", () => {
+  const stepInput = (x = 1, z = 0): PlayerInput => ({
+    ...emptyInput(),
+    step: true,
+    move: { x, z },
+  });
+
+  function airborne(engine: BattleEngine, player: Fighter, y = 5, vy = -2) {
+    Object.assign(player, { grounded: false, y, vy });
+  }
+
+  test("a step in the air dashes like a grounded one, costs stamina and floats", () => {
+    const { engine, player } = fixture();
+    airborne(engine, player);
+    const startX = player.x;
+    const startY = player.y;
+    engine.update(DT, stepInput());
+    expect(player.mode).toBe("step");
+    expect(player.airStepUsed).toBe(true);
+    expect(player.stamina).toBe(RULES.maxStamina - RULES.stepCost);
+    expect(player.vy).toBeCloseTo(
+      RULES.airStepHover - RULES.gravity * RULES.airStepGravity * DT,
+      8,
+    );
+    while (player.mode === "step") engine.update(DT);
+    // The same distance as a grounded step, while barely losing height.
+    expect(player.x - startX).toBeGreaterThan(2.3);
+    expect(player.x - startX).toBeLessThan(2.9);
+    expect(Math.abs(player.y - startY)).toBeLessThan(0.2);
+    expect(player.facing).toBe(0);
+  });
+
+  test("an upward velocity is never reduced by the air dodge", () => {
+    const { engine, player } = fixture();
+    airborne(engine, player, 2, 6);
+    engine.update(DT, stepInput());
+    expect(player.mode).toBe("step");
+    expect(player.vy).toBeCloseTo(6 - RULES.gravity * RULES.airStepGravity * DT, 8);
+  });
+
+  test("only one air dodge per airtime, and landing gives it back", () => {
+    const { engine, player } = fixture();
+    airborne(engine, player);
+    engine.update(DT, stepInput());
+    while (player.mode === "step") engine.update(DT);
+    expect(player.mode).toBe("idle");
+    expect(player.grounded).toBe(false);
+    const stamina = player.stamina;
+    engine.update(DT, stepInput());
+    expect(player.mode).toBe("idle");
+    expect(player.stamina).toBe(stamina);
+    expect(player.vy).toBeLessThan(0);
+    Object.assign(player, { y: 0.01, vy: -1 });
+    advance(engine, 0.05);
+    expect(player.grounded).toBe(true);
+    expect(player.airStepUsed).toBe(false);
+  });
+
+  test("a grounded step never spends the air dodge, and running off the edge falls normally", () => {
+    const { engine, player } = fixture();
+    Object.assign(player, { x: engine.state.arena.halfSize - 0.3, z: 0 });
+    engine.update(DT, stepInput());
+    expect(player.mode).toBe("step");
+    expect(player.airStepUsed).toBe(false);
+    while (player.mode === "step" && player.grounded) engine.update(DT);
+    expect(player.grounded).toBe(false);
+    expect(player.mode).toBe("step");
+    const vy = player.vy;
+    engine.update(DT);
+    expect(player.mode).toBe("step");
+    expect(player.vy).toBeCloseTo(vy - RULES.gravity * DT, 8);
+    while (player.mode === "step") engine.update(DT);
+    expect(player.airStepUsed).toBe(false);
+    engine.update(DT, stepInput());
+    expect(player.mode).toBe("step");
+    expect(player.airStepUsed).toBe(true);
+  });
+
+  test.each([
+    { age: 0.03, shouldHit: true, phase: "startup" },
+    { age: 0.12, shouldHit: false, phase: "invulnerable middle" },
+    { age: 0.24, shouldHit: true, phase: "recovery" },
+  ])("the air dodge has the same invulnerability window: $phase", ({ age, shouldHit }) => {
+    const { engine, player, target } = fixture();
+    airborne(engine, player);
+    engine.update(DT, stepInput());
+    advance(engine, age);
+    expect(player.mode).toBe("step");
+    Object.assign(target, {
+      x: player.x,
+      y: player.y,
+      z: player.z - 0.9,
+      facing: 0,
+      grounded: false,
+    });
+    makeActive(target);
+    engine.update(DT, emptyInput());
+    expect(player.damage > 0).toBe(shouldHit);
+  });
+
+  test("a charge feints into an air dodge after the usual delay, and floats only once it moves", () => {
+    const { engine, player } = fixture();
+    airborne(engine, player);
+    startCharge(engine, "overhead");
+    expect(player.mode).toBe("charge");
+    engine.update(DT, { ...stepInput(), attackHeld: "overhead" });
+    expect(player.mode).toBe("step");
+    expect(player.stepDelay).toBeCloseTo(RULES.feintStepDelay, 8);
+    expect(player.airStepUsed).toBe(true);
+    expect(player.stamina).toBe(RULES.maxStamina - RULES.chargeCost - RULES.stepCost);
+    expect(player.vy).toBeLessThan(0);
+    while (player.stepDelay > 0) engine.update(DT);
+    engine.update(DT);
+    expect(player.vy).toBeGreaterThan(0);
+  });
+
+  test("a spent air dodge cannot be used, from idle or as a feint", () => {
+    const { engine, player } = fixture();
+    airborne(engine, player);
+    player.airStepUsed = true;
+    engine.update(DT, stepInput());
+    expect(player.mode).toBe("idle");
+    expect(player.stamina).toBe(RULES.maxStamina);
+    startCharge(engine, "overhead");
+    const stamina = player.stamina;
+    engine.update(DT, { ...stepInput(), attackHeld: "overhead" });
+    expect(player.mode).toBe("charge");
+    expect(player.stamina).toBe(stamina);
+  });
+
+  test("the air dodge and the air attacks never give each other back", () => {
+    const { engine, player } = fixture();
+    airborne(engine, player);
+    Object.assign(player, { airRisingUsed: true, airThrustUsed: true });
+    engine.update(DT, stepInput());
+    expect(player.airStepUsed).toBe(true);
+    expect(player.airRisingUsed && player.airThrustUsed).toBe(true);
+    const other = fixture();
+    airborne(other.engine, other.player);
+    other.player.airStepUsed = true;
+    startCharge(other.engine, "thrust");
+    other.engine.update(DT, emptyInput());
+    expect(other.player.mode).toBe("windup");
+    expect(other.player.airThrustUsed).toBe(true);
+    expect(other.player.airStepUsed).toBe(true);
+  });
+});
+
 describe("positional grabs", () => {
   test("a close grab allows a directional throw, then releases both fighters", () => {
     const { engine, player, target } = fixture();

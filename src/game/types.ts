@@ -53,9 +53,13 @@ export interface Fighter {
   airThrustUsed: boolean;
   /** The one air dodge per airtime has been spent; cleared on landing. */
   airStepUsed: boolean;
-  /** Lives left, including the one in play. */
+  /**
+   * Lives left, including the one in play. In a duel or rumble a fighter is out for good once this
+   * reaches 0; `mode === "dead"` with `stocks > 0` means it is waiting to respawn. Training never
+   * spends stocks (everyone there is rebuilt 1.5 s after falling).
+   */
   stocks: number;
-  /** Seconds until a downed fighter with lives left comes back; 0 otherwise. */
+  /** Seconds until a downed fighter with lives left comes back; 0 otherwise (and in training). */
   respawnTimer: number;
   /** How well a CPU plays; unused for the human. */
   aiLevel: AiLevel;
