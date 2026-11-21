@@ -6,3 +6,5 @@ overrides:
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
   - esbuild
+patchedDependencies:
+  pixi.js@8.23.0: patches/pixi.js@8.23.0.patch

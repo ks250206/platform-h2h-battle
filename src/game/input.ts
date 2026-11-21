@@ -7,6 +7,19 @@ import {
   type Vec2,
 } from "./types";
 import { normalize } from "./combat";
+import { screenToWorldMovement } from "./coordinates";
+
+/** A direction on the screen: +x is right, +y is down (DOM and gamepad axis convention). */
+type ScreenVec = { x: number; y: number };
+
+/**
+ * Maps a summed screen-space movement (keys, touch stick, gamepad stick) to the world-space
+ * ground vector the engine expects, clamped to unit length so diagonals are not faster.
+ */
+export function screenMoveToWorld(screenX: number, screenY: number): Vec2 {
+  const move = screenToWorldMovement(screenX, screenY);
+  return Math.hypot(move.x, move.z) > 1 ? normalize(move) : move;
+}
 
 const ATTACK_KEYS: Record<string, AttackId> = {
   KeyJ: "overhead",
@@ -36,7 +49,7 @@ export class BattleInput {
   private held = new Set<string>();
   private edges = emptyInput();
   private mouse: { x: number; y: number } | null = null;
-  private touchMove: Vec2 = { x: 0, z: 0 };
+  private touchMove: ScreenVec = { x: 0, y: 0 };
   private touchAttack: AttackId | null = null;
   private mouseAttack: AttackId | null = null;
   private joystickId: number | null = null;
@@ -44,8 +57,8 @@ export class BattleInput {
   private readonly abort = new AbortController();
   private lastGamepadButtons: boolean[] = [];
   private previousPhase = "";
-  private gamepadAim: Vec2 | null = null;
-  private gamepadMove: Vec2 = { x: 0, z: 0 };
+  private gamepadAim: ScreenVec | null = null;
+  private gamepadMove: ScreenVec = { x: 0, y: 0 };
   private gamepadAttack: AttackId | null = null;
 
   constructor(
@@ -98,11 +111,11 @@ export class BattleInput {
     const moveStick = (event: PointerEvent) => {
       const rect = stick.getBoundingClientRect();
       const dx = (event.clientX - rect.left - rect.width / 2) / (rect.width * 0.35);
-      const dz = (event.clientY - rect.top - rect.height / 2) / (rect.height * 0.35);
-      const d = Math.max(1, Math.hypot(dx, dz));
-      this.touchMove = { x: dx / d, z: dz / d };
+      const dy = (event.clientY - rect.top - rect.height / 2) / (rect.height * 0.35);
+      const d = Math.max(1, Math.hypot(dx, dy));
+      this.touchMove = { x: dx / d, y: dy / d };
       knob.style.transform =
-        "translate(" + this.touchMove.x * 30 + "px," + this.touchMove.z * 30 + "px)";
+        "translate(" + this.touchMove.x * 30 + "px," + this.touchMove.y * 30 + "px)";
     };
     stick.addEventListener(
       "pointerdown",
@@ -126,7 +139,7 @@ export class BattleInput {
     const releaseStick = (event: PointerEvent) => {
       if (event.pointerId !== this.joystickId) return;
       this.joystickId = null;
-      this.touchMove = { x: 0, z: 0 };
+      this.touchMove = { x: 0, y: 0 };
       knob.style.transform = "";
     };
     stick.addEventListener("pointerup", releaseStick, { signal });
@@ -191,7 +204,7 @@ export class BattleInput {
 
   private pollGamepad(): void {
     const pad = navigator.getGamepads?.().find((item) => item && item.connected);
-    this.gamepadMove = { x: 0, z: 0 };
+    this.gamepadMove = { x: 0, y: 0 };
     this.gamepadAim = null;
     this.gamepadAttack = null;
     if (!pad) {
@@ -199,9 +212,9 @@ export class BattleInput {
       return;
     }
     const deadzone = (value: number) => (Math.abs(value) < 0.18 ? 0 : value);
-    this.gamepadMove = { x: deadzone(pad.axes[0] ?? 0), z: deadzone(pad.axes[1] ?? 0) };
-    const aim = { x: deadzone(pad.axes[2] ?? 0), z: deadzone(pad.axes[3] ?? 0) };
-    if (Math.hypot(aim.x, aim.z) > 0.2) this.gamepadAim = aim;
+    this.gamepadMove = { x: deadzone(pad.axes[0] ?? 0), y: deadzone(pad.axes[1] ?? 0) };
+    const aim = { x: deadzone(pad.axes[2] ?? 0), y: deadzone(pad.axes[3] ?? 0) };
+    if (Math.hypot(aim.x, aim.y) > 0.2) this.gamepadAim = aim;
     const attackButtons: Record<number, AttackId> = {
       0: "overhead",
       1: "sweep",
@@ -227,25 +240,24 @@ export class BattleInput {
   sample(state: GameState): PlayerInput {
     this.pollGamepad();
     const f = state.fighters.find((fighter) => fighter.human)!;
-    let move = {
-      x:
-        Number(this.held.has("KeyD")) -
+    // Keys, sticks and arrows are screen directions; the engine works on the world ground.
+    const move = screenMoveToWorld(
+      Number(this.held.has("KeyD")) -
         Number(this.held.has("KeyA")) +
         this.touchMove.x +
         this.gamepadMove.x,
-      z:
-        Number(this.held.has("KeyS")) -
+      Number(this.held.has("KeyS")) -
         Number(this.held.has("KeyW")) +
-        this.touchMove.z +
-        this.gamepadMove.z,
-    };
-    if (Math.hypot(move.x, move.z) > 1) move = normalize(move);
-    let aim: Vec2 | null = {
-      x: Number(this.held.has("ArrowRight")) - Number(this.held.has("ArrowLeft")),
-      z: Number(this.held.has("ArrowDown")) - Number(this.held.has("ArrowUp")),
-    };
+        this.touchMove.y +
+        this.gamepadMove.y,
+    );
+    let aim: Vec2 | null = screenToWorldMovement(
+      Number(this.held.has("ArrowRight")) - Number(this.held.has("ArrowLeft")),
+      Number(this.held.has("ArrowDown")) - Number(this.held.has("ArrowUp")),
+    );
     if (Math.hypot(aim.x, aim.z) === 0) {
-      aim = this.gamepadAim;
+      aim = this.gamepadAim && screenToWorldMovement(this.gamepadAim.x, this.gamepadAim.y);
+      // Mouse and auto-aim are already world space: the pointer is ray-cast onto the ground.
       if (!aim && this.mouse) {
         const world = this.toWorld(this.mouse.x, this.mouse.y);
         if (world) aim = { x: world.x - f.x, z: world.z - f.z };
@@ -283,7 +295,7 @@ export class BattleInput {
     this.mouse = null;
     this.mouseAttack = null;
     this.touchAttack = null;
-    this.touchMove = { x: 0, z: 0 };
+    this.touchMove = { x: 0, y: 0 };
     this.joystickId = null;
     this.touch.querySelector<HTMLElement>(".stick-knob")!.style.transform = "";
     this.touch.querySelectorAll(".pressed").forEach((button) => button.classList.remove("pressed"));

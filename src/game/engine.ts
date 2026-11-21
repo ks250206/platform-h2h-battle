@@ -31,10 +31,10 @@ export {
 } from "./combat";
 
 const CAST = [
-  { name: "コハク", species: "fox" as const, color: 0xf28b61 },
-  { name: "シロ", species: "rabbit" as const, color: 0x8dc8e0 },
-  { name: "モカ", species: "bear" as const, color: 0xc3a0d4 },
-  { name: "スミ", species: "raccoon" as const, color: 0xd9c775 },
+  { name: "コハク", species: "fox" as const, color: 0xff7a45 },
+  { name: "シロ", species: "rabbit" as const, color: 0x3fb4ff },
+  { name: "モカ", species: "bear" as const, color: 0xb57bff },
+  { name: "スミ", species: "raccoon" as const, color: 0xffc93c },
 ];
 
 function makeFighter(id: number, count: number): Fighter {

@@ -1,5 +1,7 @@
 import type { Fighter, GameState, MatchMode, Phase } from "../game/types";
 import { RULES } from "../game/tuning";
+import { effectiveSamples, FPS_LIMITS, MSAA_SAMPLES, RESOLUTION_OPTIONS } from "../game/settings";
+import type { GraphicsSettings, MsaaSamples, SettingsStore, ShadowLevel } from "../game/settings";
 
 export interface GameUICallbacks {
   onStart: (mode: MatchMode) => void;
@@ -8,6 +10,68 @@ export interface GameUICallbacks {
   onRestart: () => void;
   onMenu: () => void;
   onSound: (enabled: boolean) => void;
+  graphics: GraphicsSettingsBinding;
+}
+
+/** What the graphics settings dialog reads and writes; renderer values are null until it is ready. */
+export interface GraphicsSettingsBinding {
+  store: SettingsStore;
+  renderSize: () => { width: number; height: number } | null;
+  supportedMsaa: (ambientOcclusion: boolean) => readonly MsaaSamples[] | null;
+  supportsAmbientOcclusion: () => boolean | null;
+}
+
+const shadowOptions: { value: ShadowLevel; label: string }[] = [
+  { value: "off", label: "なし" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+];
+
+function settingsDialogMarkup(): string {
+  const toggle = (key: keyof GraphicsSettings, label: string, hint = "") =>
+    `<div class="setting-row"><label class="setting-toggle"><span>${label}</span><input type="checkbox" data-setting="${key}"${hint ? ` aria-describedby="hint-${key}"` : ""}></label>${hint ? `<p class="setting-hint" id="hint-${key}">${hint}</p>` : ""}</div>`;
+  return `
+      <dialog class="settings-dialog" aria-labelledby="settings-title">
+        <div class="help-head flex items-center justify-between"><div><div class="eyebrow">GRAPHICS</div><h2 id="settings-title">グラフィック設定</h2></div><button class="icon-button" data-action="close-settings" aria-label="グラフィック設定を閉じる">×</button></div>
+        <div class="settings-body">
+          <section class="settings-section" aria-labelledby="settings-display">
+            <h3 id="settings-display">DISPLAY / 表示</h3>
+            <div class="setting-row">
+              <div class="setting-label"><label for="setting-resolution">解像度</label><output class="setting-value" for="setting-resolution" data-output="resolution"></output></div>
+              <select id="setting-resolution" data-setting="resolution" aria-describedby="hint-resolution">${RESOLUTION_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join("")}</select>
+              <p class="setting-hint" id="hint-resolution">3D を描く画面の短い辺のピクセル数です。重いときは下げてください。文字と HUD はくっきりしたままです。</p>
+            </div>
+            ${toggle("dynamicResolution", "負荷に合わせて解像度を自動調整", "描画が遅いときだけ 3D の解像度を下げます")}
+            <div class="setting-row">
+              <div class="setting-label"><label for="setting-antialiasing">アンチエイリアス</label></div>
+              <select id="setting-antialiasing" data-setting="antialiasing" aria-describedby="hint-antialiasing"><option value="off">なし</option><option value="msaa">MSAA</option><option value="fxaa">FXAA（軽量）</option><option value="ssaa">SSAA（高画質・高負荷）</option></select>
+              <p class="setting-hint" id="hint-antialiasing">SSAA は縦横 2 倍で描いて縮小します。GPU の上限で倍率が下がることがあります。<span class="msaa-note" hidden>この端末の現在の描画設定では MSAA を使えません。</span></p>
+            </div>
+            <div class="setting-row msaa-row">
+              <div class="setting-label"><label for="setting-msaa">MSAA 倍率</label></div>
+              <select id="setting-msaa" data-setting="msaaSamples" aria-describedby="hint-msaa">${MSAA_SAMPLES.map((n) => `<option value="${n}">${n}x</option>`).join("")}</select>
+              <p class="setting-hint" id="hint-msaa">この端末と現在の設定で使える倍率です。</p>
+            </div>
+            <div class="setting-row">
+              <div class="setting-label"><label for="setting-fps">FPS 上限</label></div>
+              <select id="setting-fps" data-setting="fpsLimit" aria-describedby="hint-fps">${FPS_LIMITS.map((n) => `<option value="${n}">${n ? `${n} FPS` : "制限なし"}</option>`).join("")}</select>
+              <p class="setting-hint" id="hint-fps">制限なしでは画面のリフレッシュレートに合わせます。</p>
+            </div>
+            <div class="setting-row">
+              <div class="setting-label"><span id="setting-shadows-label">影の品質</span></div>
+              <div class="segmented" role="group" aria-labelledby="setting-shadows-label">${shadowOptions.map((o) => `<button type="button" data-shadow="${o.value}" aria-pressed="false">${o.label}</button>`).join("")}</div>
+            </div>
+          </section>
+          <section class="settings-section" aria-labelledby="settings-effects">
+            <h3 id="settings-effects">EFFECTS / 演出</h3>
+            ${toggle("ambientOcclusion", "陰影を強調 (SSAO・重い)")}
+            ${toggle("showFps", "FPS を表示")}
+            ${toggle("cameraShake", "画面の揺れ")}
+          </section>
+        </div>
+        <div class="settings-foot"><button class="text-button" data-action="reset-settings">初期設定に戻す</button><button class="primary-button" data-action="close-settings">閉じる ${icons.arrow}</button></div>
+      </dialog>`;
 }
 
 const icons = {
@@ -18,6 +82,7 @@ const icons = {
   sound:
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 4-6 5H3v6h3l6 5V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   mute: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 4-6 5H3v6h3l6 5V4Zm4 5 6 6m0-6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="6.3" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.6v2.6m0 13.6v2.6M2.6 12h2.6m13.6 0h2.6M5.4 5.4l1.8 1.8m9.6 9.6 1.8 1.8m0-13.2-1.8 1.8m-9.6 9.6-1.8 1.8" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>',
   pause:
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>',
   paw: '<svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true"><ellipse cx="9" cy="8" rx="3" ry="4" transform="rotate(-24 9 8)"/><ellipse cx="23" cy="8" rx="3" ry="4" transform="rotate(24 23 8)"/><ellipse cx="3.8" cy="16" rx="2.8" ry="3.5" transform="rotate(-30 3.8 16)"/><ellipse cx="28.2" cy="16" rx="2.8" ry="3.5" transform="rotate(30 28.2 16)"/><path d="M7 25c0-4 5-12 9-12s9 8 9 12c0 5-5 3-9 3s-9 2-9-3Z"/></svg>',
@@ -89,16 +154,23 @@ export class GameUI {
   private readonly result: HTMLElement;
   private readonly pausePanel: HTMLElement;
   private readonly dialog: HTMLDialogElement;
+  private readonly settingsDialog: HTMLDialogElement;
+  private readonly fpsCounter: HTMLElement;
+  private readonly graphics: GraphicsSettingsBinding;
   private readonly cards = new Map<number, FighterCard>();
   private currentPhase: Phase = "menu";
   private selectedMode: MatchMode = "duel";
   private sound = true;
   private resumeAfterHelp = false;
+  private resumeAfterSettings = false;
   private previousFocus: HTMLElement | null = null;
+  private renderSizeFrame = 0;
+  private lastFpsText = 0;
 
   constructor(host: HTMLElement, callbacks: GameUICallbacks) {
     this.host = host;
     this.callbacks = callbacks;
+    this.graphics = callbacks.graphics;
     host.innerHTML = `
       <div class="screen-grain" aria-hidden="true"></div>
       <header class="topbar flex items-center justify-between">
@@ -109,6 +181,7 @@ export class GameUI {
         <div class="top-actions flex items-center gap-2">
           <span class="prototype-chip"><span></span> PLAYABLE PROTOTYPE</span>
           <button class="icon-button" data-action="sound" aria-label="音をオフにする" aria-pressed="true" title="効果音">${icons.sound}</button>
+          <button class="icon-button settings-button" data-action="settings" aria-label="グラフィック設定を開く" title="グラフィック設定">${icons.gear}</button>
           <button class="icon-button help-button" data-action="help" aria-label="操作方法を表示" title="操作方法">?</button>
           <button class="icon-button pause-button" data-action="pause" aria-label="一時停止" title="一時停止 · Esc" hidden>${icons.pause}</button>
         </div>
@@ -129,7 +202,7 @@ export class GameUI {
           </div>
           <p class="mode-description">${modes.duel.detail}</p>
           <button class="start-button flex items-center justify-between" data-action="start"><span>アリーナへ<span>ENTER THE ARENA</span></span>${icons.arrow}</button>
-          <button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button>
+          <div class="menu-links"><button class="menu-controls-link" data-action="help">操作方法を見る <span>↗</span></button><button class="menu-controls-link" data-action="settings">グラフィック設定 <span>↗</span></button></div>
           <div class="menu-features flex items-center"><span>重い一撃</span><i></i><span>自由なフェイント</span><i></i><span>一瞬の読み合い</span></div>
         </div>
         <div class="arena-caption"><span class="caption-cross">+</span><div>THE FLOATING GARDEN<small>浮遊庭園 / 終わりゆく足場</small></div><span class="caption-line"></span></div>
@@ -148,7 +221,7 @@ export class GameUI {
       </section>
 
       <section class="pause-screen modal-scrim" role="dialog" aria-modal="true" aria-label="一時停止" hidden>
-        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p>次の一撃を、じっくり考えよう。</p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
+        <div class="modal-panel pause-panel"><div class="eyebrow">TAKE A BREATH</div><h2>ひと休み。</h2><p>次の一撃を、じっくり考えよう。</p><button class="primary-button" data-action="resume">対戦に戻る ${icons.arrow}</button><button class="secondary-button" data-action="restart">はじめから</button><button class="secondary-button" data-action="settings">グラフィック設定</button><button class="text-button" data-action="menu">タイトルへ戻る</button></div>
       </section>
 
       <section class="result-screen modal-scrim" role="dialog" aria-modal="true" aria-label="対戦結果" hidden>
@@ -170,32 +243,121 @@ export class GameUI {
         </div>
         <button class="primary-button help-done" data-action="close-help">準備できた ${icons.arrow}</button>
       </dialog>
+      ${settingsDialogMarkup()}
+      <div class="fps-counter" aria-hidden="true" hidden>-- FPS</div>
     `;
     this.menu = this.query(".menu-screen");
     this.hud = this.query(".game-hud");
     this.result = this.query(".result-screen");
     this.pausePanel = this.query(".pause-screen");
     this.dialog = this.query<HTMLDialogElement>(".help-dialog");
+    this.settingsDialog = this.query<HTMLDialogElement>(".settings-dialog");
+    this.fpsCounter = this.query(".fps-counter");
     host.addEventListener("click", this.handleClick, { signal: this.abort.signal });
-    this.dialog.addEventListener("keydown", (event) => event.stopPropagation(), {
+    for (const [dialog, close] of [
+      [this.dialog, () => this.closeHelp()],
+      [this.settingsDialog, () => this.closeSettings()],
+    ] as const) {
+      dialog.addEventListener("keydown", (event) => event.stopPropagation(), {
+        signal: this.abort.signal,
+      });
+      dialog.addEventListener("cancel", close, { signal: this.abort.signal });
+      dialog.addEventListener(
+        "click",
+        (event) => {
+          if (event.target !== dialog) return;
+          const rect = dialog.getBoundingClientRect();
+          if (
+            event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom
+          )
+            close();
+        },
+        { signal: this.abort.signal },
+      );
+    }
+    this.settingsDialog.addEventListener("change", this.handleSettingChange, {
       signal: this.abort.signal,
     });
-    this.dialog.addEventListener("cancel", () => this.closeHelp(), { signal: this.abort.signal });
-    this.dialog.addEventListener(
-      "click",
-      (event) => {
-        if (event.target !== this.dialog) return;
-        const rect = this.dialog.getBoundingClientRect();
-        if (
-          event.clientX < rect.left ||
-          event.clientX > rect.right ||
-          event.clientY < rect.top ||
-          event.clientY > rect.bottom
-        )
-          this.closeHelp();
-      },
-      { signal: this.abort.signal },
-    );
+    const unsubscribe = this.graphics.store.subscribe(() => this.syncSettings());
+    this.abort.signal.addEventListener("abort", unsubscribe);
+    window.addEventListener("resize", () => this.refreshRenderSize(), {
+      signal: this.abort.signal,
+    });
+    this.syncSettings();
+  }
+
+  private handleSettingChange = (event: Event): void => {
+    const control = event.target as HTMLInputElement | HTMLSelectElement;
+    const key = control.dataset.setting as keyof GraphicsSettings | undefined;
+    if (!key) return;
+    const value =
+      control instanceof HTMLInputElement && control.type === "checkbox"
+        ? control.checked
+        : key === "msaaSamples" || key === "fpsLimit"
+          ? Number(control.value)
+          : control.value;
+    this.graphics.store.set({ [key]: value } as Partial<GraphicsSettings>);
+  };
+
+  /** Reflects the stored settings (and what this GPU supports) in every control. */
+  private syncSettings(): void {
+    const s = this.graphics.store.get();
+    const dialog = this.settingsDialog;
+    const supported = this.graphics.supportedMsaa(s.ambientOcclusion);
+    const samples = supported ? effectiveSamples(s.msaaSamples, supported) : s.msaaSamples;
+    const msaaUnavailable = supported !== null && samples === undefined;
+    const mode = s.antialiasing === "msaa" && msaaUnavailable ? "off" : s.antialiasing;
+    const select = (key: keyof GraphicsSettings) =>
+      dialog.querySelector<HTMLSelectElement>(`select[data-setting="${key}"]`)!;
+    select("resolution").value = s.resolution;
+    const aa = select("antialiasing");
+    aa.value = mode;
+    aa.querySelector<HTMLOptionElement>('option[value="msaa"]')!.disabled = msaaUnavailable;
+    dialog.querySelector<HTMLElement>(".msaa-note")!.hidden = !msaaUnavailable;
+    const msaa = select("msaaSamples");
+    for (const option of msaa.options) {
+      const unsupported =
+        supported !== null && !supported.includes(Number(option.value) as MsaaSamples);
+      option.hidden = unsupported;
+      option.disabled = unsupported;
+    }
+    msaa.value = String(samples ?? s.msaaSamples);
+    dialog.querySelector<HTMLElement>(".msaa-row")!.hidden = mode !== "msaa";
+    select("fpsLimit").value = String(s.fpsLimit);
+    for (const button of dialog.querySelectorAll<HTMLButtonElement>("[data-shadow]"))
+      button.setAttribute("aria-pressed", String(button.dataset.shadow === s.shadows));
+    for (const input of dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      const key = input.dataset.setting as keyof GraphicsSettings;
+      input.checked = Boolean(s[key]);
+    }
+    const ao = dialog.querySelector<HTMLInputElement>('input[data-setting="ambientOcclusion"]')!;
+    ao.disabled = this.graphics.supportsAmbientOcclusion() === false;
+    this.fpsCounter.hidden = !s.showFps;
+    this.refreshRenderSize();
+  }
+
+  /** The renderer applies a change on the same tick; its drawn size is read on the next frame. */
+  private refreshRenderSize(): void {
+    cancelAnimationFrame(this.renderSizeFrame);
+    this.renderSizeFrame = requestAnimationFrame(() => {
+      const size = this.graphics.renderSize();
+      const output = this.settingsDialog.querySelector<HTMLOutputElement>(
+        '[data-output="resolution"]',
+      )!;
+      output.textContent = size ? `${size.width} × ${size.height}` : "";
+    });
+  }
+
+  /** Smoothed frames per second for the optional counter; the text changes at most 4× a second. */
+  setFps(fps: number): void {
+    if (this.fpsCounter.hidden) return;
+    const now = performance.now();
+    if (now - this.lastFpsText < 250) return;
+    this.lastFpsText = now;
+    setText(this.fpsCounter, `${Math.round(fps)} FPS`);
   }
 
   private query<T extends HTMLElement = HTMLElement>(selector: string): T {
@@ -205,8 +367,15 @@ export class GameUI {
   }
 
   private handleClick = (event: MouseEvent): void => {
-    const target = (event.target as Element).closest<HTMLElement>("[data-action], [data-mode]");
+    const target = (event.target as Element).closest<HTMLElement>(
+      "[data-action], [data-mode], [data-shadow]",
+    );
     if (!target) return;
+    const shadow = target.dataset.shadow as ShadowLevel | undefined;
+    if (shadow) {
+      this.graphics.store.set({ shadows: shadow });
+      return;
+    }
     const mode = target.dataset.mode as MatchMode | undefined;
     if (mode) {
       this.selectedMode = mode;
@@ -244,6 +413,15 @@ export class GameUI {
       case "close-help":
         this.closeHelp();
         break;
+      case "settings":
+        this.openSettings();
+        break;
+      case "close-settings":
+        this.closeSettings();
+        break;
+      case "reset-settings":
+        this.graphics.store.reset();
+        break;
       case "sound": {
         this.sound = !this.sound;
         target.innerHTML = this.sound ? icons.sound : icons.mute;
@@ -270,6 +448,27 @@ export class GameUI {
     this.previousFocus?.focus();
     if (this.resumeAfterHelp) this.callbacks.onResume();
     this.resumeAfterHelp = false;
+  }
+
+  private openSettings(): void {
+    if (this.settingsDialog.open || this.dialog.open) return;
+    this.previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Opened from the pause panel the match stays paused; during play it pauses and resumes.
+    this.resumeAfterSettings = this.currentPhase === "playing" || this.currentPhase === "countdown";
+    if (this.resumeAfterSettings) this.callbacks.onPause();
+    this.syncSettings();
+    this.host.dataset.settingsOpen = "";
+    this.settingsDialog.showModal();
+  }
+
+  private closeSettings(): void {
+    if (!this.settingsDialog.open) return;
+    this.settingsDialog.close();
+    delete this.host.dataset.settingsOpen;
+    this.previousFocus?.focus();
+    if (this.resumeAfterSettings) this.callbacks.onResume();
+    this.resumeAfterSettings = false;
   }
 
   private createCard(fighter: Fighter): FighterCard {
@@ -312,7 +511,7 @@ export class GameUI {
     this.pausePanel.hidden = state.phase !== "paused";
     this.result.hidden = state.phase !== "ended";
     this.query(".pause-button").hidden = !["playing", "countdown"].includes(state.phase);
-    if (changedPhase && !this.dialog.open) {
+    if (changedPhase && !this.dialog.open && !this.settingsDialog.open) {
       if (state.phase === "paused")
         this.pausePanel.querySelector<HTMLButtonElement>('[data-action="resume"]')?.focus();
       if (state.phase === "ended")
@@ -408,7 +607,9 @@ export class GameUI {
 
   destroy(): void {
     this.abort.abort();
+    cancelAnimationFrame(this.renderSizeFrame);
     this.dialog.close();
+    this.settingsDialog.close();
     this.host.replaceChildren();
   }
 }
