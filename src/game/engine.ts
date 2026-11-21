@@ -5,7 +5,7 @@ import {
   sanitizeMatchOptions,
   type MatchOptions,
 } from "./match";
-import { AI_LEVELS, ATTACKS, RULES } from "./tuning";
+import { AI_LEVELS, ATTACKS, INPUT_BUFFER_TICKS, RULES } from "./tuning";
 import {
   angleDelta,
   attackContains,
@@ -22,6 +22,8 @@ import {
   emptyInput,
   type AttackId,
   type Bomb,
+  type BufferedAction,
+  type BufferedInput,
   type EffectKind,
   type Fighter,
   type GameState,
@@ -111,7 +113,21 @@ function makeFighter(id: number, count: number, options: MatchOptions): Fighter 
     aiThink: 0,
     aiCharge: 0,
     aiIntent: { x: 0, z: 0 },
+    inputBuffer: null,
   };
+}
+
+/**
+ * The presses in `input` the buffer can hold, highest priority first. When several land on the
+ * same tick and none can be done, only the first is kept: a dodge, then a grab, an attack, a jump.
+ */
+function pressedActions(input: PlayerInput): { action: BufferedAction; attack: AttackId | null }[] {
+  const pressed: { action: BufferedAction; attack: AttackId | null }[] = [];
+  if (input.step) pressed.push({ action: "step", attack: null });
+  if (input.grab) pressed.push({ action: "grab", attack: null });
+  if (input.attackPressed) pressed.push({ action: "attack", attack: input.attackPressed });
+  if (input.jump) pressed.push({ action: "jump", attack: null });
+  return pressed;
 }
 
 export class BattleEngine {
@@ -188,6 +204,7 @@ export class BattleEngine {
   pause(): void {
     if (this.state.phase === "playing" || this.state.phase === "countdown") {
       this.pending.clear();
+      this.clearBuffers();
       this.state.pausedFrom = this.state.phase;
       this.state.phase = "paused";
     }
@@ -198,6 +215,11 @@ export class BattleEngine {
   menu(): void {
     this.start("duel");
     this.state.phase = "menu";
+  }
+
+  /** Drops every buffered press (a fresh match starts with empty buffers anyway). */
+  private clearBuffers(): void {
+    for (const f of this.state.fighters) f.inputBuffer = null;
   }
 
   /**
@@ -285,9 +307,14 @@ export class BattleEngine {
       this.updateZone(f, dt);
       if ((f.mode as Fighter["mode"]) === "dead") continue;
       f.invulnerable = Math.max(0, f.invulnerable - dt);
+      // The buffer ages every tick, hitstop included, so a press never outlives its window.
+      if (f.human) this.ageBuffer(f);
       if (f.hitstop > 0) {
         f.hitstop = Math.max(0, f.hitstop - dt);
-        if (f.hitstop > 0) continue;
+        if (f.hitstop > 0) {
+          if (f.human) this.holdPress(f, input);
+          continue;
+        }
         this.applyLaunch(f);
       }
       f.staminaDelay = Math.max(0, f.staminaDelay - dt);
@@ -296,7 +323,7 @@ export class BattleEngine {
       }
       this.updateMode(f, input, dt);
       if (f.mode === "dead") continue;
-      this.handleInput(f, input, dt);
+      this.handleInput(f, f.human ? this.bufferedInput(f, input) : input, dt);
       this.physics(f, input, dt);
     }
     this.separateBodies();
@@ -335,6 +362,83 @@ export class BattleEngine {
   /** A dodge works on the ground, and once per airtime in the air. */
   private canStep(f: Fighter): boolean {
     return f.grounded || !f.airStepUsed;
+  }
+
+  /**
+   * May this press be tried on this tick, or must it wait in the buffer? It waits only while the
+   * fighter is locked out (any mode that ignores it: recovery, cancel lag, a step, clash, hitstun,
+   * grab and throw; hitstop never reaches here) and, for a jump or a grab, while airborne. Once it
+   * may be tried it is tried exactly once, through the ordinary checks: an unaffordable move, or an
+   * air attack or air dodge already spent this airtime, is refused (spending nothing) and gone,
+   * never carried on to the landing.
+   */
+  private canTry(f: Fighter, action: BufferedAction): boolean {
+    switch (action) {
+      case "step":
+        return f.mode === "idle" || f.mode === "charge";
+      case "jump":
+      case "grab":
+        return f.mode === "idle" && f.grounded;
+      case "attack":
+        return f.mode === "idle";
+    }
+  }
+
+  /** One fixed tick older; a press past `INPUT_BUFFER_TICKS` is dropped and never fires. */
+  private ageBuffer(f: Fighter): void {
+    if (!f.inputBuffer) return;
+    f.inputBuffer.age++;
+    if (f.inputBuffer.age > INPUT_BUFFER_TICKS) f.inputBuffer = null;
+  }
+
+  /** Keeps this tick's highest-priority press, replacing whatever was buffered before. */
+  private holdPress(f: Fighter, input: PlayerInput): void {
+    const [press] = pressedActions(input);
+    if (press) f.inputBuffer = { ...press, age: 0, pressedIn: f.mode };
+  }
+
+  /**
+   * Removes and returns the buffered press if it is `action` (any action when omitted). The one
+   * place a buffered press is taken, so a later rule (a tech roll, say) can claim or suppress a
+   * buffered step before the generic replay below sees it.
+   */
+  private takeBuffered(f: Fighter, action?: BufferedAction): BufferedInput | null {
+    const held = f.inputBuffer;
+    if (!held || (action && held.action !== action)) return null;
+    f.inputBuffer = null;
+    return held;
+  }
+
+  /**
+   * The input `handleInput` should see this tick, after the buffer has had its say:
+   * - A fresh press always wins. If anything pressed this tick may be tried (`canTry`), the tick's
+   *   input runs exactly as it always did and the buffer is emptied; otherwise the press replaces
+   *   the buffer.
+   * - With no fresh press, a buffered press that may now be tried is replayed once, as if pressed
+   *   now: direction and aim come from this tick's stick, and an attack whose button is already
+   *   up is a tap (it commits on the next tick) while one still held charges as usual.
+   * `cancel` is never buffered and never replayed, so it cannot reach the next attack.
+   */
+  private bufferedInput(f: Fighter, input: PlayerInput): PlayerInput {
+    const pressed = pressedActions(input);
+    if (pressed.length > 0) {
+      if (pressed.some((p) => this.canTry(f, p.action))) f.inputBuffer = null;
+      else this.holdPress(f, input);
+      return input;
+    }
+    const held = f.inputBuffer;
+    if (!held || !this.canTry(f, held.action)) return input;
+    this.takeBuffered(f);
+    switch (held.action) {
+      case "attack":
+        return { ...input, attackPressed: held.attack };
+      case "step":
+        return { ...input, step: true };
+      case "jump":
+        return { ...input, jump: true };
+      case "grab":
+        return { ...input, grab: true };
+    }
   }
 
   private handleInput(f: Fighter, input: PlayerInput, dt: number): void {
@@ -878,6 +982,7 @@ export class BattleEngine {
     if (f.mode === "dead") return;
     this.breakGrab(f);
     this.setMode(f, "dead");
+    f.inputBuffer = null;
     f.eliminatedAt = this.state.elapsed;
     f.eliminationReason = reason;
     const attacker = this.state.fighters.find((other) => other.id === f.lastAttacker);
@@ -981,6 +1086,7 @@ export class BattleEngine {
     if (contenders.length <= 1) {
       state.winnerId = contenders[0]?.id ?? null;
       state.phase = "ended";
+      this.clearBuffers();
       this.announce(contenders[0] ? contenders[0].name + " WINS" : "DRAW", 10);
     } else if (state.elapsed >= matchTimeLimit(state.options.stocks)) {
       // A fighter waiting to respawn already lost the damage it carried with that life.
@@ -991,6 +1097,7 @@ export class BattleEngine {
         first.stocks === second.stocks && Math.abs(damage(first) - damage(second)) < 0.01;
       state.winnerId = tied ? null : first.id;
       state.phase = "ended";
+      this.clearBuffers();
       this.announce(
         state.options.stocks > 1
           ? "TIME UP — 残機の多い選手、同数なら蓄積ダメージの少ない選手が勝利"

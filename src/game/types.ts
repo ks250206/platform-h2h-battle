@@ -81,6 +81,27 @@ export interface Fighter {
   aiThink: number;
   aiCharge: number;
   aiIntent: Vec2;
+  /**
+   * A press made while this fighter could not act on it, held for a few fixed ticks so it fires on
+   * the first tick it becomes legal (see `RULES.inputBuffer`). Humans only; null when empty.
+   */
+  inputBuffer: BufferedInput | null;
+}
+
+/** The presses the input buffer can hold. `cancel` is never buffered. */
+export type BufferedAction = "attack" | "step" | "jump" | "grab";
+
+export interface BufferedInput {
+  action: BufferedAction;
+  /** The attack asked for when `action` is `"attack"`; null otherwise. */
+  attack: AttackId | null;
+  /** Fixed simulation ticks since the press (0 on its own tick); it may fire while `<= INPUT_BUFFER_TICKS`. */
+  age: number;
+  /**
+   * What the fighter was doing when the button went down. Lets a later rule (a tech roll on a
+   * hitstun landing, say) recognise and take a step that was buffered out of hitstun.
+   */
+  pressedIn: FighterMode;
 }
 
 export interface ArenaState {
