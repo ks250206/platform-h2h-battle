@@ -130,18 +130,20 @@ export const RULES = {
 /** `RULES.inputBuffer` in fixed simulation ticks: 6 at 60 Hz. */
 export const INPUT_BUFFER_TICKS = Math.round(RULES.inputBuffer / RULES.fixedStep);
 
-/** How a CPU of each strength plays. `normal` reproduces the original CPU. */
+/** How a CPU of each strength plays. */
 export interface AiProfile {
   /** Seconds between decisions: `thinkMin + random × thinkRange`. */
   thinkMin: number;
   thinkRange: number;
   /** Chance to dodge a wind-up (or a bomb about to go off) it has noticed. */
   dodgeChance: number;
-  /**
-   * Holds a dodge until the wind-up it reacts to has at most this long left (seconds), so a
-   * tracking swing cannot follow it; infinite reacts at once.
-   */
-  dodgeWindow: number;
+  /** Age in fixed ticks of the opponent pose used for a combat decision. */
+  observationTicks: number;
+  /** Probability of treating a held charge as an imminent release. */
+  anticipateCharge: number;
+  /** Seconds before estimated contact to start a step, plus uniform judgment error. */
+  dodgeLead: number;
+  leadSpread: number;
   /** Dodges the way that actually leaves the swing (back from a sweep, away from the blade line, away from a bomb). */
   smartDodge: boolean;
   /** Stamina it wants in hand before starting an attack. */
@@ -171,10 +173,13 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     thinkMin: 0.42,
     thinkRange: 0.28,
     dodgeChance: 0.2,
-    dodgeWindow: Number.POSITIVE_INFINITY,
+    observationTicks: 14,
+    anticipateCharge: 0.16,
+    dodgeLead: 0.18,
+    leadSpread: 0.14,
     smartDodge: false,
     attackStamina: 45,
-    chargeChance: 0,
+    chargeChance: 0.12,
     feintRange: 0,
     tracking: 0,
     bombNotice: 0.9,
@@ -189,7 +194,10 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     thinkMin: 0.18,
     thinkRange: 0.16,
     dodgeChance: 0.7,
-    dodgeWindow: Number.POSITIVE_INFINITY,
+    observationTicks: 9,
+    anticipateCharge: 0.36,
+    dodgeLead: 0.19,
+    leadSpread: 0.1,
     smartDodge: false,
     attackStamina: 30,
     chargeChance: 0.3,
@@ -207,10 +215,13 @@ export const AI_LEVELS: Record<AiLevel, AiProfile> = {
     thinkMin: 0.1,
     thinkRange: 0.08,
     dodgeChance: 0.9,
-    dodgeWindow: 0.17,
+    observationTicks: 5,
+    anticipateCharge: 0.46,
+    dodgeLead: 0.17,
+    leadSpread: 0.075,
     smartDodge: true,
     attackStamina: 30,
-    chargeChance: 0.45,
+    chargeChance: 0.32,
     feintRange: 2.8,
     tracking: 1,
     bombNotice: Number.POSITIVE_INFINITY,
