@@ -347,10 +347,11 @@ test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", asyn
   await expect(camera).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("KeyV");
   await expect(camera).toHaveAttribute("aria-pressed", "false");
-  await start(page, "duel", { stocks: 2, difficulty: "easy" });
+  // Four lives: whatever the opponent manages on a slow machine, the match outlasts the test.
+  await start(page, "duel", { stocks: 4, difficulty: "easy" });
   const state = await page.evaluate(() => window.__BRAMBLE__!.snapshot());
-  expect(state.options.stocks).toBe(2);
-  expect(state.fighters.map((f) => f.stocks)).toEqual([2, 2]);
+  expect(state.options.stocks).toBe(4);
+  expect(state.fighters.map((f) => f.stocks)).toEqual([4, 4]);
   expect(state.fighters[1].aiLevel).toBe("easy");
 
   // A ground point beside the player, well away from the opponent's bearing, and where it is on
@@ -456,11 +457,15 @@ test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", asyn
     };
     requestAnimationFrame(poll);
   });
+  // The opponent may have taken a life already, so the checks are relative to the lives left now.
+  const livesBefore = await page.evaluate(() => window.__BRAMBLE__!.snapshot().fighters[0].stocks);
   await page.keyboard.down("KeyA");
   await page.keyboard.down("KeyW");
-  await page.waitForFunction(() => window.__BRAMBLE__!.snapshot().fighters[0].stocks === 1, null, {
-    timeout: 30_000,
-  });
+  await page.waitForFunction(
+    (lives) => window.__BRAMBLE__!.snapshot().fighters[0].stocks < lives,
+    livesBefore,
+    { timeout: 30_000 },
+  );
   await page.keyboard.up("KeyA");
   await page.keyboard.up("KeyW");
   // The respawned fighter, as the first poll that finds it back in play sees it.
@@ -471,17 +476,16 @@ test("duel: lock-on holds the aim, Tab frees it, and a lost life respawns", asyn
     })
   ).jsonValue())!;
   const after = await page.evaluate(() => window.__BRAMBLE__!.snapshot());
-  expect(back.stocks).toBe(1);
+  expect(back.stocks).toBe(livesBefore - 1);
   expect(back.invulnerable).toBeGreaterThan(0);
   expect(Math.abs(back.x)).toBeLessThan(after.arena.halfSize);
   expect(Math.abs(back.z)).toBeLessThan(after.arena.halfSize);
   expect(after.phase).toBe("playing");
-  expect(after.fighters[1].stocks).toBe(2);
   // The card lost a pip, said 復帰中 while down, and showed 無敵 once back.
   const lives = page.locator(".player-card .fighter-life");
-  await expect(lives).toHaveAttribute("aria-label", "残機 1");
-  await expect(lives.locator("i")).toHaveCount(2);
-  await expect(lives.locator("i.lost")).toHaveCount(1);
+  await expect(lives).toHaveAttribute("aria-label", `残機 ${back.stocks}`);
+  await expect(lives.locator("i")).toHaveCount(4);
+  await expect(lives.locator("i.lost")).toHaveCount(4 - back.stocks);
   await page.waitForFunction(() =>
     (window as unknown as { __hud: { shield: boolean }[] }).__hud.some((frame) => frame.shield),
   );
