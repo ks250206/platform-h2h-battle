@@ -1420,12 +1420,15 @@ svg {
     0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent),
     var(--shadow-sm);
 }
-.outside-warning > div:first-child {
+.outside-warning > .outside-desktop {
   display: flex;
   justify-content: space-between;
   font-size: 9px;
   color: var(--danger-text);
   margin-bottom: 5px;
+}
+.outside-warning > .outside-compact {
+  display: none;
 }
 .outside-warning strong {
   font-weight: 550;
@@ -1437,21 +1440,6 @@ svg {
 }
 .outside-track > span {
   background: var(--danger);
-}
-.outside-warning.recovering {
-  border-color: var(--violet);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--violet) 16%, transparent),
-    var(--shadow-sm);
-}
-.outside-warning.recovering > div:first-child {
-  color: var(--violet);
-}
-.outside-warning.recovering .outside-track {
-  background: color-mix(in srgb, var(--violet) 16%, var(--paper));
-}
-.outside-warning.recovering .outside-track > span {
-  background: var(--violet);
 }
 .charging {
   border-color: var(--sun);
@@ -3359,6 +3347,11 @@ kbd {
     min-width: 0;
     padding: 7px 9px 7px 11px;
     border-radius: 10px;
+    transition:
+      opacity 0.2s,
+      border-color 0.2s,
+      box-shadow 0.2s,
+      background-color 0.2s;
   }
   .fighter-card:first-child {
     margin-right: 0;
@@ -3443,51 +3436,69 @@ kbd {
     line-height: 1;
     letter-spacing: 0.04em;
   }
-  .fighter-card:has(.outside-warning:not([hidden])) .fighter-status,
-  [data-mode="rumble"] .fighter-card:has(.outside-warning:not([hidden])) .fighter-status {
+  .fighter-card.outside-zone:not(.eliminated) {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 7%, var(--paper));
+    box-shadow:
+      inset 0 2px 0 var(--danger),
+      0 0 0 2px color-mix(in srgb, var(--danger) 42%, transparent),
+      var(--shadow-sm);
+  }
+  .fighter-card:is(.eliminated, .respawning) .outside-warning {
     display: none;
   }
-  /* Fit outside-zone / recovering gauges inside Row 2 so cards never change height. */
+  .fighter-card:not(.eliminated, .respawning):has(.outside-warning:not([hidden])) .fighter-status,
+  [data-mode="rumble"]
+    .fighter-card:not(.eliminated, .respawning):has(.outside-warning:not([hidden]))
+    .fighter-status {
+    display: none;
+  }
+  /* Borderless countdown (⚠ 4.4s) + thin red bar in Row 2; fades cleanly back to 0 when inside. */
   .outside-warning {
     position: static;
     grid-column: 2 / 4;
     grid-row: 2;
     justify-self: stretch;
+    align-self: center;
     min-width: 0;
     max-height: 17px;
-    margin: 0 0 0 4px;
-    padding: 1px 3px 2px;
+    margin: 0 0 0 6px;
+    padding: 0;
     border: 0;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--danger) 10%, var(--paper));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent);
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
     overflow: hidden;
+    transition: opacity 0.2s;
   }
-  .outside-warning.recovering {
-    background: color-mix(in srgb, var(--violet) 10%, var(--paper));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 32%, transparent);
+  .outside-warning > .outside-desktop {
+    display: none;
   }
-  .outside-warning > div:first-child {
-    align-items: baseline;
+  .outside-warning > .outside-compact {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
     gap: 2px;
     margin-bottom: 2px;
-    font-size: 7.5px;
-    line-height: 1.05;
+    font-size: 8.5px;
+    font-weight: 750;
+    line-height: 1;
+    color: var(--danger-text);
     white-space: nowrap;
   }
-  .outside-warning > div:first-child > span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-weight: 700;
-  }
-  .outside-warning strong {
-    flex: none;
-    font-size: 7px;
-    font-weight: 650;
+  .outside-warning > .outside-compact strong {
+    font-size: 8.5px;
+    font-weight: 750;
   }
   .outside-warning .outside-track {
-    height: 2.5px;
+    height: 3px;
+    border-radius: 999px;
+  }
+  .outside-warning.recovering {
+    opacity: 0.4;
+  }
+  .outside-warning.recovering > .outside-compact {
+    display: none;
   }
   /* Rumble: two by two. */
   [data-mode="rumble"] .fighter-cards {
@@ -3514,12 +3525,6 @@ kbd {
   }
   .fighter-damage small {
     font-size: 9px;
-  }
-  .outside-warning > div:first-child {
-    font-size: 7px;
-  }
-  .outside-warning strong {
-    font-size: 6.5px;
   }
 }
 /* Touch controls take the bottom: the cards sit just above them (touch.css sets the block). */

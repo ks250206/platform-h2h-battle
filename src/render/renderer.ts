@@ -631,9 +631,9 @@ export class ArenaRenderer {
   }
 
   /**
-   * The words over a fighter. A human is its tag (YOU, P1...). A CPU is its name, or its tag
-   * (CPU 02) when another fighter has the same name. The title screen shows both, so each row of
-   * the menu can be matched to its fighter.
+   * The words over a fighter. A human is its tag (YOU, P1...). A CPU is its name (or tag when
+   * another fighter shares the name), with live damage % on wide screens like PC where labels have
+   * room to breathe. The title screen shows both, so each menu row matches its fighter.
    */
   private labelText(f: Fighter, state: GameState): string {
     const tag = fighterTag(f, this.humanCount);
@@ -643,7 +643,8 @@ export class ArenaRenderer {
       return state.fighters.length > 2 && !f.human ? tag.replace(/^CPU\s*/, "") : tag;
     if (state.phase === "menu") return `${tag}  ${f.name}`;
     if (f.human) return tag;
-    return sharesName(f, state.fighters) ? tag : f.name;
+    const name = sharesName(f, state.fighters) ? tag : f.name;
+    return this.width >= 900 && this.height > 570 ? `${name}  ${Math.round(f.damage)}%` : name;
   }
 
   private fighterView(f: Fighter): FighterView {

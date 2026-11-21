@@ -502,6 +502,7 @@ interface FighterCard {
   dangerFill: HTMLElement;
   dangerValue: HTMLElement;
   dangerLabel: HTMLElement;
+  dangerCompactValue: HTMLElement;
   zoneCompass: HTMLElement;
   airRising: HTMLElement;
   airThrust: HTMLElement;
@@ -1655,7 +1656,7 @@ export class GameUI {
       <div class="stamina-label"><span>STAMINA</span><span class="stamina-value">100</span></div><div class="stamina-track" role="meter" aria-label="スタミナ" aria-valuemin="0" aria-valuemax="100"><span></span></div>
       <div class="fighter-foot"><div class="air-tokens"><span class="air-rising" title="空中振り上げの使用権">↗</span><span class="air-thrust" title="空中突きの使用権">→</span><span class="air-step" title="空中回避の使用権">»</span><small>RECOVERY</small></div></div>
       <div class="zone-compass" hidden></div>
-      <div class="outside-warning" hidden><div><span>エリア外</span><strong>0.0/${RULES.outsideLimit}s</strong></div><div class="outside-track"><span></span></div></div>
+      <div class="outside-warning" hidden><div class="outside-desktop"><span>エリア外</span><strong>0.0 / ${RULES.outsideLimit}s</strong></div><div class="outside-compact"><span aria-hidden="true">⚠</span><strong>${RULES.outsideLimit.toFixed(1)}s</strong></div><div class="outside-track"><span></span></div></div>
     `;
     this.query(".fighter-cards").append(card);
     const q = <T extends HTMLElement = HTMLElement>(selector: string): T =>
@@ -1669,8 +1670,9 @@ export class GameUI {
       danger: q(".outside-warning"),
       dangerFill: q(".outside-track span"),
       zoneCompass: q(".zone-compass"),
-      dangerLabel: q(".outside-warning div:first-child span"),
-      dangerValue: q(".outside-warning strong"),
+      dangerLabel: q(".outside-desktop span"),
+      dangerValue: q(".outside-desktop strong"),
+      dangerCompactValue: q(".outside-compact strong"),
       airRising: q(".air-rising"),
       airThrust: q(".air-thrust"),
       airStep: q(".air-step"),
@@ -1986,8 +1988,12 @@ export class GameUI {
       card.zoneCompass.hidden = !zone.active || !fighter.human || fighter.mode === "dead";
       if (!card.zoneCompass.hidden) setText(card.zoneCompass, zoneDirections(zone, fighter));
       const zoneKO = fighter.mode === "dead" && fighter.eliminationReason === ZONE_KO_REASON;
-      const outsideZone = Math.hypot(fighter.x - zone.x, fighter.z - zone.z) > zone.radius;
+      const outsideZone =
+        zone.active &&
+        fighter.mode !== "dead" &&
+        Math.hypot(fighter.x - zone.x, fighter.z - zone.z) > zone.radius;
       const recoveringZone = !zoneKO && !outsideZone;
+      card.element.classList.toggle("outside-zone", outsideZone);
       card.danger.hidden =
         !zone.active || fighter.outsideTime <= 0 || (fighter.mode === "dead" && !zoneKO);
       card.danger.classList.toggle("recovering", recoveringZone);
@@ -1997,7 +2003,12 @@ export class GameUI {
           zoneKO ? "エリア外退場" : outsideZone ? "エリア外" : "ゲージ回復中",
         );
       card.dangerFill.style.transform = `scaleX(${Math.min(1, fighter.outsideTime / RULES.outsideLimit)})`;
-      card.dangerValue.textContent = `${(Math.floor((fighter.outsideTime + 1e-9) * 10) / 10).toFixed(1)}/${RULES.outsideLimit}s`;
+      card.dangerValue.textContent = `${(Math.floor((fighter.outsideTime + 1e-9) * 10) / 10).toFixed(1)} / ${RULES.outsideLimit}s`;
+      const remaining = Math.max(0, RULES.outsideLimit - fighter.outsideTime);
+      setText(
+        card.dangerCompactValue,
+        `${(Math.ceil(Math.max(0, remaining - 1e-9) * 10) / 10).toFixed(1)}s`,
+      );
       card.airRising.classList.toggle("used", fighter.airRisingUsed);
       card.airThrust.classList.toggle("used", fighter.airThrustUsed);
       card.airStep.classList.toggle("used", fighter.airStepUsed);

@@ -270,22 +270,22 @@ test("portrait rumble keeps card heights fixed across outside/recovering/knockdo
     const all = [...document.querySelectorAll<HTMLElement>(".fighter-card")];
     const baselineHeights = all.map((c) => c.getBoundingClientRect().height);
 
-    // Card 0: outside warning + zone compass (zone compass stays hidden on phone).
+    // Card 0: outside zone — red glow + borderless compact countdown (⚠ 4.4s) + bar, no compass.
+    all[0]!.classList.add("outside-zone");
     const compass0 = all[0]!.querySelector<HTMLElement>(".zone-compass")!;
     compass0.hidden = false;
     compass0.textContent = "円 ↘　次 ↓";
     const warning0 = all[0]!.querySelector<HTMLElement>(".outside-warning")!;
     warning0.hidden = false;
     warning0.classList.remove("recovering");
-    warning0.querySelector("div:first-child span")!.textContent = "エリア外";
-    warning0.querySelector("strong")!.textContent = "0.6/5s";
+    warning0.querySelector(".outside-compact strong")!.textContent = "4.4s";
 
     // Card 1: knockdown status only (no outside warning).
     const status1 = all[1]!.querySelector<HTMLElement>(".fighter-status")!;
     status1.classList.add("landing-status", "knockdown");
     status1.textContent = "DOWN";
 
-    // Card 2: recovering warning + knockdown (warning wins, status hides, no overlap).
+    // Card 2: back inside zone (recovering) — no warning text, just a quiet fading bar.
     all[2]!.querySelector(".fighter-damage span")!.textContent = "127";
     const status2 = all[2]!.querySelector<HTMLElement>(".fighter-status")!;
     status2.classList.add("landing-status", "knockdown");
@@ -293,8 +293,7 @@ test("portrait rumble keeps card heights fixed across outside/recovering/knockdo
     const warning2 = all[2]!.querySelector<HTMLElement>(".outside-warning")!;
     warning2.hidden = false;
     warning2.classList.add("recovering");
-    warning2.querySelector("div:first-child span")!.textContent = "ゲージ回復中";
-    warning2.querySelector("strong")!.textContent = "1.4/5s";
+    warning2.querySelector(".outside-compact strong")!.textContent = "3.6s";
 
     // Card 3: eliminated — stays greyed out with OUT status and hides its damage %.
     all[3]!.classList.add("eliminated");
@@ -310,8 +309,9 @@ test("portrait rumble keeps card heights fixed across outside/recovering/knockdo
     const life2 = all[2]!.querySelector<HTMLElement>(".fighter-life")!.getBoundingClientRect();
     const dmg2 = all[2]!.querySelector<HTMLElement>(".fighter-damage")!.getBoundingClientRect();
     const warn2 = warning2.getBoundingClientRect();
-    const span0 = warning0.querySelector<HTMLElement>("div:first-child span")!;
-    const span2 = warning2.querySelector<HTMLElement>("div:first-child span")!;
+    const compact0 = warning0.querySelector<HTMLElement>(".outside-compact")!;
+    const desktop0 = warning0.querySelector<HTMLElement>(".outside-desktop")!;
+    const compact2 = warning2.querySelector<HTMLElement>(".outside-compact")!;
     return {
       baselineHeights,
       activeHeights,
@@ -323,8 +323,10 @@ test("portrait rumble keeps card heights fixed across outside/recovering/knockdo
       eliminatedDamageVisibility: getComputedStyle(
         all[3]!.querySelector<HTMLElement>(".fighter-damage")!,
       ).visibility,
-      label0Truncated: span0.scrollWidth > span0.clientWidth + 0.5,
-      label2Truncated: span2.scrollWidth > span2.clientWidth + 0.5,
+      desktop0Display: getComputedStyle(desktop0).display,
+      compact0Display: getComputedStyle(compact0).display,
+      compact2Display: getComputedStyle(compact2).display,
+      compact0Truncated: compact0.scrollWidth > compact0.clientWidth + 0.5,
       card0,
       card2,
       life0,
@@ -345,8 +347,10 @@ test("portrait rumble keeps card heights fixed across outside/recovering/knockdo
   expect(layout.status2Display).toBe("none");
   expect(layout.status3Display).toBe("block");
   expect(layout.eliminatedDamageVisibility).toBe("hidden");
-  expect(layout.label0Truncated).toBe(false);
-  expect(layout.label2Truncated).toBe(false);
+  expect(layout.desktop0Display).toBe("none");
+  expect(layout.compact0Display).toBe("flex");
+  expect(layout.compact2Display).toBe("none");
+  expect(layout.compact0Truncated).toBe(false);
   // Both outside-warning boxes sit strictly inside their card, between life pips and damage %.
   for (const [card, life, dmg, warn] of [
     [layout.card0, layout.life0, layout.dmg0, layout.warn0],
@@ -458,7 +462,9 @@ test("compact 320x568 in-match Rumble and Training keep slim cards clear of head
   await context.close();
 });
 
-test("landscape 844x390 Rumble keeps top-actions clear of match-heading", async ({ browser }) => {
+test("landscape 844x390 Rumble keeps top-actions clear of match-heading and 480x320 zone tutorial keeps outside warning inside card", async ({
+  browser,
+}) => {
   const { context, page, errors } = await phone(browser, 844, 390);
   await page.locator('button[data-mode="rumble"]').tap();
   await page.locator('[data-action="start"]').tap();
@@ -468,12 +474,28 @@ test("landscape 844x390 Rumble keeps top-actions clear of match-heading", async 
   expect(heading.x + heading.width).toBeLessThanOrEqual(actions.x);
   expect(errors).toEqual([]);
   await context.close();
+
+  // Compact landscape 480x320 zone tutorial: outside warning stays inside card, clear of .tutorial-hud.
+  const tut = await phone(browser, 480, 320);
+  await tut.page.locator(".tutorial-entry").tap();
+  await tut.page.locator('.tutorial-list button[data-tutor="zone"]').tap();
+  await tut.page.locator('button[data-tutor="play"]').tap();
+  await tut.page.waitForFunction(() => window.__BRAMBLE__!.snapshot().phase === "playing");
+  await expect(tut.page.locator(".fighter-card").first().locator(".outside-warning")).toBeVisible();
+  const card0 = await box(tut.page.locator(".fighter-card").first());
+  const warn0 = await box(tut.page.locator(".fighter-card").first().locator(".outside-warning"));
+  const tutHud = await box(tut.page.locator(".tutorial-hud"));
+  expect(warn0.y).toBeGreaterThanOrEqual(card0.y);
+  expect(warn0.y + warn0.height).toBeLessThanOrEqual(card0.y + card0.height + 1);
+  expect(warn0.y + warn0.height).toBeLessThanOrEqual(tutHud.y + 1);
+  expect(tut.errors).toEqual([]);
+  await tut.context.close();
 });
 
-test("desktop 1280x800 Rumble keeps top-actions clear of match-heading and 700x700 frames title fighters in the hero band", async ({
+test("desktop 1280x800 Rumble keeps top-actions clear of match-heading, preserves desktop outside-warning, and 700x700 frames title fighters", async ({
   browser,
 }) => {
-  // Desktop 1280x800 Rumble: fullscreen icon + top-actions must never overlap 4 ALIVE.
+  // Desktop 1280x800 Rumble: fullscreen icon + top-actions clear 4 ALIVE, desktop outside-warning stays above card.
   const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const desktopPage = await desktopContext.newPage();
   const desktopErrors: string[] = [];
@@ -486,6 +508,22 @@ test("desktop 1280x800 Rumble keeps top-actions clear of match-heading and 700x7
   const heading = await box(desktopPage.locator(".match-heading"));
   const actions = await box(desktopPage.locator(".top-actions"));
   expect(heading.x + heading.width).toBeLessThanOrEqual(actions.x);
+  const desktopWarn = await desktopPage.evaluate(() => {
+    const card = document.querySelector<HTMLElement>(".fighter-card")!;
+    const warn = card.querySelector<HTMLElement>(".outside-warning")!;
+    warn.hidden = false;
+    return {
+      desktopDisplay: getComputedStyle(warn.querySelector<HTMLElement>(".outside-desktop")!)
+        .display,
+      compactDisplay: getComputedStyle(warn.querySelector<HTMLElement>(".outside-compact")!)
+        .display,
+      warnBottom: warn.getBoundingClientRect().bottom,
+      cardTop: card.getBoundingClientRect().top,
+    };
+  });
+  expect(desktopWarn.desktopDisplay).toBe("flex");
+  expect(desktopWarn.compactDisplay).toBe("none");
+  expect(desktopWarn.warnBottom).toBeLessThanOrEqual(desktopWarn.cardTop);
   expect(desktopErrors).toEqual([]);
   await desktopContext.close();
 
