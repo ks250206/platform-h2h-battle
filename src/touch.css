@@ -64,7 +64,7 @@
 .touch-controls {
   display: none;
 }
-@media (pointer: coarse) {
+@media (pointer: coarse), (any-pointer: coarse) {
   .touch-controls:not([hidden]) {
     display: flex;
     align-items: end;
@@ -182,6 +182,11 @@
     font-size: 10px;
     min-height: 32px;
     background: var(--paper-2);
+  }
+}
+@media (pointer: fine) {
+  #interface:not([data-tutorial="touch"]) ~ .touch-controls {
+    display: none;
   }
 }
 @media (pointer: coarse) and (max-height: 530px) {

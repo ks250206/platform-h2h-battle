@@ -1,0 +1,97 @@
+.tutorial-entry {
+  align-self: flex-start;
+  padding: 6px 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+#interface:not([data-tutorial]) .tutorial-pause-link,
+[data-tutorial] :is(.match-heading, .keyboard-legend, .pad-legend, .arena-status) {
+  display: none;
+}
+.tutorial-dialog,
+.tutorial-hud {
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.tutorial-dialog {
+  margin: auto;
+  padding: clamp(16px, 4vw, 32px);
+  width: min(440px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+}
+.tutorial-dialog::backdrop {
+  background: var(--scrim);
+}
+.tutorial-dialog h2 {
+  font-size: 1.4rem;
+  margin-bottom: 12px;
+}
+.tutorial-dialog p,
+.tutorial-dialog li {
+  margin: 6px 0;
+  line-height: 1.5;
+  font-size: 14px;
+}
+.tutorial-dialog li small {
+  display: block;
+  color: var(--ink-soft);
+}
+.tutorial-dialog ol {
+  list-style: decimal;
+  padding-left: 1.6em;
+}
+.tutorial-dialog button,
+.tutorial-hud button {
+  display: block;
+  padding: 8px 12px;
+  margin: 6px 0 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--paper-2);
+}
+.tutorial-dialog button {
+  width: 100%;
+  text-align: start;
+}
+.tutorial-dialog [data-pad-start] {
+  background: var(--coral);
+  font-weight: 700;
+}
+.tutorial-hud {
+  position: absolute;
+  left: 4%;
+  top: 90px;
+  padding: 10px 14px;
+  width: min(360px, 92%);
+  font-size: 13px;
+}
+.tutorial-hud p {
+  margin-block: 3px;
+}
+.tutorial-hud small {
+  display: block;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+.tutorial-hud div {
+  display: flex;
+  gap: 6px;
+}
+.tutorial-hud button {
+  padding: 3px 8px;
+}
+@media (max-width: 650px), (max-height: 570px) {
+  .tutorial-hud {
+    top: 58px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+}

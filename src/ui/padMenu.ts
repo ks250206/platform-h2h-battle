@@ -185,6 +185,11 @@ export class PadMenu {
       }
       const previous = this.previous[index] ?? null;
       this.previous[index] = pad;
+      // Reconnecting with a button held must leave a suspended lesson paused.
+      if (!previous && this.root.hasAttribute("data-tutorial")) {
+        this.repeat[index] = heldNav(menuDirection(pad));
+        return;
+      }
       const nav = stepNav(this.repeat[index] ?? heldNav(null), menuDirection(pad), now);
       this.repeat[index] = nav.repeat;
       const pressed = (button: number) => justPressed(pad, previous, button);
